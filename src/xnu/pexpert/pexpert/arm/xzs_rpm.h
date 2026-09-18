@@ -19,6 +19,8 @@
 
 /* RPM Resource Constants */
 #define QCOM_SMD_RPM_LDOA           0x616f646cU     /* "ldoa" little-endian */
+#define QCOM_SMD_RPM_CLK_BUF_A      0x616b6c63U     /* "clka" little-endian */
+#define RPM_LN_BB_CLK_ID            8U
 #define QCOM_RPM_KEY_SWEN           0x6e657773U     /* "swen" */
 #define QCOM_RPM_KEY_UV             0x00007675U     /* "uv" */
 #define QCOM_RPM_KEY_MA             0x0000616dU     /* "ma" */
@@ -32,5 +34,6 @@
 /* Function Declarations */
 void xzs_rpm_phase_d2c24d_probe(void);
 void xzs_rpm_phase_d2c24e_probe(void);
+void xzs_rpm_phase_d2c24f_probe(void);
 
 #endif /* _PEXPERT_ARM_XZS_RPM_H_ */

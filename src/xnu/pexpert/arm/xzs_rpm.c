@@ -536,30 +536,18 @@ static int xzs_rpm_glink_handshake(void)
 	return 0;
 }
 
-/* Send RPM Request and Bounded-Poll for Matching ACK */
-static int xzs_rpm_send_request_and_wait_ack(uint32_t resource_type, uint32_t resource_id,
-                                            uint32_t uV, uint32_t mA, bool enable,
-                                            uint32_t *out_elapsed_us)
+/* Send Arbitrary KVP RPM Request and Bounded-Poll for Matching ACK */
+static int xzs_rpm_send_kvp_request_and_wait_ack(uint32_t set,
+                                                 uint32_t resource_type,
+                                                 uint32_t resource_id,
+                                                 const struct rpm_regulator_kvp *kvps,
+                                                 uint32_t num_kvps,
+                                                 uint32_t *out_elapsed_us)
 {
 	uint32_t msg_id = g_rpm_msg_id++;
 	uint8_t tx_buf[128] __attribute__((aligned(8))) = { 0 };
 	uint32_t payload_len = 0;
-
-	/* Prepare 3 KVPs */
-	struct rpm_regulator_kvp kvps[3];
-	kvps[0].key = QCOM_RPM_KEY_SWEN;
-	kvps[0].nbytes = 4;
-	kvps[0].value = enable ? 1U : 0U;
-
-	kvps[1].key = QCOM_RPM_KEY_UV;
-	kvps[1].nbytes = 4;
-	kvps[1].value = uV;
-
-	kvps[2].key = QCOM_RPM_KEY_MA;
-	kvps[2].nbytes = 4;
-	kvps[2].value = mA;
-
-	uint32_t kvp_bytes = sizeof(kvps); /* 36 bytes */
+	uint32_t kvp_bytes = num_kvps * (uint32_t)sizeof(struct rpm_regulator_kvp);
 
 	if (g_rpm_msg_format == 0) {
 		/* RPM V0 Format */
@@ -571,13 +559,13 @@ static int xzs_rpm_send_request_and_wait_ack(uint32_t resource_type, uint32_t re
 		req_hdr->request_len = sizeof(*msg_hdr) + kvp_bytes;
 
 		msg_hdr->msg_id = msg_id;
-		msg_hdr->set = MSM_RPM_CTX_ACTIVE_SET;
+		msg_hdr->set = set;
 		msg_hdr->resource_type = resource_type;
 		msg_hdr->resource_id = resource_id;
 		msg_hdr->data_len = kvp_bytes;
 
 		for (size_t b = 0; b < kvp_bytes; b++) {
-			kvp_dest[b] = ((uint8_t *)kvps)[b];
+			kvp_dest[b] = ((const uint8_t *)kvps)[b];
 		}
 		payload_len = sizeof(*req_hdr) + sizeof(*msg_hdr) + kvp_bytes;
 	} else {
@@ -591,25 +579,39 @@ static int xzs_rpm_send_request_and_wait_ack(uint32_t resource_type, uint32_t re
 		/* request_details: bits 0..15 data_len, bits 16..27 rsc_id, bits 28..31 set */
 		msg_hdr->request_details = (kvp_bytes & 0xFFFFU) |
 		                           ((resource_id & 0x0FFFU) << 16) |
-		                           ((MSM_RPM_CTX_ACTIVE_SET & 0x0FU) << 28);
+		                           ((set & 0x0FU) << 28);
 
 		for (size_t b = 0; b < kvp_bytes; b++) {
-			kvp_dest[b] = ((uint8_t *)kvps)[b];
+			kvp_dest[b] = ((const uint8_t *)kvps)[b];
 		}
 		payload_len = sizeof(*msg_hdr) + kvp_bytes;
 	}
 
-	/* Log complete request details before transmission (Mandatory Correction 12) */
+	/* Log complete request details before transmission */
 	xzs_early_puts("[XZS-RPM] ========================================================\n");
 	xzs_early_puts("[XZS-RPM] PREPARING RPM REQUEST (Mandatory Pre-Transmission Log):\n");
 	xzs_early_puts("  Format:        "); xzs_early_puts(g_rpm_msg_format == 0 ? "V0\n" : "V1\n");
 	xzs_early_puts("  msg_id:        0x"); xzs_early_puthex64((uint64_t)msg_id); xzs_early_puts("\n");
-	xzs_early_puts("  set:           ACTIVE (0)\n");
-	xzs_early_puts("  resource_type: 0x"); xzs_early_puthex64((uint64_t)resource_type); xzs_early_puts(" (\"ldoa\")\n");
+	xzs_early_puts("  set:           ");
+	if (set == MSM_RPM_CTX_ACTIVE_SET) xzs_early_puts("ACTIVE (0)\n");
+	else if (set == MSM_RPM_CTX_SLEEP_SET) xzs_early_puts("SLEEP (1)\n");
+	else { xzs_early_puthex64((uint64_t)set); xzs_early_puts("\n"); }
+	xzs_early_puts("  resource_type: 0x"); xzs_early_puthex64((uint64_t)resource_type);
+	if (resource_type == QCOM_SMD_RPM_LDOA) xzs_early_puts(" (\"ldoa\")\n");
+	else if (resource_type == QCOM_SMD_RPM_CLK_BUF_A) xzs_early_puts(" (\"clka\")\n");
+	else xzs_early_puts("\n");
 	xzs_early_puts("  resource_id:   "); xzs_early_puthex64((uint64_t)resource_id); xzs_early_puts("\n");
-	xzs_early_puts("  KVPs:          SWEN="); xzs_early_puthex64((uint64_t)(enable ? 1 : 0));
-	xzs_early_puts(" UV="); xzs_early_puthex64((uint64_t)uV);
-	xzs_early_puts(" MA="); xzs_early_puthex64((uint64_t)mA); xzs_early_puts("\n");
+	xzs_early_puts("  KVPs (count="); xzs_early_puthex64((uint64_t)num_kvps); xzs_early_puts("):\n");
+	for (uint32_t k = 0; k < num_kvps; k++) {
+		xzs_early_puts("    ["); xzs_early_puthex64((uint64_t)k); xzs_early_puts("] key=0x");
+		xzs_early_puthex64((uint64_t)kvps[k].key);
+		if (kvps[k].key == QCOM_RPM_KEY_SWEN) xzs_early_puts(" (\"swen\")");
+		else if (kvps[k].key == QCOM_RPM_KEY_UV) xzs_early_puts(" (\"uv\")");
+		else if (kvps[k].key == QCOM_RPM_KEY_MA) xzs_early_puts(" (\"ma\")");
+		xzs_early_puts(" nbytes="); xzs_early_puthex64((uint64_t)kvps[k].nbytes);
+		xzs_early_puts(" val="); xzs_early_puthex64((uint64_t)kvps[k].value);
+		xzs_early_puts("\n");
+	}
 	xzs_early_puts("  Payload Size:  "); xzs_early_puthex64((uint64_t)payload_len); xzs_early_puts(" bytes\n");
 	xzs_early_puts("  Raw Request Bytes:\n    ");
 	for (uint32_t b = 0; b < payload_len; b++) {
@@ -732,6 +734,38 @@ static int xzs_rpm_send_request_and_wait_ack(uint32_t resource_type, uint32_t re
 	xzs_early_puthex64((uint64_t)elapsed);
 	xzs_early_puts(" us)\n");
 	return 0;
+}
+
+/* Backward-compatible helper for LDO requests in ACTIVE set */
+static int xzs_rpm_send_request_and_wait_ack(uint32_t resource_type, uint32_t resource_id,
+                                            uint32_t uV, uint32_t mA, bool enable,
+                                            uint32_t *out_elapsed_us)
+{
+	struct rpm_regulator_kvp kvps[3];
+	kvps[0].key = QCOM_RPM_KEY_SWEN;
+	kvps[0].nbytes = 4;
+	kvps[0].value = enable ? 1U : 0U;
+
+	kvps[1].key = QCOM_RPM_KEY_UV;
+	kvps[1].nbytes = 4;
+	kvps[1].value = uV;
+
+	kvps[2].key = QCOM_RPM_KEY_MA;
+	kvps[2].nbytes = 4;
+	kvps[2].value = mA;
+
+	return xzs_rpm_send_kvp_request_and_wait_ack(MSM_RPM_CTX_ACTIVE_SET, resource_type, resource_id, kvps, 3, out_elapsed_us);
+}
+
+/* Helper for Clock Buffer requests (e.g. LN_BB) in specified set */
+static int xzs_rpm_vote_clk_buffer(uint32_t resource_id, uint32_t set, bool enable, uint32_t *out_elapsed_us)
+{
+	struct rpm_regulator_kvp kvp;
+	kvp.key = QCOM_RPM_KEY_SWEN;
+	kvp.nbytes = 4;
+	kvp.value = enable ? 1U : 0U;
+
+	return xzs_rpm_send_kvp_request_and_wait_ack(set, QCOM_SMD_RPM_CLK_BUF_A, resource_id, &kvp, 1, out_elapsed_us);
 }
 
 /*
@@ -932,78 +966,77 @@ xzs_spmi_compare_twrp_ref(const uint8_t snapshot[256], bool *out_match)
 }
 
 /*
- * Phase D2-C2.4E Probe Function
+ * Phase D2-C2.4F Probe Function:
+ * PM8994 L12 / VDDA-PLL + RPM LN_BB Reference Clock — Stepwise QMP UFS PHY Bring-Up
  */
-void xzs_rpm_phase_d2c24e_probe(void)
+void xzs_rpm_phase_d2c24f_probe(void)
 {
 	xzs_early_puts("\n================================================================\n");
-	xzs_early_puts("  PHASE D2-C2.4E: EXACT SONY/LINUX L28 REGULATOR REPLAY\n");
-	xzs_early_puts("  PMIC STATE DISCOVERY + CONTROLLED UFS PHY RETEST\n");
+	xzs_early_puts("  PHASE D2-C2.4F: PM8994 L12 / VDDA-PLL + RPM LN_BB REF CLOCK\n");
+	xzs_early_puts("  STEPWISE QMP UFS PHY BRING-UP (CAUSAL ISOLATION)\n");
 	xzs_early_puts("================================================================\n");
 	xzs_watchdog_pet();
-	xzs_breadcrumb(0xD24E, 0);
+	xzs_breadcrumb(0xD24F, 0x00);
 
-	/* 1. Frozen D2-C2.4D Results & Architectural Corrections */
-	xzs_early_puts("\n[XZS-RPM] 1. FROZEN D2-C2.4D RESULTS & ARCHITECTURAL CORRECTIONS:\n");
-	xzs_early_puts("  GLINK/RPM transport:         HARDWARE VERIFIED PASS\n");
-	xzs_early_puts("  RPM V0 request/ACK:          HARDWARE VERIFIED PASS\n");
-	xzs_early_puts("  L28 vote accepted by RPM:    HARDWARE VERIFIED\n");
-	xzs_early_puts("  L28 physical ON state:       NOT VERIFIED\n");
-	xzs_early_puts("  PHY retest:                  NOT EXECUTED (HCE=0)\n");
-	xzs_early_puts("  Recovery:                    PASS (+4s)\n");
-	xzs_early_puts("  SOURCE-AUDITED FACT: qcom,set=3 exposes both ACTIVE and SLEEP sets.\n");
-	xzs_early_puts("    ACTIVE requests take effect immediately. When no SLEEP request has\n");
-	xzs_early_puts("    been issued, Qualcomm's rpm-smd-regulator implementation uses the\n");
-	xzs_early_puts("    ACTIVE request for both active and collapsed states.\n");
-	xzs_early_puts("    Absence of SLEEP vote is NOT why L28 remained unverified.\n");
-	xzs_early_puts("  CORRECTED STATEMENT: CURRENT SPMI OBSERVATION REMAINED AT BASELINE AFTER RELEASE\n");
+	/* 1. Frozen D2-C2.4E Facts */
+	xzs_early_puts("\n[XZS-RPM] 1. FROZEN D2-C2.4E BASELINE FACTS:\n");
+	xzs_early_puts("  GLINK RPM transport:         PASS\n");
+	xzs_early_puts("  RPM V0 packet transport:     PASS\n");
+	xzs_early_puts("  rpm_requests channel:        PASS\n");
+	xzs_early_puts("  L28 resource:                type=\"ldoa\", id=28, UV=925000, MA=18\n");
+	xzs_early_puts("  D2-C2.4D/E Linux req diff:   NONE\n");
+	xzs_early_puts("  L28 XNU SPMI == TWRP ref:    256/256 bytes (100% concordance)\n");
+	xzs_early_puts("  C_READY with L28 only:       0\n");
+	xzs_early_puts("  PCS_READY with L28 only:     0\n");
+	xzs_early_puts("  HCE:                         0\n");
 
-	/* 2. Complete Live Sony Device Tree Properties */
-	xzs_early_puts("\n[XZS-RPM] 2. COMPLETE LIVE SONY DEVICE TREE AUDIT:\n");
-	xzs_early_puts("  Parent Provider: /soc/qcom,rpm-smd/rpm-regulator-ldoa28\n");
-	xzs_early_puts("    compatible:                \"qcom,rpm-smd-regulator-resource\"\n");
-	xzs_early_puts("    qcom,resource-name:        \"ldoa\" (0x616f646c)\n");
-	xzs_early_puts("    qcom,resource-id:          <0x1c> (28)\n");
-	xzs_early_puts("    qcom,regulator-type:       <0x00> (LDO)\n");
-	xzs_early_puts("    qcom,hpm-min-load:         <0x2710> (10000 uA = 10 mA)\n");
-	xzs_early_puts("  Child Regulator: /soc/qcom,rpm-smd/rpm-regulator-ldoa28/regulator-l28\n");
-	xzs_early_puts("    compatible:                \"qcom,rpm-smd-regulator\"\n");
-	xzs_early_puts("    regulator-name:            \"pm8994_l28\"\n");
+	/* 2. L12 Live DT & Source Audit */
+	xzs_early_puts("\n[XZS-RPM] 2. L12 LIVE SONY DEVICE TREE AUDIT:\n");
+	xzs_early_puts("  Parent: /soc/qcom,rpm-smd/rpm-regulator-ldoa12\n");
+	xzs_early_puts("    resource-name:             \"ldoa\" (0x616f646c)\n");
+	xzs_early_puts("    resource-id:               <0x0c> (12)\n");
+	xzs_early_puts("    regulator-type:            <0x00> (LDO)\n");
+	xzs_early_puts("    hpm-min-load:              <0x2710> (10000 uA = 10 mA)\n");
+	xzs_early_puts("  Child: .../regulator-l12\n");
+	xzs_early_puts("    regulator-name:            \"pm8994_l12\"\n");
 	xzs_early_puts("    qcom,set:                  <0x03> (Active + Sleep)\n");
-	xzs_early_puts("    qcom,init-voltage:         <0x000e1d48> (925000 uV)\n");
-	xzs_early_puts("    regulator-min-microvolt:   <0x000e1d48> (925000 uV)\n");
-	xzs_early_puts("    regulator-max-microvolt:   <0x000e1d48> (925000 uV)\n");
-	xzs_early_puts("    proxy-supply:              phandle <0x2a> (self)\n");
-	xzs_early_puts("    qcom,proxy-consumer-enable:PRESENT (boolean)\n");
+	xzs_early_puts("    regulator-min/max-uV:      <0x1b7740> (1800000 uV = 1.8V)\n");
+	xzs_early_puts("    qcom,init-voltage:         <0x1b7740> (1800000 uV)\n");
+	xzs_early_puts("    proxy-supply:              phandle <0x43> (self)\n");
+	xzs_early_puts("    qcom,proxy-consumer-enable:PRESENT\n");
 	xzs_early_puts("    qcom,proxy-consumer-current:<0x2710> (10000 uA)\n");
-	xzs_early_puts("    parent-supply:             ABSENT (VPH_PWR system power)\n");
-	xzs_early_puts("    qcom,init-enable:          ABSENT\n");
-	xzs_early_puts("    qcom,init-ldo-mode:        ABSENT\n");
-	xzs_early_puts("    qcom,always-send-*:        ABSENT\n");
+	xzs_early_puts("    all other optional properties: ABSENT\n");
+	xzs_early_puts("  UFS PHY consumer load:       9440 uA (0x24e0)\n");
+	xzs_early_puts("  Integer Conversion:          load_mA = 9440 / 1000 = 9 mA\n");
+	xzs_early_puts("  L12_DT_LOAD_UA=9440\n");
+	xzs_early_puts("  L12_RPM_MA=9\n");
+	xzs_early_puts("  L12_CONVERSION_RULE=load_mA = ((load_uA) / 1000)\n");
 
-	/* 3. Exact Sony Linux Driver Call Path, Expected Request & Request Diff */
-	xzs_early_puts("\n[XZS-RPM] 3. EXACT SONY LINUX REGULATOR CALL PATH & REQUEST DIFF:\n");
-	xzs_early_puts("  Linux Operation         Cached Field            Emitted KVP\n");
-	xzs_early_puts("  -------------------------------------------------------------\n");
-	xzs_early_puts("  set_voltage(925000)     VOLTAGE=925000          (deferred: rail off)\n");
-	xzs_early_puts("  set_load(18380)         CURRENT=18 (18 mA)      (deferred: rail off)\n");
-	xzs_early_puts("  set_mode(NORMAL)        CURRENT verified        (deferred: rail off)\n");
-	xzs_early_puts("  enable()                ENABLE=1                swen=1, uv=925000, ma=18\n");
-	xzs_early_puts("  -------------------------------------------------------------\n");
-	xzs_early_puts("  EXPECTED_LINUX_ACTIVE_REQUEST:\n");
-	xzs_early_puts("    resource_type:             \"ldoa\" (0x616f646c)\n");
-	xzs_early_puts("    resource_id:               28 (0x1c)\n");
-	xzs_early_puts("    set:                       ACTIVE (0)\n");
-	xzs_early_puts("    KVP count:                 3\n");
-	xzs_early_puts("    KVP[0]: \"swen\" = 1\n");
-	xzs_early_puts("    KVP[1]: \"uv\"   = 925000 (0x000e1d48)\n");
-	xzs_early_puts("    KVP[2]: \"ma\"   = 18 (0x00000012)\n");
-	xzs_early_puts("  ACTUAL_D24D_REQUEST:\n");
-	xzs_early_puts("    SWEN=1, UV=925000, MA=18\n");
-	xzs_early_puts("  REQUEST_DIFF:                NONE (100% source-identical)\n");
+	/* 3. Derived Expected Linux L12 Request */
+	xzs_early_puts("\n[XZS-RPM] 3. EXPECTED LINUX L12 ACTIVE REQUEST:\n");
+	xzs_early_puts("  format:                      V0\n");
+	xzs_early_puts("  set:                         ACTIVE (0)\n");
+	xzs_early_puts("  resource_type:               \"ldoa\" (0x616f646c)\n");
+	xzs_early_puts("  resource_id:                 12 (0x0c)\n");
+	xzs_early_puts("  KVP count:                   3\n");
+	xzs_early_puts("  KVP[0]: swen=1\n");
+	xzs_early_puts("  KVP[1]: uv=1800000 (0x1b7740)\n");
+	xzs_early_puts("  KVP[2]: ma=9 (0x09)\n");
 
-	/* 4. Memory Mapping & GLINK Transport (Frozen Infrastructure) */
-	xzs_early_puts("\n[XZS-RPM] 4. MAPPING RPM REGISTERS & MESSAGE RAM:\n");
+	/* 4. LN_BB Source Audit & RPM Clock Scaling Audit */
+	xzs_early_puts("\n[XZS-RPM] 4. LN_BB SOURCE AUDIT & RPM CLOCK SCALING:\n");
+	xzs_early_puts("  LN_BB_RESOURCE_TYPE=0x616b6c63 (\"clka\")\n");
+	xzs_early_puts("  LN_BB_RESOURCE_ID=8\n");
+	xzs_early_puts("  LN_BB_KEY=0x6e657773 (\"swen\")\n");
+	xzs_early_puts("  LN_BB_STANDARD_OR_ACTIVE_ONLY=standard (non-active-only)\n");
+	xzs_early_puts("  UFS_REF_CLK_SOURCE_INDEX=RPM_SMD_LN_BB_CLK\n");
+	xzs_early_puts("  RESOLVED_CLOCK_NAME=ln_bb_clk\n");
+	xzs_early_puts("  ACTIVE_ONLY=no\n");
+	xzs_early_puts("  RPM_CLOCK_SCALING_REQUIRED=no\n");
+	xzs_early_puts("  SOURCE_REASON=LN_BB is an XO buffer (clka/8) toggled via SWEN, independent of MISC_CLK bus scaling.\n");
+
+	/* 5. Memory Mapping & GLINK Transport */
+	xzs_early_puts("\n[XZS-RPM] 5. MAPPING RPM REGISTERS & MESSAGE RAM:\n");
 	if (g_msgram_base == 0) {
 		g_msgram_base = (uintptr_t)ml_io_map(RPM_MSGRAM_PHYS_BASE, RPM_MSGRAM_SIZE);
 		if (g_msgram_base == 0) {
@@ -1067,117 +1100,185 @@ void xzs_rpm_phase_d2c24e_probe(void)
 		return;
 	}
 	xzs_early_puts("[XZS-RPM] [PASS] RPM GLINK TRANSPORT CHANNEL VERIFIED\n");
+	xzs_breadcrumb(0xD24F, 0x10);
 
-	/* 5. Full Read-Only L28 Snapshot (L28_PRE[0x100], 3 Passes) */
-	xzs_early_puts("\n[XZS-RPM] 5. FULL READ-ONLY L28 SNAPSHOT (PRE-VOTE, 3 PASSES):\n");
-	uint8_t l28_pre[256];
-	xzs_spmi_snapshot_l28_stable("L28_PRE Snapshot (256 bytes)", l28_pre);
+	bool l28_voted = false;
+	bool l12_voted = false;
+	bool ln_bb_voted = false;
 
-	/* 6. Execute Exact Linux-Equivalent ACTIVE Request via RPM */
-	xzs_early_puts("\n[XZS-RPM] 6. ISSUING EXACT SONY LINUX ACTIVE VOTE (0.925V, 18 mA, SWEN=1)...\n");
-	uint32_t vote_elapsed_us = 0;
-	int v_rc = xzs_rpm_send_request_and_wait_ack(QCOM_SMD_RPM_LDOA, 28, 925000U, 18U, true, &vote_elapsed_us);
-	if (v_rc != 0) {
-		xzs_early_puts("[XZS-RPM] [FAIL] L28 RPM VOTE FAILED — ABORTING\n");
+	/* 6. Reproduce Known-Good L28 Vote */
+	xzs_early_puts("\n[XZS-RPM] 6. VOTING L28 (0.925V, 18 mA, SWEN=1)...\n");
+	uint32_t l28_elapsed = 0;
+	int rc = xzs_rpm_send_request_and_wait_ack(QCOM_SMD_RPM_LDOA, 28, 925000U, 18U, true, &l28_elapsed);
+	if (rc != 0) {
+		xzs_early_puts("[XZS-RPM] [FAIL] L28 RPM VOTE FAILED\n");
+		goto rollback;
+	}
+	l28_voted = true;
+	xzs_breadcrumb(0xD24F, 0x20);
+	delay(1000);
+
+	/* 7. STAGE A: Add L12 ONLY */
+	xzs_early_puts("\n[XZS-RPM] 7. STAGE A: VOTING L12 ONLY (1.800V, 9 mA, SWEN=1)...\n");
+	uint32_t l12_elapsed = 0;
+	rc = xzs_rpm_send_request_and_wait_ack(QCOM_SMD_RPM_LDOA, 12, 1800000U, 9U, true, &l12_elapsed);
+	if (rc != 0) {
+		xzs_early_puts("[XZS-RPM] [FAIL] L12 RPM VOTE FAILED\n");
+		goto rollback;
+	}
+	l12_voted = true;
+	xzs_breadcrumb(0xD24F, 0x30);
+	xzs_early_puts("  Applying 1000 us settling delay for L12...\n");
+	delay(1000);
+
+	/* 8. Retest PHY with L28 + L12 (Stage A) */
+	xzs_early_puts("\n[XZS-RPM] 8. STAGE A PHY RETEST (L28 + L12, WITHOUT LN_BB)...\n");
+	xzs_breadcrumb(0xD24F, 0x40);
+	uint32_t c_ready_a = 0, pcs_ready_a = 0;
+	int c_ready_us_a = 0, pcs_ready_us_a = 0;
+	xzs_ufs_phy_retest_d2c24c(&c_ready_a, &pcs_ready_a, &c_ready_us_a, &pcs_ready_us_a);
+
+	xzs_early_puts("\n================================================================\n");
+	xzs_early_puts("  STAGE A UFS PHY RESULTS (L28 + L12):\n");
+	xzs_early_puts("================================================================\n");
+	xzs_early_puts("  QSERDES_COM_C_READY_STATUS: 0x"); xzs_early_puthex64((uint64_t)c_ready_a);
+	if (c_ready_a & 1U) {
+		xzs_early_puts(" (ASSERTED @ "); xzs_early_puthex64((uint64_t)c_ready_us_a); xzs_early_puts(" us)\n");
+		xzs_breadcrumb(0xD24F, 0x41);
+	} else {
+		xzs_early_puts(" (TIMEOUT)\n");
+		xzs_breadcrumb(0xD24F, 0x42);
+	}
+	xzs_early_puts("  QPHY_PCS_READY_STATUS:      0x"); xzs_early_puthex64((uint64_t)pcs_ready_a);
+	if (pcs_ready_a & 1U) {
+		xzs_early_puts(" (ASSERTED @ "); xzs_early_puthex64((uint64_t)pcs_ready_us_a); xzs_early_puts(" us)\n");
+		xzs_breadcrumb(0xD24F, 0x43);
+	} else {
+		xzs_early_puts(" (TIMEOUT)\n");
+		xzs_breadcrumb(0xD24F, 0x44);
+	}
+	xzs_early_puts("================================================================\n");
+
+	if (c_ready_a & 1U) {
+		/* A1: C_READY passed! */
+		xzs_early_puts("\n[HARDWARE VERIFIED RESULT: A1]\n");
+		xzs_early_puts("  L28-equivalent platform state + L12 RPM vote is SUFFICIENT for QSERDES common readiness!\n");
+		xzs_early_puts("  CAUSAL ISOLATION PRESERVED: DO NOT VOTE LN_BB.\n");
+		if (pcs_ready_a & 1U) {
+			xzs_early_puts("  D2-C2 PHY INITIALIZATION COMPLETE!\n");
+		} else {
+			xzs_early_puts("  COMMON SERDES PLL READY; PCS STILL NOT READY (investigate PCS separately).\n");
+		}
 		goto rollback;
 	}
 
-	/* Settling Delay */
-	xzs_early_puts("  Applying 1000 us settling delay...\n");
+	/* A2: C_READY remains 0 -> Proceed to Stage B */
+	xzs_early_puts("\n[STAGE A CLASSIFICATION: A2]\n");
+	xzs_early_puts("  L28 + L12 insufficient (C_READY=0) -> reference clock dependency remains candidate.\n");
+	xzs_early_puts("  PROCEEDING TO STAGE B: VOTE LN_BB REFERENCE CLOCK.\n");
+
+	/* 9. STAGE B: Vote LN_BB using exact Linux semantics */
+	xzs_breadcrumb(0xD24F, 0x50);
+	xzs_early_puts("\n[XZS-RPM] 9. STAGE B: VOTING LN_BB REFERENCE CLOCK (clka / ID 8, SWEN=1)...\n");
+	uint32_t ln_act_elapsed = 0, ln_slp_elapsed = 0;
+	/* Linux clk_smd_rpm_prepare: ACTIVE set first */
+	rc = xzs_rpm_vote_clk_buffer(RPM_LN_BB_CLK_ID, MSM_RPM_CTX_ACTIVE_SET, true, &ln_act_elapsed);
+	if (rc != 0) {
+		xzs_early_puts("[XZS-RPM] [FAIL] LN_BB ACTIVE SET VOTE FAILED\n");
+		goto rollback;
+	}
+	/* Linux clk_smd_rpm_prepare: SLEEP set second */
+	rc = xzs_rpm_vote_clk_buffer(RPM_LN_BB_CLK_ID, MSM_RPM_CTX_SLEEP_SET, true, &ln_slp_elapsed);
+	if (rc != 0) {
+		xzs_early_puts("[XZS-RPM] [FAIL] LN_BB SLEEP SET VOTE FAILED\n");
+		goto rollback;
+	}
+	ln_bb_voted = true;
+	xzs_breadcrumb(0xD24F, 0x51);
+	xzs_early_puts("  Applying 1000 us settling delay for LN_BB...\n");
 	delay(1000);
 
-	/* 7. Full Post-Vote L28 Snapshot (L28_POST[0x100], 3 Passes) & Diff */
-	xzs_early_puts("\n[XZS-RPM] 7. FULL READ-ONLY L28 SNAPSHOT (POST-VOTE, 3 PASSES):\n");
-	uint8_t l28_post[256];
-	xzs_spmi_snapshot_l28_stable("L28_POST Snapshot (256 bytes)", l28_post);
+	/* 10. Retest PHY with L28 + L12 + LN_BB (Stage B) */
+	xzs_early_puts("\n[XZS-RPM] 10. STAGE B PHY RETEST (L28 + L12 + LN_BB)...\n");
+	xzs_breadcrumb(0xD24F, 0x60);
+	uint32_t c_ready_b = 0, pcs_ready_b = 0;
+	int c_ready_us_b = 0, pcs_ready_us_b = 0;
+	xzs_ufs_phy_retest_d2c24c(&c_ready_b, &pcs_ready_b, &c_ready_us_b, &pcs_ready_us_b);
 
-	/* Compute Byte-Level Diff */
-	xzs_early_puts("\n[XZS-RPM] BYTE-LEVEL PMIC DIFF (PRE vs POST):\n");
-	int diff_count = xzs_spmi_diff_l28("PRE vs POST", l28_pre, l28_post);
-
-	/* Compare against Known-ON Linux TWRP Reference */
-	bool twrp_match = false;
-	xzs_spmi_compare_twrp_ref(l28_post, &twrp_match);
-
-	/* Classification */
-	if (diff_count > 0) {
-		xzs_early_puts("\n================================================================\n");
-		xzs_early_puts("[XZS-RPM] CLASSIFICATION: [CASE A] RPM REQUEST CAUSED OBSERVABLE PMIC STATE TRANSITION\n");
-		xzs_early_puts("================================================================\n");
+	xzs_early_puts("\n================================================================\n");
+	xzs_early_puts("  STAGE B UFS PHY RESULTS (L28 + L12 + LN_BB):\n");
+	xzs_early_puts("================================================================\n");
+	xzs_early_puts("  QSERDES_COM_C_READY_STATUS: 0x"); xzs_early_puthex64((uint64_t)c_ready_b);
+	if (c_ready_b & 1U) {
+		xzs_early_puts(" (ASSERTED @ "); xzs_early_puthex64((uint64_t)c_ready_us_b); xzs_early_puts(" us)\n");
+		xzs_breadcrumb(0xD24F, 0x61);
 	} else {
-		xzs_early_puts("\n================================================================\n");
-		xzs_early_puts("[XZS-RPM] CLASSIFICATION: [CASE B] RPM REQUEST ACKNOWLEDGED BUT NO OBSERVABLE L28 SPMI STATE CHANGE\n");
-		xzs_early_puts("================================================================\n");
+		xzs_early_puts(" (TIMEOUT)\n");
+		xzs_breadcrumb(0xD24F, 0x62);
 	}
-
-	/* 8. Conditional UFS PHY Retest */
-	bool run_phy = (diff_count > 0) || twrp_match;
-	if (run_phy) {
-		xzs_early_puts("\n[XZS-RPM] [GATE PASS] PHYSICAL L28 TRANSITION VERIFIED (OR IDENTICAL TO KNOWN-ON TWRP)\n");
-		xzs_early_puts("  EXECUTING CONTROLLED UFS PHY RETEST (C_READY primary, PCS_READY secondary)...\n");
-		uint32_t c_ready_status = 0;
-		uint32_t pcs_ready_status = 0;
-		int c_ready_us = 0;
-		int pcs_ready_us = 0;
-		xzs_ufs_phy_retest_d2c24c(&c_ready_status, &pcs_ready_status, &c_ready_us, &pcs_ready_us);
-
-		xzs_early_puts("\n================================================================\n");
-		xzs_early_puts("  PHASE D2-C2.4E UFS PHY RESULTS:\n");
-		xzs_early_puts("================================================================\n");
-		xzs_early_puts("  QSERDES_COM_C_READY_STATUS: 0x"); xzs_early_puthex64((uint64_t)c_ready_status);
-		if (c_ready_status & 1U) {
-			xzs_early_puts(" (ASSERTED @ "); xzs_early_puthex64((uint64_t)c_ready_us); xzs_early_puts(" us)\n");
-			xzs_early_puts("  CLASSIFICATION: [CASE A-1] MAJOR CAUSAL SUCCESS: L28 was missing prerequisite!\n");
-		} else {
-			xzs_early_puts(" (TIMEOUT)\n");
-			xzs_early_puts("  CLASSIFICATION: [CASE A-2] L28 VERIFIED ON BUT INSUFFICIENT (L12 next controlled variable)\n");
-		}
-		xzs_early_puts("  QPHY_PCS_READY_STATUS:      0x"); xzs_early_puthex64((uint64_t)pcs_ready_status);
-		if (pcs_ready_status & 1U) {
-			xzs_early_puts(" (ASSERTED @ "); xzs_early_puthex64((uint64_t)pcs_ready_us); xzs_early_puts(" us)\n");
-			xzs_early_puts("  PHY INITIALIZATION:         COMPLETE\n");
-		} else {
-			xzs_early_puts(" (TIMEOUT)\n");
-		}
-		xzs_early_puts("================================================================\n");
+	xzs_early_puts("  QPHY_PCS_READY_STATUS:      0x"); xzs_early_puthex64((uint64_t)pcs_ready_b);
+	if (pcs_ready_b & 1U) {
+		xzs_early_puts(" (ASSERTED @ "); xzs_early_puthex64((uint64_t)pcs_ready_us_b); xzs_early_puts(" us)\n");
+		xzs_breadcrumb(0xD24F, 0x63);
 	} else {
-		xzs_early_puts("\n[XZS-RPM] [GATE FAIL] ZERO PMIC CHANGES AND NOT MATCHING TWRP_ON — ABORTING PHY RETEST\n");
+		xzs_early_puts(" (TIMEOUT)\n");
+		xzs_breadcrumb(0xD24F, 0x64);
+	}
+	xzs_early_puts("================================================================\n");
+
+	if (c_ready_b & 1U) {
+		if (pcs_ready_b & 1U) {
+			xzs_early_puts("\n[HARDWARE VERIFIED CAUSAL RESULT: B1]\n");
+			xzs_early_puts("  RPM LN_BB reference clock vote was a missing prerequisite for QSERDES common PLL readiness.\n");
+			xzs_early_puts("  D2-C2 COMPLETE!\n");
+		} else {
+			xzs_early_puts("\n[HARDWARE VERIFIED CAUSAL RESULT: B2]\n");
+			xzs_early_puts("  C_READY=1, PCS_READY=0: Common analog/clock prerequisites solved.\n");
+			xzs_early_puts("  Next investigation must focus on PCS/start/calibration/lane configuration.\n");
+		}
+	} else {
+		xzs_early_puts("\n[HARDWARE VERIFIED RESULT: B3]\n");
+		xzs_early_puts("  L28 + L12 + LN_BB: C_READY=0. STOP: do NOT add more supplies.\n");
+		xzs_early_puts("  Requires audit of QMP calibration table, ref-clock selection, reset ordering, lane configuration.\n");
 	}
 
 rollback:
-	/* 9. Rollback via RPM (Release APPS vote SWEN=0) */
-	xzs_early_puts("\n[XZS-RPM] 9. RELEASING APPS ACTIVE ENABLE VOTE VIA RPM (SWEN=0)...\n");
-	uint32_t rb_elapsed_us = 0;
-	int rb_rc = xzs_rpm_send_request_and_wait_ack(QCOM_SMD_RPM_LDOA, 28, 925000U, 18U, false, &rb_elapsed_us);
-	if (rb_rc == 0) {
-		xzs_early_puts("[XZS-RPM] APPS ACTIVE ENABLE VOTE RELEASED (ACK success)\n");
-	} else {
-		xzs_early_puts("[XZS-RPM] [WARNING] RELEASE REQUEST FAILED OR TIMED OUT\n");
+	/* 11. Reverse Order Rollback */
+	xzs_early_puts("\n[XZS-RPM] 11. REVERSE ORDER ROLLBACK:\n");
+	if (ln_bb_voted) {
+		xzs_early_puts("  Releasing LN_BB (clka/8) in SLEEP set (SWEN=0)...\n");
+		uint32_t rb_ln_slp = 0;
+		(void)xzs_rpm_vote_clk_buffer(RPM_LN_BB_CLK_ID, MSM_RPM_CTX_SLEEP_SET, false, &rb_ln_slp);
+		xzs_early_puts("  Releasing LN_BB (clka/8) in ACTIVE set (SWEN=0)...\n");
+		uint32_t rb_ln_act = 0;
+		(void)xzs_rpm_vote_clk_buffer(RPM_LN_BB_CLK_ID, MSM_RPM_CTX_ACTIVE_SET, false, &rb_ln_act);
 	}
-
-	delay(1000);
-	uint8_t l28_post_release[256];
-	xzs_spmi_snapshot_l28_stable("L28_POST_RELEASE Snapshot (256 bytes)", l28_post_release);
-
-	xzs_early_puts("\n[XZS-RPM] BYTE-LEVEL PMIC DIFF (POST vs POST_RELEASE):\n");
-	xzs_spmi_diff_l28("POST vs POST_RELEASE", l28_post, l28_post_release);
-
-	xzs_early_puts("\n[XZS-RPM] BYTE-LEVEL PMIC DIFF (PRE vs POST_RELEASE):\n");
-	int rb_diff_pre = xzs_spmi_diff_l28("PRE vs POST_RELEASE", l28_pre, l28_post_release);
-	if (rb_diff_pre == 0) {
-		xzs_early_puts("[XZS-RPM] CURRENT SPMI OBSERVATION REMAINED AT BASELINE AFTER RELEASE (PASS)\n");
-	} else {
-		xzs_early_puts("[XZS-RPM] WARNING: RESIDUAL SPMI CHANGES REMAIN AFTER RELEASE\n");
+	if (l12_voted) {
+		xzs_early_puts("  Releasing L12 in ACTIVE set (SWEN=0)...\n");
+		uint32_t rb_l12 = 0;
+		(void)xzs_rpm_send_request_and_wait_ack(QCOM_SMD_RPM_LDOA, 12, 1800000U, 9U, false, &rb_l12);
 	}
+	if (l28_voted) {
+		xzs_early_puts("  Releasing L28 in ACTIVE set (SWEN=0)...\n");
+		uint32_t rb_l28 = 0;
+		(void)xzs_rpm_send_request_and_wait_ack(QCOM_SMD_RPM_LDOA, 28, 925000U, 18U, false, &rb_l28);
+	}
+	xzs_breadcrumb(0xD24F, 0x70);
+	xzs_early_puts("[XZS-RPM] ROLLBACK COMPLETE\n");
 
-	/* 10. Preserved Terminal Recovery Pipeline */
-	xzs_early_puts("\n[XZS-RPM] 10. EXPERIMENT COMPLETE — TRIGGERING WARM RESET TO FASTBOOT\n");
-	xzs_breadcrumb(0xD24E, 1);
+	/* 12. Terminal Recovery Pipeline */
+	xzs_early_puts("\n[XZS-RPM] 12. EXPERIMENT COMPLETE — TRIGGERING WARM RESET TO FASTBOOT\n");
+	xzs_breadcrumb(0xD24F, 0x01);
 	xzs_spin_halt();
+}
+
+void xzs_rpm_phase_d2c24e_probe(void)
+{
+	xzs_rpm_phase_d2c24f_probe();
 }
 
 void xzs_rpm_phase_d2c24d_probe(void)
 {
-	xzs_rpm_phase_d2c24e_probe();
+	xzs_rpm_phase_d2c24f_probe();
 }
 
