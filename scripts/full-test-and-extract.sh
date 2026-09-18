@@ -12,9 +12,17 @@ if [ "$MODE" = "--smp-regression" ]; then
     echo "=== Mode: 4-Core Mach SMP Milestone Regression Verification ==="
 fi
 
+FASTBOOT_SERIAL="${FASTBOOT_SERIAL:-}"
+ADB_SERIAL="${ADB_SERIAL:-}"
+
 echo "1. Waiting for Sony Xperia XZs in Fastboot (hold Vol Up + plug USB)..."
 while true; do
-    DEV=$(fastboot devices 2>/dev/null | grep -F "BH905SX976" | awk '{print $1}' || true)
+    if [ -n "$FASTBOOT_SERIAL" ]; then
+        DEV=$(fastboot devices 2>/dev/null | grep -F "$FASTBOOT_SERIAL" | awk '{print $1}' || true)
+    else
+        DEV=$(fastboot devices 2>/dev/null | head -n 1 | awk '{print $1}' || true)
+        if [ -n "$DEV" ]; then FASTBOOT_SERIAL="$DEV"; fi
+    fi
     if [ -n "$DEV" ]; then
         echo ">>> Detected Fastboot device: $DEV <<<"
         break
@@ -23,13 +31,13 @@ while true; do
 done
 
 echo "2. Booting newly built XNU kernel (artifacts/builds/xzs-xnu-boot.img)..."
-fastboot -s BH905SX976 boot artifacts/builds/xzs-xnu-boot.img
+fastboot -s "$FASTBOOT_SERIAL" boot artifacts/builds/xzs-xnu-boot.img
 
 echo "3. Waiting for automatic PSCI warm reset back to Fastboot..."
 RETURNED=""
 for i in $(seq 1 60); do
     sleep 1
-    DEV=$(fastboot devices 2>/dev/null | grep -F "BH905SX976" | awk '{print $1}' || true)
+    DEV=$(fastboot devices 2>/dev/null | grep -F "$FASTBOOT_SERIAL" | awk '{print $1}' || true)
     if [ -n "$DEV" ]; then
         echo ">>> Device returned to Fastboot at +${i}s: $DEV <<<"
         RETURNED="1"
@@ -46,12 +54,17 @@ if [ -z "$RETURNED" ]; then
 fi
 
 echo "4. Booting TWRP dumper (artifacts/builds/twrp-kagura.img)..."
-fastboot -s BH905SX976 boot artifacts/builds/twrp-kagura.img
+fastboot -s "$FASTBOOT_SERIAL" boot artifacts/builds/twrp-kagura.img
 
 echo "5. Waiting for TWRP ADB recovery environment..."
 for i in $(seq 1 35); do
     sleep 1
-    ADB_DEV=$(adb devices 2>/dev/null | grep -F "BH905SX976" | grep -F "recovery" | awk '{print $1}' || true)
+    if [ -n "$ADB_SERIAL" ]; then
+        ADB_DEV=$(adb devices 2>/dev/null | grep -F "$ADB_SERIAL" | grep -F "recovery" | awk '{print $1}' || true)
+    else
+        ADB_DEV=$(adb devices 2>/dev/null | grep -F "recovery" | head -n 1 | awk '{print $1}' || true)
+        if [ -n "$ADB_DEV" ]; then ADB_SERIAL="$ADB_DEV"; fi
+    fi
     if [ -n "$ADB_DEV" ]; then
         echo ">>> Detected TWRP Recovery: $ADB_DEV at +${i}s <<<"
         break
@@ -61,11 +74,11 @@ done
 sleep 3
 echo "6. Extracting telemetry from persistent pstore..."
 mkdir -p artifacts/logs
-adb -s BH905SX976 shell "ls -la /sys/fs/pstore"
+adb -s "$ADB_SERIAL" shell "ls -la /sys/fs/pstore"
 echo "--- DMESG RAMOOPS ---"
-adb -s BH905SX976 shell "cat /sys/fs/pstore/dmesg-ramoops-0 2>/dev/null" | tee artifacts/logs/dmesg-ramoops.log
+adb -s "$ADB_SERIAL" shell "cat /sys/fs/pstore/dmesg-ramoops-0 2>/dev/null" | tee artifacts/logs/dmesg-ramoops.log
 echo "--- CONSOLE RAMOOPS ---"
-adb -s BH905SX976 shell "cat /sys/fs/pstore/console-ramoops 2>/dev/null" | tee artifacts/logs/console-ramoops.log
+adb -s "$ADB_SERIAL" shell "cat /sys/fs/pstore/console-ramoops 2>/dev/null" | tee artifacts/logs/console-ramoops.log
 
 echo "============================================================"
 echo "EXTRACTION FINISHED"

@@ -37,8 +37,8 @@ OUTPUT="$2"
 if [ -z "${AVAILABILITY_PL}" ] || [ ! -x "${AVAILABILITY_PL}" ]; then
     if [ -x "${SRCROOT}/../toolchain/AvailabilityVersions/availability.pl" ]; then
         AVAILABILITY_PL="${SRCROOT}/../toolchain/AvailabilityVersions/availability.pl"
-    elif [ -x "/Users/lechaukha12/Desktop/xnu-xzs/toolchain/AvailabilityVersions/availability.pl" ]; then
-        AVAILABILITY_PL="/Users/lechaukha12/Desktop/xnu-xzs/toolchain/AvailabilityVersions/availability.pl"
+    elif [ -x "$(dirname "$0")/../../../../toolchain/AvailabilityVersions/availability.pl" ]; then
+        AVAILABILITY_PL="$(dirname "$0")/../../../../toolchain/AvailabilityVersions/availability.pl"
     else
         AVAILABILITY_PL="${SDKROOT}/${DRIVERKITROOT}/usr/local/libexec/availability.pl"
     fi

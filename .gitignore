@@ -17,3 +17,16 @@ DerivedData/
 
 # Logs
 *.log
+
+# Python bytecode & cache
+__pycache__/
+*.pyc
+
+# Local compile scripts
+compile_*.sh
+
+# Subproject pre-built binaries and objects
+src/xzs-*/*.o
+src/xzs-*/*.elf
+src/xzs-*/*.bin*
+src/xzs-*/*.dis

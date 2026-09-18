@@ -3,7 +3,7 @@ set -euo pipefail
 
 echo "============================================================"
 echo "XZS EMPIRICAL RAM PERSISTENCE TEST"
-echo "Target: Sony Xperia XZs (BH905SX976)"
+echo "Target: Sony Xperia XZs (${FASTBOOT_SERIAL:-auto-detect})"
 echo "============================================================"
 
 WRITER_IMG="artifacts/builds/xzs-ram-test-writer.img"

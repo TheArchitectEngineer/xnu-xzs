@@ -1,62 +1,117 @@
-# Sony Xperia XZs (MSM8996) — XNU Port Status
+# Sony Xperia XZs (MSM8996) — Port Status
+
+This summary provides an executive overview of the project's technical status. It can be read in under 3 minutes.
+
+---
 
 ## Current Milestone
 
-* **Device**: Sony Xperia XZs (G8231 / Tone Keyaki / Serial `BH905SX976`)
+```text
+Phase D1 acceptance gate completed:
+BSD/VFS bootstrap reaches root-device / block-storage boundary.
+```
+
+* **Target Device**: Sony Xperia XZs (Model G8231 / Platform Tone / Board Keyaki)
 * **SoC**: Qualcomm Snapdragon 820 (MSM8996 Pro)
-* **Architecture**: Quad-core ARMv8.0-A Qualcomm Kryo (2x Silver @ 1.59 GHz + 2x Gold @ 2.15 GHz)
-* **Execution Level**: EL1 (booted natively via S1 ABOOT fastboot)
-* **Kernel Git Tag**: `v1.0-4core-mach-smp-verified` (Commit `8a0a42d`)
-* **Current Clean Development Branch**: `xzs-port`
-* **Status**: **4-Core Full Mach SMP Scheduler 100% Verified on Physical Hardware**
+* **CPU Architecture**: Quad-core Qualcomm Kryo ARMv8.0-A (2x Silver + 2x Gold)
+* **Active Development Branch**: `xzs-bringup`
+* **Target Baseline Commit**: `27d000c`
 
 ---
 
-## High-Level Goal Progress
+## Highest Hardware-Verified Checkpoint
 
-| Milestone | Objective | Status | Verification Evidence |
-| :--- | :--- | :---: | :--- |
-| **Mục tiêu A** | XNU native execution on Qualcomm MSM8996 | **DONE ✅** | Bootshim, ADT, MMU, High KVA, UARTDM, Platform Expert |
-| **Mục tiêu B** | 4/4 CPU low-level SMP bring-up | **DONE ✅** | PSCI `CPU_ON`, per-core GICR, timer PPI, SGI IPI, shared coherency |
-| **Mục tiêu C** | **Full Mach SMP Scheduler Integration** | **DONE ✅** | **All 4 cores in `pset0`, idle_threads, worker dispatch, ring migration, 40k lock contention** |
-| **Mục tiêu D** | BSD Subsystem, VFS, Rootfs & Userspace | **NEXT ⏳** | Scheduled next: RAM disk / UFS storage & `bsd_init` |
+```text
+[D50] ROOT DEVICE SELECTION ENTER
+[D50-I0..I8] Canonical IOMedia discovery traversed (timeout=1.0s)
+[D50b] IOFindBSDRoot returns canonical kIOReturnNotFound (0xe00002f0)
+[D50c] Synthetic rootdev selected (sd0a: major=6, minor=0)
+[D51] vfs_mountroot ENTER
+[D51b] bdevvp(rootdev, ...) error=0x13 (ENODEV)
+[D51-TERMINAL] cannot mount root, errno = 0x13
+[XZS-BOOT] PHASE D1 TERMINAL CONDITION REACHED — WARM REBOOTING TO FASTBOOT
+```
 
----
-
-## Detailed Verified Checkpoints
-
-- [x] **S1 boot image**: Accepted and loaded by Sony ABOOT bootloader.
-- [x] **xzs-bootshim**: Parses Qualcomm DTB, builds ADT, constructs `boot_args` at `0x81800000`.
-- [x] **Exception vectors**: Installed at `LowExceptionVectorBase` with clean high-KVA traps.
-- [x] **Page Tables & MMU**: `TCR_EL1 = 0x226511a511`, `MAIR_EL1 = 0x0c0804ff00bb44ff`, `SCTLR_EL1 = 0x10c01805` (MMU, I-cache, D-cache enabled).
-- [x] **arm_init()**: Platform expert initialized, timers configured (19.2 MHz), CPU topology parsed (`ml_parse_cpu_topology`).
-- [x] **Pmap & VM runtime**: Kernel physical aperture active, zones, kmem, and submaps initialized.
-- [x] **Qualcomm BLSP2 UARTDM**: Driver operational (115200 8N1) at `0x075b0000`.
-- [x] **ARM GICv3**: Distributor (`GICD`) and per-core Redistributors (`GICR`) active on all 4 cores with native system register interface (`ICC_SRE_EL1.SRE = 1`).
-- [x] **ARM Generic Physical Timer**: PPI 30 firing reliably across all cores.
-- [x] **PSCI v1.0**: `CPU_ON` (0xC4000003), `CPU_OFF` (0x84000002), and `AFFINITY_INFO` (0xC4000004) verified via SMC #0.
-- [x] **Multi-Core Cache Coherency**: Inner Shareable WBWA memory, exclusive monitors (`ldxr`/`stxr`), hardware spinlocks verified.
-- [x] **Canonical Mach Secondary Lifecycle**:
-  - CPU0: Cluster 0 Core 0 (Kryo Silver) — Boot Core
-  - CPU1: Cluster 0 Core 1 (Kryo Silver) — Handed off to `secondary_cpu_main`
-  - CPU2: Cluster 1 Core 0 (Kryo Gold) — Handed off to `secondary_cpu_main`
-  - CPU3: Cluster 1 Core 1 (Kryo Gold) — Handed off to `secondary_cpu_main`
-- [x] **Mach Scheduler `pset0`**: All 4 processors registered, running `idle_thread`, participating in runqueues.
-- [x] **Reschedule IPI & Preemption**: SGI 1 delivering `SIGPast`, invoking `ast_check()`, taking `AST_URGENT` in kernel mode, executing `thread_preempted_in_kernel`.
-- [x] **Cross-Cluster Thread Migration**: Single thread successfully hopped across cores: CPU0 -> CPU1 -> CPU2 -> CPU3 -> CPU0.
-- [x] **Concurrent Lock Contention**: 40,000 atomic operations completed concurrently across all 4 cores with zero race conditions (`g_xzs_contended_counter = 0x9c40`).
+The kernel confirms that Mach SMP, BSD initialization, IOKit autoconfiguration, and VFS mountroot logic operate genuinely on physical silicon. The terminal error code `0x13` (`ENODEV`, decimal 19) proves that the VFS subsystem reached the storage layer and queried the BSD block device switch table (`bdevsw`), correctly failing because a physical storage controller driver has not yet been implemented.
 
 ---
 
-## Active Repository Branches
+## What Works (Hardware Verified)
 
-* **`main`**: Clean Apple upstream-compatible baseline (`xnu-12377.1.9`).
-* **`xzs-bringup`**: Historical bring-up laboratory containing raw bring-up tests, verbose checkpoints, and early diagnostic hooks (anchored at `8a0a42d`).
-* **`xzs-port`**: Production clean port branch for ongoing development (Phase D: BSD, VFS, userspace).
+- [x] **Sony S1 Bootloader Handoff**: Android boot image loading via fastboot.
+- [x] **xzs-bootshim**: Qualcomm DTB parsing, Apple Device Tree (ADT) creation at `0x81810000`, `boot_args` population at `0x81800000`.
+- [x] **Low-Level ARM64 MMU**: TCR/MAIR configuration, 16KB granule, transition to High KVA (`0xfffffe0000000000`).
+- [x] **Qualcomm BLSP2 UARTDM**: Serial logging at 115200 8N1 at `0x075b0000`.
+- [x] **Persistent RAM / Pstore Ramoops**: Ring buffer at `0x80060000`, console at `0xa7fbe000` (256KB), dmesg at `0xa7f00000` (4KB).
+- [x] **ARM GICv3**: Distributor (`0x09bc0000`) and per-core Redistributors (`0x09c00000` array) in native system register mode.
+- [x] **ARM Generic Timers**: PPI 27 (Virtual) & PPI 30 (Physical) firing reliably across all cores at 19.2 MHz.
+- [x] **ARM PSCI v1.0 Multi-Core**: SMC `CPU_ON` (`0xC4000003`) bringing all 4 Kryo cores online.
+- [x] **Mach SMP Scheduler**: All 4 cores in processor set `pset0`, running `idle_thread`, servicing reschedule IPIs via SGI 1, handling AST urgent preemption.
+- [x] **Multi-Core Cache Coherency**: Inner Shareable WBWA memory, 40,000-op atomic lock contention verified (`0x9c40`).
+- [x] **BSD Subsystem Bootstrap**: Process 0 (`kernproc`), credentials, zones, domains, sysctl tree.
+- [x] **VFS Core Framework**: Mount lists, vnode pools (`vnodes=263168`), devfs bootstrap.
+- [x] **IOKit Autoconfiguration**: `IOKitBSDInit` publishing `IOBSD` plane to BSD.
+- [x] **Automated Recovery**: Warm reboot back to Fastboot within +6 seconds via Qualcomm APCS watchdog bite upon reaching D1 terminal state.
 
 ---
 
-## Current Blockers
+## What Is Deferred (Temporary Bring-up Workarounds)
 
-* **None for Mach SMP**. Full 4-core SMP scheduler is 100% complete and verified on hardware.
-* **Next Focus (Phase D)**: BSD Subsystem initialization (`bsd_init`) and RAM-disk rootfs driver.
+The following non-essential subsystems are temporarily deferred to eliminate allocator and lock contention before the storage boundary:
+* **Skywalk** (`skywalk_init`): Userspace networking memory arenas deferred.
+* **Loopback & Tunnels** (`lo0` / `gif0`): Virtual network interfaces deferred.
+* **Ethernet Family** (`ether_family_init`): DLIL ethernet registration deferred.
+* **TCP Fast Open** (`tcp_fastopen = 0`): Deferred pending CoreCrypto AES registration.
+* **DTrace Providers** (`fbt_init`, `profile_init`, `dtrace_postinit`): Tracing probes deferred.
+* **Polled Corefiles** (`IOPOLLED_COREFILE`): Crashdump allocation deferred until storage exists.
+
+*(Full matrix: see [`docs/XZS_WORKAROUNDS.md`](XZS_WORKAROUNDS.md))*
+
+---
+
+## What Does Not Exist Yet
+
+- [ ] **Physical UFS Controller Driver**: No driver for Qualcomm MSM8996 UFS 2.0 (`0x00624000`).
+- [ ] **Block Storage Devices**: No physical `IOMedia` or `disk0` published in IOKit registry.
+- [ ] **Root Filesystem**: No APFS, HFS+, or ramdisk mounted at `/`.
+- [ ] **Userspace Process**: No PID 1 (`launchd`), shell, or `/dev/console` interactive session.
+
+---
+
+## How to Reproduce
+
+### 1. Build Pipeline
+```bash
+DEVELOPER_DIR=/Applications/Xcode-beta.app/Contents/Developer \
+make -C src/xnu \
+KERNEL_CONFIGS=DEVELOPMENT \
+ARCH_CONFIGS=ARM64 \
+MACHINE_CONFIGS=VMAPPLE \
+RC_DARWIN_KERNEL_VERSION=24.0.0 \
+build -j8
+
+./scripts/check-no-pac.sh
+./scripts/package-boot.sh
+```
+
+### 2. Hardware Deployment
+```bash
+./scripts/run-and-extract.sh
+```
+
+### 3. Cold-Reset Note
+> [!IMPORTANT]
+> **Cold-Reset Procedure Required for Determinism**:
+> To guarantee reproducible D1 terminal execution, always cold-reset the phone before testing:
+> 1. Hold `Power + Volume Up` until the phone vibrates 3 times (full power cut).
+> 2. Hold `Volume Down` and insert USB cable to enter Fastboot (blue LED).
+> 3. Run `./scripts/run-and-extract.sh`.
+
+---
+
+## Next Technical Boundary
+
+```text
+Phase D2: Qualcomm MSM8996 UFS Physical Block Read
+```
+Implementing the `QualcommUFSController` driver to initialize UFS hardware, complete link startup, route GICv3 interrupt SPI 265, and issue SCSI/UFS read commands on physical internal flash storage.

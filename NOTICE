@@ -1,0 +1,18 @@
+Apple XNU on Sony Xperia XZs (Qualcomm MSM8996)
+==================================================
+
+This repository contains porting and adaptation code based on:
+
+Apple XNU Operating System
+Upstream: https://github.com/apple-oss-distributions/xnu
+Release: xnu-12377.1.9 (macOS 15.0 Sequoia / Darwin 24.0.0)
+
+Copyright (c) 1999-2024 Apple Inc. All rights reserved.
+
+Portions of this software are covered by the Apple Public Source License (APSL)
+Version 2.0 (see LICENSE file).
+
+Modifications and platform bring-up code for the Sony Xperia XZs (Qualcomm
+Snapdragon 820 / MSM8996) are provided under the respective licenses of their
+original upstream modules or compatible open-source terms. All existing Apple
+license headers and copyright notices have been strictly preserved.
