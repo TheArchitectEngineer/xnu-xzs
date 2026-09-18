@@ -1,0 +1,6 @@
+#ifndef _IBOOT_BOOT_ARGS_ABI_H_
+#define _IBOOT_BOOT_ARGS_ABI_H_
+
+#define IBOOT_MAX_ENV_VAR_DATA_SIZE 1024
+
+#endif /* _IBOOT_BOOT_ARGS_ABI_H_ */

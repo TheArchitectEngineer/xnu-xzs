@@ -1,0 +1,19 @@
+.DS_Store
+
+# Runtime / forensic artifacts
+artifacts/
+
+# Scratch / local experiments
+scratch/
+
+# Temporary test images
+test.bin
+test.img
+
+# Build outputs
+build/
+BUILD/
+DerivedData/
+
+# Logs
+*.log

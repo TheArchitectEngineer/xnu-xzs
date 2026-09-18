@@ -1,0 +1,25 @@
+/dts-v1/;
+
+/ {
+	model = "Sony Xperia XZs";
+	compatible = "sony,keyaki-row", "qcom,msm8996";
+	#address-cells = <2>;
+	#size-cells = <2>;
+
+	qcom,msm-id = <246 0x30001>, <246 0x30000>, <246 0x20001>, <246 0x20000>, <246 0x10000>;
+	qcom,board-id = <8 0>, <8 1>, <8 2>;
+
+	chosen {
+		bootargs = "console=ttyMSM0,115200 earlycon=msm_serial_dm,0x075b0000";
+	};
+
+	memory {
+		device_type = "memory";
+		reg = <0x0 0x80000000 0x1 0x00000000>;
+	};
+
+	memory@80000000 {
+		device_type = "memory";
+		reg = <0x0 0x80000000 0x1 0x00000000>;
+	};
+};
