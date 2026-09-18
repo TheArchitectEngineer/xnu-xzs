@@ -67,9 +67,9 @@ fi
 echo "[4/4] Booting TWRP dumper to extract pstore..."
 fastboot boot artifacts/builds/twrp-kagura.img
 
-echo "Waiting for TWRP Recovery ADB (timeout 40s)..."
+echo "Waiting for TWRP Recovery ADB (timeout 75s)..."
 TWRP_DEV=""
-for i in {1..40}; do
+for i in {1..75}; do
     sleep 1
     ADB_DEV=$(adb devices 2>/dev/null | grep -F "recovery" | head -n 1 | awk '{print $1}' || true)
     if [ -n "$ADB_DEV" ]; then

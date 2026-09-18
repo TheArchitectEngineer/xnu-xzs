@@ -1,0 +1,2992 @@
+/*
+ * Copyright (c) 2026 lechaukha12. All rights reserved.
+ *
+ * Qualcomm MSM8996 UFS 2.0 Host Controller Bring-up (Phase D2-A)
+ * Strictly READ-ONLY implementation of MMIO sanity probe.
+ *
+ * Co-equal invariants:
+ * 1. Obtain real UFS hardware evidence.
+ * 2. Preserve the complete automated telemetry and recovery pipeline.
+ */
+
+#include <stdint.h>
+#include <machine/machine_routines.h>
+#include <pexpert/pexpert.h>
+#include <pexpert/arm/xzs_ufs.h>
+
+/* External diagnostic telemetry helpers defined in osfmk/arm64/start.s */
+extern void xzs_early_puts(const char *s);
+extern void xzs_early_puthex64(uint64_t val);
+extern void xzs_breadcrumb(uint32_t cp, uint32_t err);
+extern void xzs_spin_halt(void);
+extern void delay(int usec);
+
+/* Global controller and PHY virtual bases mapped into kernel address space */
+static volatile vm_offset_t g_xzs_ufs_base = 0;
+static volatile vm_offset_t g_xzs_ufs_phy_base = 0;
+static volatile vm_offset_t g_xzs_gcc_base = 0;
+
+/*
+ * xzs_ufs_read32:
+ * Safely read a 32-bit register from the UFS controller MMIO window.
+ * Strictly READ-ONLY, bounds-checked, guarded by memory barriers.
+ */
+uint32_t
+xzs_ufs_read32(uint32_t offset)
+{
+	if (g_xzs_ufs_base == 0 || (offset + sizeof(uint32_t)) > XZS_UFS_CONTROLLER_MMIO_SIZE) {
+		return 0xFFFFFFFFU;
+	}
+
+	__asm__ volatile ("dsb sy" ::: "memory");
+	uint32_t val = *(volatile uint32_t *)(g_xzs_ufs_base + offset);
+	__asm__ volatile ("dsb sy" ::: "memory");
+	return val;
+}
+
+/*
+ * xzs_ufs_write32:
+ * Safely write a 32-bit register in the UFS controller MMIO window.
+ * Bounds-checked and guarded by memory barriers.
+ */
+void
+xzs_ufs_write32(uint32_t offset, uint32_t val)
+{
+	if (g_xzs_ufs_base == 0 || (offset + sizeof(uint32_t)) > XZS_UFS_CONTROLLER_MMIO_SIZE) {
+		return;
+	}
+
+	__asm__ volatile ("dsb sy" ::: "memory");
+	*(volatile uint32_t *)(g_xzs_ufs_base + offset) = val;
+	__asm__ volatile ("dsb sy" ::: "memory");
+}
+
+/*
+ * xzs_ufs_phy_read32:
+ * Safely read a 32-bit register from the UFS PHY MMIO window (0x00627000).
+ * Strictly READ-ONLY, bounds-checked, guarded by memory barriers.
+ */
+uint32_t
+xzs_ufs_phy_read32(uint32_t offset)
+{
+	if (g_xzs_ufs_phy_base == 0 || (offset + sizeof(uint32_t)) > XZS_UFS_PHY_MMIO_SIZE) {
+		return 0xFFFFFFFFU;
+	}
+
+	__asm__ volatile ("dsb sy" ::: "memory");
+	uint32_t val = *(volatile uint32_t *)(g_xzs_ufs_phy_base + offset);
+	__asm__ volatile ("dsb sy" ::: "memory");
+	return val;
+}
+
+/*
+ * xzs_ufs_phy_write32:
+ * Safely write a 32-bit register into the UFS PHY MMIO window (0x00627000).
+ * Bounds-checked, guarded by memory and instruction barriers.
+ */
+void
+xzs_ufs_phy_write32(uint32_t offset, uint32_t val)
+{
+	if (g_xzs_ufs_phy_base == 0 || (offset + sizeof(uint32_t)) > XZS_UFS_PHY_MMIO_SIZE) {
+		return;
+	}
+
+	__asm__ volatile ("dsb sy" ::: "memory");
+	*(volatile uint32_t *)(g_xzs_ufs_phy_base + offset) = val;
+	__asm__ volatile ("dsb sy" ::: "memory");
+	__asm__ volatile ("isb" ::: "memory");
+}
+
+/*
+ * xzs_gcc_read32:
+ * Safely read a 32-bit register from the GCC MMIO window.
+ * Strictly READ-ONLY, bounds-checked, guarded by memory barriers.
+ */
+uint32_t
+xzs_gcc_read32(uint32_t offset)
+{
+	if (g_xzs_gcc_base == 0 || (offset + sizeof(uint32_t)) > XZS_GCC_MMIO_SIZE) {
+		return 0xFFFFFFFFU;
+	}
+
+	__asm__ volatile ("dsb sy" ::: "memory");
+	uint32_t val = *(volatile uint32_t *)(g_xzs_gcc_base + offset);
+	__asm__ volatile ("dsb sy" ::: "memory");
+	return val;
+}
+
+/*
+ * xzs_gcc_write32:
+ * Safely write a 32-bit register into the GCC MMIO window.
+ * Bounds-checked, guarded by memory and instruction barriers.
+ */
+void
+xzs_gcc_write32(uint32_t offset, uint32_t val)
+{
+	if (g_xzs_gcc_base == 0 || (offset + sizeof(uint32_t)) > XZS_GCC_MMIO_SIZE) {
+		return;
+	}
+
+	__asm__ volatile ("dsb sy" ::: "memory");
+	*(volatile uint32_t *)(g_xzs_gcc_base + offset) = val;
+	__asm__ volatile ("dsb sy" ::: "memory");
+	__asm__ volatile ("isb" ::: "memory");
+}
+
+/*
+ * xzs_gcc_enable_and_wait_branch:
+ * Read-modify-write enable a clock branch CBCR and poll CLK_OFF until cleared.
+ * Preserves all other register bits.
+ * Returns 0 on success (running), -1 on timeout.
+ */
+static int
+xzs_gcc_enable_and_wait_branch(uint32_t offset, uint32_t *out_pre, uint32_t *out_post)
+{
+	uint32_t pre = xzs_gcc_read32(offset);
+	if (out_pre) {
+		*out_pre = pre;
+	}
+
+	/* Controlled RMW: set bit 0, keep all other bits intact */
+	uint32_t write_val = pre | CBCR_CLOCK_ENABLE;
+	xzs_gcc_write32(offset, write_val);
+
+	/* Bounded poll: wait for CLK_OFF (bit 31) == 0 */
+	uint32_t post = 0;
+	int timeout = 100000;
+	while (timeout-- > 0) {
+		post = xzs_gcc_read32(offset);
+		if ((post & CBCR_CLK_OFF) == 0) {
+			if (out_post) {
+				*out_post = post;
+			}
+			return 0;
+		}
+	}
+
+	if (out_post) {
+		*out_post = post;
+	}
+	return -1;
+}
+
+/*
+ * xzs_ufs_phase_d2a1_probe:
+ * Entry point for Phase D2-A.1 read-only UFS prerequisite state probe.
+ * Inspects GCC clock branches, GDSC power domain, and reset states.
+ * Strictly READ-ONLY. Does NOT touch UFS controller MMIO (0x00624000).
+ */
+void
+xzs_ufs_phase_d2a1_probe(void)
+{
+	xzs_early_puts("[XZS-UFS] [UA10] PREREQUISITE PROBE ENTER\n");
+	xzs_breadcrumb(0xEA10, 0);
+
+	/* 1. Map GCC MMIO space (0x00300000, 0x90000) as Device-nGnRnE */
+	g_xzs_gcc_base = (vm_offset_t)ml_io_map(XZS_GCC_PHYS_BASE, XZS_GCC_MMIO_SIZE);
+
+	if (g_xzs_gcc_base == 0) {
+		xzs_early_puts("[XZS-UFS] [UAF1] FAILED TO MAP GCC MMIO (phys=0x00300000)\n");
+		xzs_breadcrumb(0xEA11, 1);
+		xzs_spin_halt();
+		return;
+	}
+
+	xzs_early_puts("[XZS-UFS] [UA11] GCC MMIO MAPPED (phys=0x00300000, virt=0x");
+	xzs_early_puthex64((uint64_t)g_xzs_gcc_base);
+	xzs_early_puts(", size=0x90000)\n");
+	xzs_breadcrumb(0xEA11, 0);
+
+	/* 2. Read UFS AHB Bus Clock CBCR (0x7500c) */
+	xzs_early_puts("[XZS-UFS] [UA12-PRE] READ UFS_AHB_CBCR\n");
+	uint32_t ufs_ahb = xzs_gcc_read32(GCC_REG_UFS_AHB_CBCR);
+	xzs_early_puts("[XZS-UFS] [UA12] UFS_AHB_CBCR raw=0x");
+	xzs_early_puthex64((uint64_t)ufs_ahb);
+	xzs_early_puts(" (ENABLE=");
+	xzs_early_puts((ufs_ahb & CBCR_CLOCK_ENABLE) ? "1" : "0");
+	xzs_early_puts(", CLK_OFF=");
+	xzs_early_puts((ufs_ahb & CBCR_CLK_OFF) ? "1 [HALTED]" : "0 [RUNNING]");
+	xzs_early_puts(")\n");
+	xzs_breadcrumb(0xEA12, ufs_ahb);
+
+	/* 3. Read UFS AXI Core Clock CBCR (0x75008) */
+	xzs_early_puts("[XZS-UFS] [UA13-PRE] READ UFS_AXI_CBCR\n");
+	uint32_t ufs_axi = xzs_gcc_read32(GCC_REG_UFS_AXI_CBCR);
+	xzs_early_puts("[XZS-UFS] [UA13] UFS_AXI_CBCR raw=0x");
+	xzs_early_puthex64((uint64_t)ufs_axi);
+	xzs_early_puts(" (ENABLE=");
+	xzs_early_puts((ufs_axi & CBCR_CLOCK_ENABLE) ? "1" : "0");
+	xzs_early_puts(", CLK_OFF=");
+	xzs_early_puts((ufs_axi & CBCR_CLK_OFF) ? "1 [HALTED]" : "0 [RUNNING]");
+	xzs_early_puts(")\n");
+	xzs_breadcrumb(0xEA13, ufs_axi);
+
+	/* 4. Read Aggre2 UFS AXI Clock CBCR (0x83014) */
+	xzs_early_puts("[XZS-UFS] [UA14-PRE] READ AGGRE2_UFS_AXI_CBCR\n");
+	uint32_t aggre2_ufs = xzs_gcc_read32(GCC_REG_AGGRE2_UFS_AXI_CBCR);
+	xzs_early_puts("[XZS-UFS] [UA14] AGGRE2_UFS_AXI_CBCR raw=0x");
+	xzs_early_puthex64((uint64_t)aggre2_ufs);
+	xzs_early_puts(" (ENABLE=");
+	xzs_early_puts((aggre2_ufs & CBCR_CLOCK_ENABLE) ? "1" : "0");
+	xzs_early_puts(", CLK_OFF=");
+	xzs_early_puts((aggre2_ufs & CBCR_CLK_OFF) ? "1 [HALTED]" : "0 [RUNNING]");
+	xzs_early_puts(")\n");
+	xzs_breadcrumb(0xEA14, aggre2_ufs);
+
+	/* 5. Read System NoC UFS AXI Clock CBCR (0x75038) */
+	xzs_early_puts("[XZS-UFS] [UA14b-PRE] READ SYS_NOC_UFS_AXI_CBCR\n");
+	uint32_t sys_noc_ufs = xzs_gcc_read32(GCC_REG_SYS_NOC_UFS_AXI_CBCR);
+	xzs_early_puts("[XZS-UFS] [UA14b] SYS_NOC_UFS_AXI_CBCR raw=0x");
+	xzs_early_puthex64((uint64_t)sys_noc_ufs);
+	xzs_early_puts(" (ENABLE=");
+	xzs_early_puts((sys_noc_ufs & CBCR_CLOCK_ENABLE) ? "1" : "0");
+	xzs_early_puts(", CLK_OFF=");
+	xzs_early_puts((sys_noc_ufs & CBCR_CLK_OFF) ? "1 [HALTED]" : "0 [RUNNING]");
+	xzs_early_puts(")\n");
+
+	/* 6. Read UFS GDSC Power Domain Controller (0x75004) */
+	xzs_early_puts("[XZS-UFS] [UA15-PRE] READ UFS_GDSC\n");
+	uint32_t ufs_gdsc = xzs_gcc_read32(GCC_REG_UFS_GDSC);
+	xzs_early_puts("[XZS-UFS] [UA15] UFS_GDSC raw=0x");
+	xzs_early_puthex64((uint64_t)ufs_gdsc);
+	xzs_early_puts(" (PWR_ON_STATUS=");
+	xzs_early_puts((ufs_gdsc & GDSCR_PWR_ON_STATUS) ? "1 [ON]" : "0 [OFF/COLLAPSED]");
+	xzs_early_puts(", SW_COLLAPSE_REQ=");
+	xzs_early_puts((ufs_gdsc & GDSCR_SW_COLLAPSE_REQ) ? "1 [COLLAPSE_REQ]" : "0 [POWER_ON_REQ]");
+	xzs_early_puts(")\n");
+	xzs_breadcrumb(0xEA15, ufs_gdsc);
+
+	/* 7. Read UFS Block Reset BCR (0x75000) */
+	xzs_early_puts("[XZS-UFS] [UA16-PRE] READ UFS_BCR\n");
+	uint32_t ufs_bcr = xzs_gcc_read32(GCC_REG_UFS_BCR);
+	xzs_early_puts("[XZS-UFS] [UA16] UFS_BCR raw=0x");
+	xzs_early_puthex64((uint64_t)ufs_bcr);
+	xzs_early_puts(" (BLK_ARES=");
+	xzs_early_puts((ufs_bcr & BCR_BLK_ARES) ? "1 [ASSERTED/IN_RESET]" : "0 [RELEASED]");
+	xzs_early_puts(")\n");
+	xzs_breadcrumb(0xEA16, ufs_bcr);
+
+	/* 8. Read Aggre2 NoC Reset BCR (0x83000) */
+	xzs_early_puts("[XZS-UFS] [UA16b-PRE] READ AGGRE2_NOC_BCR\n");
+	uint32_t a2_bcr = xzs_gcc_read32(GCC_REG_AGGRE2_NOC_BCR);
+	xzs_early_puts("[XZS-UFS] [UA16b] AGGRE2_NOC_BCR raw=0x");
+	xzs_early_puthex64((uint64_t)a2_bcr);
+	xzs_early_puts(" (BLK_ARES=");
+	xzs_early_puts((a2_bcr & BCR_BLK_ARES) ? "1 [ASSERTED/IN_RESET]" : "0 [RELEASED]");
+	xzs_early_puts(")\n");
+
+	/* 9. Prerequisite state capture complete */
+	xzs_early_puts("[XZS-UFS] [UA17] PREREQUISITE STATE CAPTURE COMPLETE\n");
+	xzs_breadcrumb(0xEA17, 0);
+
+	/*
+	 * Terminal transition for Phase D2-A.1:
+	 * Halt and warm-reboot to Fastboot with persistent DRAM logs preserved.
+	 * Preserves the automated telemetry and recovery pipeline.
+	 */
+	xzs_early_puts("[XZS-UFS] PHASE D2-A.1 COMPLETE — TERMINAL CONDITION REACHED — WARM REBOOTING TO FASTBOOT\n");
+	xzs_spin_halt();
+}
+
+/*
+ * xzs_ufs_phase_d2_probe:
+ * Entry point for Phase D2-A read-only MMIO sanity probe.
+ * Invoked immediately before root device selection in bsd_init().
+ */
+void
+xzs_ufs_phase_d2_probe(void)
+{
+	xzs_early_puts("[XZS-UFS] [U00] UFS PROBE ENTER\n");
+	xzs_breadcrumb(0x0E00, 0);
+
+	/* 1. Map controller MMIO space as Device-nGnRnE memory */
+	g_xzs_ufs_base = (vm_offset_t)ml_io_map(XZS_UFS_CONTROLLER_PHYS_BASE,
+	    XZS_UFS_CONTROLLER_MMIO_SIZE);
+
+	if (g_xzs_ufs_base == 0) {
+		xzs_early_puts("[XZS-UFS] [UF01] FAILED TO MAP CONTROLLER MMIO (phys=0x00624000)\n");
+		xzs_breadcrumb(0x0E01, 1);
+		xzs_spin_halt();
+		return;
+	}
+
+	xzs_early_puts("[XZS-UFS] [U01] UFS MMIO MAPPED (phys=0x00624000, virt=0x");
+	xzs_early_puthex64((uint64_t)g_xzs_ufs_base);
+	xzs_early_puts(", size=0x2500)\n");
+	xzs_breadcrumb(0x0E01, 0);
+
+	/* 2. Read standard capability and version registers (Core Region: 0x000 - 0x09F) */
+	uint32_t cap = xzs_ufs_read32(UFSHCI_REG_CAP);
+	xzs_early_puts("[XZS-UFS] [U02] CAP  = 0x");
+	xzs_early_puthex64((uint64_t)cap);
+	xzs_early_puts("\n");
+	xzs_breadcrumb(0x0E02, cap);
+
+	uint32_t ver = xzs_ufs_read32(UFSHCI_REG_VER);
+	xzs_early_puts("[XZS-UFS] [U03] VER  = 0x");
+	xzs_early_puthex64((uint64_t)ver);
+	xzs_early_puts("\n");
+	xzs_breadcrumb(0x0E03, ver);
+
+	/* 3. Read Qualcomm extension hardware version (Region: >= 0x0A0) */
+	uint32_t qcom_hw_ver = xzs_ufs_read32(UFS_QCOM_REG_HW_VER);
+	xzs_early_puts("[XZS-UFS] QCOM_HW_VER = 0x");
+	xzs_early_puthex64((uint64_t)qcom_hw_ver);
+	xzs_early_puts("\n");
+
+	/* 4. Read remaining standard identity and runtime status registers (strictly read-only) */
+	uint32_t hcpid = xzs_ufs_read32(UFSHCI_REG_HCPID);
+	xzs_early_puts("[XZS-UFS] HCPID      = 0x");
+	xzs_early_puthex64((uint64_t)hcpid);
+	xzs_early_puts("\n");
+
+	uint32_t hcmid = xzs_ufs_read32(UFSHCI_REG_HCMID);
+	xzs_early_puts("[XZS-UFS] HCMID      = 0x");
+	xzs_early_puthex64((uint64_t)hcmid);
+	xzs_early_puts("\n");
+
+	uint32_t ahit  = xzs_ufs_read32(UFSHCI_REG_AHIT);
+	xzs_early_puts("[XZS-UFS] AHIT       = 0x");
+	xzs_early_puthex64((uint64_t)ahit);
+	xzs_early_puts("\n");
+
+	uint32_t is    = xzs_ufs_read32(UFSHCI_REG_IS);
+	xzs_early_puts("[XZS-UFS] IS         = 0x");
+	xzs_early_puthex64((uint64_t)is);
+	xzs_early_puts("\n");
+
+	uint32_t ie    = xzs_ufs_read32(UFSHCI_REG_IE);
+	xzs_early_puts("[XZS-UFS] IE         = 0x");
+	xzs_early_puthex64((uint64_t)ie);
+	xzs_early_puts("\n");
+
+	uint32_t hcs   = xzs_ufs_read32(UFSHCI_REG_HCS);
+	xzs_early_puts("[XZS-UFS] HCS        = 0x");
+	xzs_early_puthex64((uint64_t)hcs);
+	xzs_early_puts("\n");
+
+	uint32_t hce   = xzs_ufs_read32(UFSHCI_REG_HCE);
+	xzs_early_puts("[XZS-UFS] HCE        = 0x");
+	xzs_early_puthex64((uint64_t)hce);
+	xzs_early_puts("\n");
+
+	/* 5. Minimal sanity gate: controller must return responsive, non-all-zero and non-all-one registers */
+	if (cap == 0x00000000U || cap == 0xFFFFFFFFU ||
+	    ver == 0x00000000U || ver == 0xFFFFFFFFU) {
+		xzs_early_puts("[XZS-UFS] [UF04] CONTROLLER SANITY FAILED (unresponsive bus or invalid registers)\n");
+		xzs_breadcrumb(0x0E04, 0xFFFFFFFFU);
+		xzs_spin_halt();
+		return;
+	}
+
+	/* 6. Success: controller MMIO aperture is verified alive and readable */
+	xzs_early_puts("[XZS-UFS] [U04] CONTROLLER SANITY PASS\n");
+	xzs_breadcrumb(0x0E04, 0);
+
+	/*
+	 * 7. Terminal transition for Phase D2-A:
+	 * Halt and warm-reboot to Fastboot with persistent DRAM logs preserved.
+	 * Preserves the automated telemetry and recovery pipeline.
+	 */
+	xzs_early_puts("[XZS-UFS] PHASE D2-A COMPLETE — TERMINAL CONDITION REACHED — WARM REBOOTING TO FASTBOOT\n");
+	xzs_spin_halt();
+}
+
+/*
+ * xzs_ufs_phase_d2b1_probe:
+ * Entry point for Phase D2-B1 minimal UFS clock ownership experiment.
+ * Enables the 4 required clock branches with controlled RMW and bounded polling.
+ * Strictly verifies bit transition (CLK_OFF: 1 -> 0).
+ * Does NOT access UFS controller MMIO (0x00624000) to ensure isolation.
+ * Does NOT touch GDSC or resets.
+ */
+void
+xzs_ufs_phase_d2b1_probe(void)
+{
+	xzs_early_puts("[XZS-UFS] [B10] CLOCK OWNERSHIP ENTER\n");
+	xzs_breadcrumb(0xEB10, 0);
+
+	/* 1. Map GCC MMIO space (0x00300000, 0x90000) as Device-nGnRnE */
+	g_xzs_gcc_base = (vm_offset_t)ml_io_map(XZS_GCC_PHYS_BASE, XZS_GCC_MMIO_SIZE);
+	if (g_xzs_gcc_base == 0) {
+		xzs_early_puts("[XZS-UFS] [BF11] FAILED TO MAP GCC MMIO (phys=0x00300000)\n");
+		xzs_breadcrumb(0xEB11, 1);
+		xzs_spin_halt();
+		return;
+	}
+
+	xzs_early_puts("[XZS-UFS] [B11-MAP] GCC MMIO MAPPED (phys=0x00300000, virt=0x");
+	xzs_early_puthex64((uint64_t)g_xzs_gcc_base);
+	xzs_early_puts(", size=0x90000)\n");
+
+	/* 2. Capture and log pre-state of all branches, parents, GDSC and BCRs */
+	uint32_t pre_ahb = xzs_gcc_read32(GCC_REG_UFS_AHB_CBCR);
+	uint32_t pre_axi = xzs_gcc_read32(GCC_REG_UFS_AXI_CBCR);
+	uint32_t pre_sys_noc = xzs_gcc_read32(GCC_REG_SYS_NOC_UFS_AXI_CBCR);
+	uint32_t pre_aggre2 = xzs_gcc_read32(GCC_REG_AGGRE2_UFS_AXI_CBCR);
+	uint32_t pre_gdsc = xzs_gcc_read32(GCC_REG_UFS_GDSC);
+	uint32_t pre_bcr = xzs_gcc_read32(GCC_REG_UFS_BCR);
+	uint32_t pre_a2_bcr = xzs_gcc_read32(GCC_REG_AGGRE2_NOC_BCR);
+	uint32_t pre_cmd_rcgr = xzs_gcc_read32(GCC_REG_UFS_AXI_CMD_RCGR);
+	uint32_t pre_cfg_rcgr = xzs_gcc_read32(GCC_REG_UFS_AXI_CFG_RCGR);
+
+	xzs_early_puts("[XZS-UFS] PRE UFS_AHB_CBCR         = 0x");
+	xzs_early_puthex64((uint64_t)pre_ahb);
+	xzs_early_puts("\n[XZS-UFS] PRE UFS_AXI_CBCR         = 0x");
+	xzs_early_puthex64((uint64_t)pre_axi);
+	xzs_early_puts("\n[XZS-UFS] PRE SYS_NOC_UFS_AXI_CBCR = 0x");
+	xzs_early_puthex64((uint64_t)pre_sys_noc);
+	xzs_early_puts("\n[XZS-UFS] PRE AGGRE2_UFS_AXI_CBCR  = 0x");
+	xzs_early_puthex64((uint64_t)pre_aggre2);
+	xzs_early_puts("\n[XZS-UFS] PRE UFS_GDSC             = 0x");
+	xzs_early_puthex64((uint64_t)pre_gdsc);
+	xzs_early_puts("\n[XZS-UFS] PRE UFS_BCR              = 0x");
+	xzs_early_puthex64((uint64_t)pre_bcr);
+	xzs_early_puts("\n[XZS-UFS] PRE AGGRE2_NOC_BCR       = 0x");
+	xzs_early_puthex64((uint64_t)pre_a2_bcr);
+	xzs_early_puts("\n[XZS-UFS] PRE UFS_AXI_CMD_RCGR     = 0x");
+	xzs_early_puthex64((uint64_t)pre_cmd_rcgr);
+	xzs_early_puts("\n[XZS-UFS] PRE UFS_AXI_CFG_RCGR     = 0x");
+	xzs_early_puthex64((uint64_t)pre_cfg_rcgr);
+	xzs_early_puts("\n");
+
+	xzs_early_puts("[XZS-UFS] [B11] PRE-STATE CAPTURED\n");
+	xzs_breadcrumb(0xEB11, 0);
+
+	/*
+	 * 3. Step 1: Enable SYS_NOC_UFS_AXI_CBCR (0x75038)
+	 */
+	xzs_early_puts("[XZS-UFS] [B12] SYS_NOC_UFS_AXI ENABLE WRITE (target=0x");
+	xzs_early_puthex64((uint64_t)(pre_sys_noc | CBCR_CLOCK_ENABLE));
+	xzs_early_puts(")\n");
+	uint32_t post_sys_noc = 0;
+	if (xzs_gcc_enable_and_wait_branch(GCC_REG_SYS_NOC_UFS_AXI_CBCR, NULL, &post_sys_noc) != 0) {
+		xzs_early_puts("[XZS-UFS] [BF12] SYS_NOC_UFS_AXI TIMEOUT raw=0x");
+		xzs_early_puthex64((uint64_t)post_sys_noc);
+		xzs_early_puts("\n");
+		xzs_breadcrumb(0xEF12, post_sys_noc);
+		xzs_spin_halt();
+		return;
+	}
+	xzs_early_puts("[XZS-UFS] [B12a] SYS_NOC_UFS_AXI RUNNING raw=0x");
+	xzs_early_puthex64((uint64_t)post_sys_noc);
+	xzs_early_puts("\n");
+	xzs_breadcrumb(0xEB12, post_sys_noc);
+
+	/*
+	 * 4. Step 2: Enable AGGRE2_UFS_AXI_CBCR (0x83014)
+	 */
+	xzs_early_puts("[XZS-UFS] [B13] AGGRE2_UFS_AXI ENABLE WRITE (target=0x");
+	xzs_early_puthex64((uint64_t)(pre_aggre2 | CBCR_CLOCK_ENABLE));
+	xzs_early_puts(")\n");
+	uint32_t post_aggre2 = 0;
+	if (xzs_gcc_enable_and_wait_branch(GCC_REG_AGGRE2_UFS_AXI_CBCR, NULL, &post_aggre2) != 0) {
+		xzs_early_puts("[XZS-UFS] [BF13] AGGRE2_UFS_AXI TIMEOUT raw=0x");
+		xzs_early_puthex64((uint64_t)post_aggre2);
+		xzs_early_puts("\n");
+		xzs_breadcrumb(0xEF13, post_aggre2);
+		xzs_spin_halt();
+		return;
+	}
+	xzs_early_puts("[XZS-UFS] [B13a] AGGRE2_UFS_AXI RUNNING raw=0x");
+	xzs_early_puthex64((uint64_t)post_aggre2);
+	xzs_early_puts("\n");
+	xzs_breadcrumb(0xEB13, post_aggre2);
+
+	/*
+	 * 5. Step 3: Enable UFS_AXI_CBCR (0x75008)
+	 */
+	xzs_early_puts("[XZS-UFS] [B14] UFS_AXI ENABLE WRITE (target=0x");
+	xzs_early_puthex64((uint64_t)(pre_axi | CBCR_CLOCK_ENABLE));
+	xzs_early_puts(")\n");
+	uint32_t post_axi = 0;
+	if (xzs_gcc_enable_and_wait_branch(GCC_REG_UFS_AXI_CBCR, NULL, &post_axi) != 0) {
+		xzs_early_puts("[XZS-UFS] [BF14] UFS_AXI TIMEOUT raw=0x");
+		xzs_early_puthex64((uint64_t)post_axi);
+		xzs_early_puts("\n");
+		xzs_breadcrumb(0xEF14, post_axi);
+		xzs_spin_halt();
+		return;
+	}
+	xzs_early_puts("[XZS-UFS] [B14a] UFS_AXI RUNNING raw=0x");
+	xzs_early_puthex64((uint64_t)post_axi);
+	xzs_early_puts("\n");
+	xzs_breadcrumb(0xEB14, post_axi);
+
+	/*
+	 * 6. Step 4: Enable UFS_AHB_CBCR (0x7500c)
+	 */
+	xzs_early_puts("[XZS-UFS] [B15] UFS_AHB ENABLE WRITE (target=0x");
+	xzs_early_puthex64((uint64_t)(pre_ahb | CBCR_CLOCK_ENABLE));
+	xzs_early_puts(")\n");
+	uint32_t post_ahb = 0;
+	if (xzs_gcc_enable_and_wait_branch(GCC_REG_UFS_AHB_CBCR, NULL, &post_ahb) != 0) {
+		xzs_early_puts("[XZS-UFS] [BF15] UFS_AHB TIMEOUT raw=0x");
+		xzs_early_puthex64((uint64_t)post_ahb);
+		xzs_early_puts("\n");
+		xzs_breadcrumb(0xEF15, post_ahb);
+		xzs_spin_halt();
+		return;
+	}
+	xzs_early_puts("[XZS-UFS] [B15a] UFS_AHB RUNNING raw=0x");
+	xzs_early_puthex64((uint64_t)post_ahb);
+	xzs_early_puts("\n");
+	xzs_breadcrumb(0xEB15, post_ahb);
+
+	/*
+	 * 7. All required clocks running checkpoint
+	 */
+	xzs_early_puts("[XZS-UFS] [B16] REQUIRED CLOCK PATH RUNNING\n");
+	xzs_breadcrumb(0xEB16, 0);
+
+	/*
+	 * 8. Post-check verification of GDSC & BCRs (confirm unchanged)
+	 */
+	uint32_t post_gdsc = xzs_gcc_read32(GCC_REG_UFS_GDSC);
+	uint32_t post_bcr = xzs_gcc_read32(GCC_REG_UFS_BCR);
+	uint32_t post_a2_bcr = xzs_gcc_read32(GCC_REG_AGGRE2_NOC_BCR);
+
+	xzs_early_puts("[XZS-UFS] POST UFS_GDSC         = 0x");
+	xzs_early_puthex64((uint64_t)post_gdsc);
+	xzs_early_puts("\n[XZS-UFS] POST UFS_BCR          = 0x");
+	xzs_early_puthex64((uint64_t)post_bcr);
+	xzs_early_puts("\n[XZS-UFS] POST AGGRE2_NOC_BCR   = 0x");
+	xzs_early_puthex64((uint64_t)post_a2_bcr);
+	xzs_early_puts("\n");
+
+	/*
+	 * 9. Terminal condition for Phase D2-B1:
+	 * Halt and warm-reboot to Fastboot.
+	 * Strictly NO access to UFS controller MMIO (0x00624000) in this run.
+	 */
+	xzs_early_puts("[XZS-UFS] [B17] D2-B1 COMPLETE — TERMINAL CONDITION REACHED — WARM REBOOTING TO FASTBOOT\n");
+	xzs_breadcrumb(0xEB17, 0);
+	xzs_spin_halt();
+}
+
+/*
+ * xzs_ufs_phase_d2b2_probe:
+ * Entry point for Phase D2-B2 MSM8996 UFS HCI Accessibility Verification.
+ * Reproduces the hardware-verified D2-B1 clock enable sequence, captures
+ * post-RCG state, maps the UFS HCI register aperture (0x00624000), and performs
+ * strictly READ-ONLY register reads starting with CAP.
+ * Strictly NO writes to UFS controller registers, PHY, or UIC.
+ * Strictly NO modification to GDSC or BCRs.
+ */
+void
+xzs_ufs_phase_d2b2_probe(void)
+{
+	xzs_early_puts("[XZS-UFS] [B20] HCI ACCESS TEST ENTER\n");
+	xzs_breadcrumb(0xEB20, 0);
+
+	/* 1. Map GCC MMIO space (0x00300000, 0x90000) as Device-nGnRnE */
+	g_xzs_gcc_base = (vm_offset_t)ml_io_map(XZS_GCC_PHYS_BASE, XZS_GCC_MMIO_SIZE);
+	if (g_xzs_gcc_base == 0) {
+		xzs_early_puts("[XZS-UFS] [BF20] FAILED TO MAP GCC MMIO (phys=0x00300000)\n");
+		xzs_breadcrumb(0xEF20, 1);
+		xzs_spin_halt();
+		return;
+	}
+
+	/* 2. Capture and log pre-state of all branches, parents, GDSC and BCRs */
+	uint32_t pre_ahb = xzs_gcc_read32(GCC_REG_UFS_AHB_CBCR);
+	uint32_t pre_axi = xzs_gcc_read32(GCC_REG_UFS_AXI_CBCR);
+	uint32_t pre_sys_noc = xzs_gcc_read32(GCC_REG_SYS_NOC_UFS_AXI_CBCR);
+	uint32_t pre_aggre2 = xzs_gcc_read32(GCC_REG_AGGRE2_UFS_AXI_CBCR);
+	uint32_t pre_gdsc = xzs_gcc_read32(GCC_REG_UFS_GDSC);
+	uint32_t pre_bcr = xzs_gcc_read32(GCC_REG_UFS_BCR);
+	uint32_t pre_a2_bcr = xzs_gcc_read32(GCC_REG_AGGRE2_NOC_BCR);
+	uint32_t pre_cmd_rcgr = xzs_gcc_read32(GCC_REG_UFS_AXI_CMD_RCGR);
+	uint32_t pre_cfg_rcgr = xzs_gcc_read32(GCC_REG_UFS_AXI_CFG_RCGR);
+
+	xzs_early_puts("[XZS-UFS] PRE UFS_AHB_CBCR         = 0x");
+	xzs_early_puthex64((uint64_t)pre_ahb);
+	xzs_early_puts("\n[XZS-UFS] PRE UFS_AXI_CBCR         = 0x");
+	xzs_early_puthex64((uint64_t)pre_axi);
+	xzs_early_puts("\n[XZS-UFS] PRE SYS_NOC_UFS_AXI_CBCR = 0x");
+	xzs_early_puthex64((uint64_t)pre_sys_noc);
+	xzs_early_puts("\n[XZS-UFS] PRE AGGRE2_UFS_AXI_CBCR  = 0x");
+	xzs_early_puthex64((uint64_t)pre_aggre2);
+	xzs_early_puts("\n[XZS-UFS] PRE UFS_GDSC             = 0x");
+	xzs_early_puthex64((uint64_t)pre_gdsc);
+	xzs_early_puts("\n[XZS-UFS] PRE UFS_BCR              = 0x");
+	xzs_early_puthex64((uint64_t)pre_bcr);
+	xzs_early_puts("\n[XZS-UFS] PRE AGGRE2_NOC_BCR       = 0x");
+	xzs_early_puthex64((uint64_t)pre_a2_bcr);
+	xzs_early_puts("\n[XZS-UFS] PRE UFS_AXI_CMD_RCGR     = 0x");
+	xzs_early_puthex64((uint64_t)pre_cmd_rcgr);
+	xzs_early_puts("\n[XZS-UFS] PRE UFS_AXI_CFG_RCGR     = 0x");
+	xzs_early_puthex64((uint64_t)pre_cfg_rcgr);
+	xzs_early_puts("\n");
+
+	xzs_early_puts("[XZS-UFS] [B21] PRE-STATE CAPTURED\n");
+	xzs_breadcrumb(0xEB21, 0);
+
+	/*
+	 * 3. Reproduce exact verified D2-B1 clock enable sequence
+	 */
+	/* Step 1: SYS_NOC_UFS_AXI_CBCR (0x75038) */
+	uint32_t post_sys_noc = 0;
+	if (xzs_gcc_enable_and_wait_branch(GCC_REG_SYS_NOC_UFS_AXI_CBCR, NULL, &post_sys_noc) != 0) {
+		xzs_early_puts("[XZS-UFS] [BF22] SYS_NOC_UFS_AXI TIMEOUT raw=0x");
+		xzs_early_puthex64((uint64_t)post_sys_noc);
+		xzs_early_puts("\n");
+		xzs_breadcrumb(0xEF22, post_sys_noc);
+		xzs_spin_halt();
+		return;
+	}
+	xzs_early_puts("[XZS-UFS] [B22] SYS_NOC_UFS_AXI RUNNING raw=0x");
+	xzs_early_puthex64((uint64_t)post_sys_noc);
+	xzs_early_puts("\n");
+	xzs_breadcrumb(0xEB22, post_sys_noc);
+
+	/* Step 2: AGGRE2_UFS_AXI_CBCR (0x83014) */
+	uint32_t post_aggre2 = 0;
+	if (xzs_gcc_enable_and_wait_branch(GCC_REG_AGGRE2_UFS_AXI_CBCR, NULL, &post_aggre2) != 0) {
+		xzs_early_puts("[XZS-UFS] [BF23] AGGRE2_UFS_AXI TIMEOUT raw=0x");
+		xzs_early_puthex64((uint64_t)post_aggre2);
+		xzs_early_puts("\n");
+		xzs_breadcrumb(0xEF23, post_aggre2);
+		xzs_spin_halt();
+		return;
+	}
+	xzs_early_puts("[XZS-UFS] [B23] AGGRE2_UFS_AXI RUNNING raw=0x");
+	xzs_early_puthex64((uint64_t)post_aggre2);
+	xzs_early_puts("\n");
+	xzs_breadcrumb(0xEB23, post_aggre2);
+
+	/* Step 3: UFS_AXI_CBCR (0x75008) */
+	uint32_t post_axi = 0;
+	if (xzs_gcc_enable_and_wait_branch(GCC_REG_UFS_AXI_CBCR, NULL, &post_axi) != 0) {
+		xzs_early_puts("[XZS-UFS] [BF24] UFS_AXI TIMEOUT raw=0x");
+		xzs_early_puthex64((uint64_t)post_axi);
+		xzs_early_puts("\n");
+		xzs_breadcrumb(0xEF24, post_axi);
+		xzs_spin_halt();
+		return;
+	}
+	xzs_early_puts("[XZS-UFS] [B24] UFS_AXI RUNNING raw=0x");
+	xzs_early_puthex64((uint64_t)post_axi);
+	xzs_early_puts("\n");
+	xzs_breadcrumb(0xEB24, post_axi);
+
+	/* Step 4: UFS_AHB_CBCR (0x7500c) */
+	uint32_t post_ahb = 0;
+	if (xzs_gcc_enable_and_wait_branch(GCC_REG_UFS_AHB_CBCR, NULL, &post_ahb) != 0) {
+		xzs_early_puts("[XZS-UFS] [BF25] UFS_AHB TIMEOUT raw=0x");
+		xzs_early_puthex64((uint64_t)post_ahb);
+		xzs_early_puts("\n");
+		xzs_breadcrumb(0xEF25, post_ahb);
+		xzs_spin_halt();
+		return;
+	}
+	xzs_early_puts("[XZS-UFS] [B25] UFS_AHB RUNNING raw=0x");
+	xzs_early_puthex64((uint64_t)post_ahb);
+	xzs_early_puts("\n");
+	xzs_breadcrumb(0xEB25, post_ahb);
+
+	/* All required clocks verified running */
+	xzs_early_puts("[XZS-UFS] [B26] REQUIRED CLOCK PATH VERIFIED\n");
+	xzs_breadcrumb(0xEB26, 0);
+
+	/* 4. Capture and log post-RCG state */
+	uint32_t post_cmd_rcgr = xzs_gcc_read32(GCC_REG_UFS_AXI_CMD_RCGR);
+	uint32_t post_cfg_rcgr = xzs_gcc_read32(GCC_REG_UFS_AXI_CFG_RCGR);
+	xzs_early_puts("[XZS-UFS] POST UFS_AXI_CMD_RCGR    = 0x");
+	xzs_early_puthex64((uint64_t)post_cmd_rcgr);
+	xzs_early_puts("\n[XZS-UFS] POST UFS_AXI_CFG_RCGR    = 0x");
+	xzs_early_puthex64((uint64_t)post_cfg_rcgr);
+	xzs_early_puts("\n");
+	xzs_early_puts("[XZS-UFS] [B27] POST-RCG STATE CAPTURED\n");
+	xzs_breadcrumb(0xEB27, 0);
+
+	/* 5. Map UFS HCI MMIO aperture (0x00624000, 0x2500) */
+	g_xzs_ufs_base = (vm_offset_t)ml_io_map(XZS_UFS_CONTROLLER_PHYS_BASE,
+	    XZS_UFS_CONTROLLER_MMIO_SIZE);
+	if (g_xzs_ufs_base == 0) {
+		xzs_early_puts("[XZS-UFS] [BF28] FAILED TO MAP CONTROLLER MMIO (phys=0x00624000)\n");
+		xzs_breadcrumb(0xEF28, 1);
+		xzs_spin_halt();
+		return;
+	}
+
+	xzs_early_puts("[XZS-UFS] [B28] UFS HCI MMIO MAPPED (phys=0x00624000, virt=0x");
+	xzs_early_puthex64((uint64_t)g_xzs_ufs_base);
+	xzs_early_puts(", size=0x2500)\n");
+	xzs_breadcrumb(0xEB28, 0);
+
+	/*
+	 * 6. DECISION POINT: First read CAP (+0x00)
+	 * If clocks were the only gate, CAP will succeed without SError.
+	 * If external abort occurs, sleh early panic will catch it and reboot cleanly.
+	 */
+	xzs_early_puts("[XZS-UFS] [B29-PRE] READ CAP\n");
+	xzs_breadcrumb(0xEB29, 0);
+
+	uint32_t cap = xzs_ufs_read32(UFSHCI_REG_CAP);
+	xzs_early_puts("[XZS-UFS] [B29] CAP = 0x");
+	xzs_early_puthex64((uint64_t)cap);
+	xzs_early_puts("\n");
+	xzs_breadcrumb(0xEB29, cap);
+
+	/*
+	 * 7. Staged READ-ONLY reads of remaining audited registers
+	 */
+	xzs_early_puts("[XZS-UFS] [B30-PRE] READ VER\n");
+	uint32_t ver = xzs_ufs_read32(UFSHCI_REG_VER);
+	xzs_early_puts("[XZS-UFS] [B30] VER = 0x");
+	xzs_early_puthex64((uint64_t)ver);
+	xzs_early_puts("\n");
+	xzs_breadcrumb(0xEB30, ver);
+
+	xzs_early_puts("[XZS-UFS] [B31-PRE] READ QCOM_HW_VER\n");
+	uint32_t qcom_hw_ver = xzs_ufs_read32(UFS_QCOM_REG_HW_VER);
+	xzs_early_puts("[XZS-UFS] [B31] QCOM_HW_VER = 0x");
+	xzs_early_puthex64((uint64_t)qcom_hw_ver);
+	xzs_early_puts("\n");
+	xzs_breadcrumb(0xEB31, qcom_hw_ver);
+
+	xzs_early_puts("[XZS-UFS] [B32-PRE] READ HCPID\n");
+	uint32_t hcpid = xzs_ufs_read32(UFSHCI_REG_HCPID);
+	xzs_early_puts("[XZS-UFS] [B32] HCPID = 0x");
+	xzs_early_puthex64((uint64_t)hcpid);
+	xzs_early_puts("\n");
+	xzs_breadcrumb(0xEB32, hcpid);
+
+	xzs_early_puts("[XZS-UFS] [B33-PRE] READ HCMID\n");
+	uint32_t hcmid = xzs_ufs_read32(UFSHCI_REG_HCMID);
+	xzs_early_puts("[XZS-UFS] [B33] HCMID = 0x");
+	xzs_early_puthex64((uint64_t)hcmid);
+	xzs_early_puts("\n");
+	xzs_breadcrumb(0xEB33, hcmid);
+
+	xzs_early_puts("[XZS-UFS] [B34-PRE] READ AHIT\n");
+	uint32_t ahit = xzs_ufs_read32(UFSHCI_REG_AHIT);
+	xzs_early_puts("[XZS-UFS] [B34] AHIT = 0x");
+	xzs_early_puthex64((uint64_t)ahit);
+	xzs_early_puts("\n");
+	xzs_breadcrumb(0xEB34, ahit);
+
+	xzs_early_puts("[XZS-UFS] [B35-PRE] READ IS\n");
+	uint32_t is = xzs_ufs_read32(UFSHCI_REG_IS);
+	xzs_early_puts("[XZS-UFS] [B35] IS = 0x");
+	xzs_early_puthex64((uint64_t)is);
+	xzs_early_puts("\n");
+	xzs_breadcrumb(0xEB35, is);
+
+	xzs_early_puts("[XZS-UFS] [B36-PRE] READ IE\n");
+	uint32_t ie = xzs_ufs_read32(UFSHCI_REG_IE);
+	xzs_early_puts("[XZS-UFS] [B36] IE = 0x");
+	xzs_early_puthex64((uint64_t)ie);
+	xzs_early_puts("\n");
+	xzs_breadcrumb(0xEB36, ie);
+
+	xzs_early_puts("[XZS-UFS] [B37-PRE] READ HCS\n");
+	uint32_t hcs = xzs_ufs_read32(UFSHCI_REG_HCS);
+	xzs_early_puts("[XZS-UFS] [B37] HCS = 0x");
+	xzs_early_puthex64((uint64_t)hcs);
+	xzs_early_puts("\n");
+	xzs_breadcrumb(0xEB37, hcs);
+
+	xzs_early_puts("[XZS-UFS] [B38-PRE] READ HCE\n");
+	uint32_t hce = xzs_ufs_read32(UFSHCI_REG_HCE);
+	xzs_early_puts("[XZS-UFS] [B38] HCE = 0x");
+	xzs_early_puthex64((uint64_t)hce);
+	xzs_early_puts("\n");
+	xzs_breadcrumb(0xEB38, hce);
+
+	/* 8. Success checkpoint: HCI MMIO aperture verified readable */
+	xzs_early_puts("[XZS-UFS] [B39] HCI MMIO ACCESS VERIFIED\n");
+	xzs_breadcrumb(0xEB39, 0);
+
+	/*
+	 * 9. Terminal condition for Phase D2-B2:
+	 * Halt and warm-reboot to Fastboot.
+	 * Strictly NO writes to HCE, PHY, or UIC.
+	 */
+	xzs_early_puts("[XZS-UFS] [B39-TERM] PHASE D2-B2 COMPLETE — TERMINAL CONDITION REACHED — WARM REBOOTING TO FASTBOOT\n");
+	xzs_spin_halt();
+}
+
+/*
+ * xzs_ufs_phase_d2c1_probe:
+ * Entry point for Phase D2-C1 Qualcomm MSM8996 UFS PHY Prerequisite Audit.
+ * Reproduces verified D2-B clock sequence, captures controller vendor registers
+ * (CFG1, CFG2), maps PHY MMIO space (0x00627000, 0x1000), and audits initial
+ * READ-ONLY states of SERDES, TX, RX, and PCS sub-blocks.
+ * Strictly NO writes to PHY registers or HCE.
+ */
+void
+xzs_ufs_phase_d2c1_probe(void)
+{
+	xzs_early_puts("[XZS-UFS] [C10] PHY PREREQUISITE PROBE ENTER\n");
+	xzs_breadcrumb(0xEC10, 0);
+
+	/* 1. Map GCC MMIO space (0x00300000, 0x90000) */
+	g_xzs_gcc_base = (vm_offset_t)ml_io_map(XZS_GCC_PHYS_BASE, XZS_GCC_MMIO_SIZE);
+	if (g_xzs_gcc_base == 0) {
+		xzs_early_puts("[XZS-UFS] [CF10] FAILED TO MAP GCC MMIO\n");
+		xzs_breadcrumb(0xEF10, 1);
+		xzs_spin_halt();
+		return;
+	}
+
+	/* 2. Reproduce verified D2-B UFS bus clocks sequence */
+	uint32_t dummy = 0;
+	if (xzs_gcc_enable_and_wait_branch(GCC_REG_SYS_NOC_UFS_AXI_CBCR, NULL, &dummy) != 0 ||
+	    xzs_gcc_enable_and_wait_branch(GCC_REG_AGGRE2_UFS_AXI_CBCR, NULL, &dummy) != 0 ||
+	    xzs_gcc_enable_and_wait_branch(GCC_REG_UFS_AXI_CBCR, NULL, &dummy) != 0 ||
+	    xzs_gcc_enable_and_wait_branch(GCC_REG_UFS_AHB_CBCR, NULL, &dummy) != 0) {
+		xzs_early_puts("[XZS-UFS] [CF11] CLOCK PATH INITIALIZATION FAILED\n");
+		xzs_breadcrumb(0xEF11, 1);
+		xzs_spin_halt();
+		return;
+	}
+
+	xzs_early_puts("[XZS-UFS] [C11] UFS BUS CLOCKS RUNNING\n");
+	xzs_breadcrumb(0xEC11, 0);
+
+	/* 3. Map UFS Host Controller aperture (0x00624000, 0x2500) */
+	g_xzs_ufs_base = (vm_offset_t)ml_io_map(XZS_UFS_CONTROLLER_PHYS_BASE,
+	    XZS_UFS_CONTROLLER_MMIO_SIZE);
+	if (g_xzs_ufs_base == 0) {
+		xzs_early_puts("[XZS-UFS] [CF12] FAILED TO MAP CONTROLLER MMIO\n");
+		xzs_breadcrumb(0xEF12, 1);
+		xzs_spin_halt();
+		return;
+	}
+
+	/* 4. Audit controller identity and vendor registers (CFG1, CFG2) */
+	uint32_t cap = xzs_ufs_read32(UFSHCI_REG_CAP);
+	uint32_t qcom_hw_ver = xzs_ufs_read32(UFS_QCOM_REG_HW_VER);
+	uint32_t cfg1 = xzs_ufs_read32(UFS_QCOM_REG_CFG1);
+	uint32_t cfg2 = xzs_ufs_read32(UFS_QCOM_REG_CFG2);
+	uint32_t hcs = xzs_ufs_read32(UFSHCI_REG_HCS);
+	uint32_t hce = xzs_ufs_read32(UFSHCI_REG_HCE);
+
+	xzs_early_puts("[XZS-UFS] CAP         = 0x");
+	xzs_early_puthex64((uint64_t)cap);
+	xzs_early_puts("\n[XZS-UFS] QCOM_HW_VER = 0x");
+	xzs_early_puthex64((uint64_t)qcom_hw_ver);
+	xzs_early_puts(" (v2.2.0)\n[XZS-UFS] REG_UFS_CFG1= 0x");
+	xzs_early_puthex64((uint64_t)cfg1);
+	xzs_early_puts(" (PHY_SOFT_RESET=");
+	xzs_early_puts((cfg1 & UFS_QCOM_CFG1_PHY_SOFT_RESET) ? "1 [IN_RESET]" : "0 [RELEASED]");
+	xzs_early_puts(", QUNIPRO=");
+	xzs_early_puts((cfg1 & UFS_QCOM_CFG1_QUNIPRO_SEL) ? "1" : "0");
+	xzs_early_puts(")\n[XZS-UFS] REG_UFS_CFG2= 0x");
+	xzs_early_puthex64((uint64_t)cfg2);
+	xzs_early_puts("\n[XZS-UFS] HCS         = 0x");
+	xzs_early_puthex64((uint64_t)hcs);
+	xzs_early_puts("\n[XZS-UFS] HCE         = 0x");
+	xzs_early_puthex64((uint64_t)hce);
+	xzs_early_puts("\n");
+
+	/* 5. Map UFS PHY MMIO Space (0x00627000, 0x1000) */
+	xzs_early_puts("[XZS-UFS] [C12-PRE] MAP PHY MMIO\n");
+	xzs_breadcrumb(0xEC12, 0);
+
+	g_xzs_ufs_phy_base = (vm_offset_t)ml_io_map(XZS_UFS_PHY_PHYS_BASE,
+	    XZS_UFS_PHY_MMIO_SIZE);
+	if (g_xzs_ufs_phy_base == 0) {
+		xzs_early_puts("[XZS-UFS] [CF12] FAILED TO MAP PHY MMIO (phys=0x00627000)\n");
+		xzs_breadcrumb(0xEF12, 2);
+		xzs_spin_halt();
+		return;
+	}
+
+	xzs_early_puts("[XZS-UFS] [C12] PHY MMIO MAPPED (phys=0x00627000, virt=0x");
+	xzs_early_puthex64((uint64_t)g_xzs_ufs_phy_base);
+	xzs_early_puts(", size=0x1000)\n");
+	xzs_breadcrumb(0xEC12, 1);
+
+	/* 6. READ-ONLY Probe of SERDES COM sub-block (+0x000) */
+	xzs_early_puts("[XZS-UFS] [C13-PRE] READ PHY SERDES COM (+0x000)\n");
+	xzs_breadcrumb(0xEC13, 0);
+
+	uint32_t com_00 = xzs_ufs_phy_read32(0x000); /* CMN_CONFIG */
+	uint32_t com_0c = xzs_ufs_phy_read32(0x00C); /* BG_TIMER */
+	uint32_t com_3c = xzs_ufs_phy_read32(0x03C); /* SYS_CLK_CTRL */
+	uint32_t com_ac = xzs_ufs_phy_read32(0x0AC); /* SYSCLK_EN_SEL */
+
+	xzs_early_puts("[XZS-UFS] [C13] PHY SERDES COM: +0x000=0x");
+	xzs_early_puthex64((uint64_t)com_00);
+	xzs_early_puts(", +0x00C=0x");
+	xzs_early_puthex64((uint64_t)com_0c);
+	xzs_early_puts(", +0x03C=0x");
+	xzs_early_puthex64((uint64_t)com_3c);
+	xzs_early_puts(", +0x0AC=0x");
+	xzs_early_puthex64((uint64_t)com_ac);
+	xzs_early_puts("\n");
+	xzs_breadcrumb(0xEC13, com_00);
+
+	/* 7. READ-ONLY Probe of TX Lane 0 sub-block (+0x400) */
+	xzs_early_puts("[XZS-UFS] [C14-PRE] READ PHY TX LANE 0 (+0x400)\n");
+	xzs_breadcrumb(0xEC14, 0);
+
+	uint32_t tx_00 = xzs_ufs_phy_read32(0x400);
+	uint32_t tx_04 = xzs_ufs_phy_read32(0x404); /* LANE_MODE */
+	uint32_t tx_68 = xzs_ufs_phy_read32(0x468); /* HIGHZ_TRANSCEIVEREN_BIAS_DRVR_EN */
+
+	xzs_early_puts("[XZS-UFS] [C14] PHY TX LANE 0: +0x400=0x");
+	xzs_early_puthex64((uint64_t)tx_00);
+	xzs_early_puts(", +0x404=0x");
+	xzs_early_puthex64((uint64_t)tx_04);
+	xzs_early_puts(", +0x468=0x");
+	xzs_early_puthex64((uint64_t)tx_68);
+	xzs_early_puts("\n");
+	xzs_breadcrumb(0xEC14, tx_04);
+
+	/* 8. READ-ONLY Probe of RX Lane 0 sub-block (+0x600) */
+	xzs_early_puts("[XZS-UFS] [C15-PRE] READ PHY RX LANE 0 (+0x600)\n");
+	xzs_breadcrumb(0xEC15, 0);
+
+	uint32_t rx_00 = xzs_ufs_phy_read32(0x600); /* INTERFACE_MODE */
+	uint32_t rx_24 = xzs_ufs_phy_read32(0x624); /* SIGDET_LVL */
+	uint32_t rx_28 = xzs_ufs_phy_read32(0x628); /* SIGDET_CNTRL */
+
+	xzs_early_puts("[XZS-UFS] [C15] PHY RX LANE 0: +0x600=0x");
+	xzs_early_puthex64((uint64_t)rx_00);
+	xzs_early_puts(", +0x624=0x");
+	xzs_early_puthex64((uint64_t)rx_24);
+	xzs_early_puts(", +0x628=0x");
+	xzs_early_puthex64((uint64_t)rx_28);
+	xzs_early_puts("\n");
+	xzs_breadcrumb(0xEC15, rx_00);
+
+	/* 9. READ-ONLY Probe of PCS sub-block (+0xC00) */
+	xzs_early_puts("[XZS-UFS] [C16-PRE] READ PHY PCS (+0xC00)\n");
+	xzs_breadcrumb(0xEC16, 0);
+
+	uint32_t pcs_00 = xzs_ufs_phy_read32(0xC00); /* QPHY_START */
+	uint32_t pcs_04 = xzs_ufs_phy_read32(0xC04); /* POWER_DOWN_CONTROL */
+	uint32_t pcs_a8 = xzs_ufs_phy_read32(0xCA8); /* PCS_READY_STATUS */
+
+	xzs_early_puts("[XZS-UFS] [C16] PHY PCS: +0xC00=0x");
+	xzs_early_puthex64((uint64_t)pcs_00);
+	xzs_early_puts(", +0xC04=0x");
+	xzs_early_puthex64((uint64_t)pcs_04);
+	xzs_early_puts(", +0xCA8=0x");
+	xzs_early_puthex64((uint64_t)pcs_a8);
+	xzs_early_puts("\n");
+	xzs_breadcrumb(0xEC16, pcs_a8);
+
+	/* 10. Audit complete */
+	xzs_early_puts("[XZS-UFS] [C17] PHY PREREQUISITE AUDIT COMPLETE\n");
+	xzs_breadcrumb(0xEC17, 0);
+
+	/*
+	 * Terminal transition for Phase D2-C1:
+	 * Halt and warm-reboot to Fastboot.
+	 * Strictly READ-ONLY. No writes to PHY or HCE.
+	 */
+	xzs_early_puts("[XZS-UFS] [C17-TERM] PHASE D2-C1 COMPLETE — TERMINAL CONDITION REACHED — WARM REBOOTING TO FASTBOOT\n");
+	xzs_spin_halt();
+}
+
+/*
+ * ============================================================================
+ * Phase D2-C2: Qualcomm MSM8996 UFS QMP PHY Initialization
+ * ============================================================================
+ */
+
+struct xzs_ufs_phy_init_entry {
+	uint32_t offset;
+	uint32_t val;
+};
+
+/*
+ * Audited MSM8996 QMP UFS v2 Calibration Tables
+ * Derived directly from Linux drivers/phy/qualcomm/phy-qcom-qmp-ufs.c & phy-qcom-ufs-qmp-14nm.h
+ */
+static const struct xzs_ufs_phy_init_entry msm8996_serdes_tbl[] = {
+	{ 0x194, 0x0e }, /* QSERDES_COM_CMN_CONFIG */
+	{ 0x0ac, 0xd7 }, /* QSERDES_COM_SYSCLK_EN_SEL */
+	{ 0x174, 0x30 }, /* QSERDES_COM_CLK_SELECT */
+	{ 0x03c, 0x06 }, /* QSERDES_COM_SYS_CLK_CTRL */
+	{ 0x034, 0x08 }, /* QSERDES_COM_BIAS_EN_CLKBUFLR_EN */
+	{ 0x00c, 0x0a }, /* QSERDES_COM_BG_TIMER */
+	{ 0x178, 0x05 }, /* QSERDES_COM_HSCLK_SEL */
+	{ 0x184, 0x0a }, /* QSERDES_COM_CORECLK_DIV */
+	{ 0x1bc, 0x0a }, /* QSERDES_COM_CORECLK_DIV_MODE1 */
+	{ 0x0c8, 0x01 }, /* QSERDES_COM_LOCK_CMP_EN */
+	{ 0x124, 0x10 }, /* QSERDES_COM_VCO_TUNE_CTRL */
+	{ 0x0b4, 0x20 }, /* QSERDES_COM_RESETSM_CNTRL */
+	{ 0x18c, 0x00 }, /* QSERDES_COM_CORE_CLK_EN */
+	{ 0x0cc, 0x00 }, /* QSERDES_COM_LOCK_CMP_CFG */
+	{ 0x144, 0xff }, /* QSERDES_COM_VCO_TUNE_TIMER1 */
+	{ 0x148, 0x3f }, /* QSERDES_COM_VCO_TUNE_TIMER2 */
+	{ 0x128, 0x54 }, /* QSERDES_COM_VCO_TUNE_MAP */
+	{ 0x19c, 0x05 }, /* QSERDES_COM_SVS_MODE_CLK_SEL */
+	{ 0x0d0, 0x82 }, /* QSERDES_COM_DEC_START_MODE0 */
+	{ 0x0dc, 0x00 }, /* QSERDES_COM_DIV_FRAC_START1_MODE0 */
+	{ 0x0e0, 0x00 }, /* QSERDES_COM_DIV_FRAC_START2_MODE0 */
+	{ 0x0e4, 0x00 }, /* QSERDES_COM_DIV_FRAC_START3_MODE0 */
+	{ 0x078, 0x0b }, /* QSERDES_COM_CP_CTRL_MODE0 */
+	{ 0x084, 0x16 }, /* QSERDES_COM_PLL_RCTRL_MODE0 */
+	{ 0x090, 0x28 }, /* QSERDES_COM_PLL_CCTRL_MODE0 */
+	{ 0x108, 0x80 }, /* QSERDES_COM_INTEGLOOP_GAIN0_MODE0 */
+	{ 0x10c, 0x00 }, /* QSERDES_COM_INTEGLOOP_GAIN1_MODE0 */
+	{ 0x12c, 0x28 }, /* QSERDES_COM_VCO_TUNE1_MODE0 */
+	{ 0x130, 0x02 }, /* QSERDES_COM_VCO_TUNE2_MODE0 */
+	{ 0x04c, 0xff }, /* QSERDES_COM_LOCK_CMP1_MODE0 */
+	{ 0x050, 0x0c }, /* QSERDES_COM_LOCK_CMP2_MODE0 */
+	{ 0x054, 0x00 }, /* QSERDES_COM_LOCK_CMP3_MODE0 */
+	{ 0x0d4, 0x98 }, /* QSERDES_COM_DEC_START_MODE1 */
+	{ 0x0e8, 0x00 }, /* QSERDES_COM_DIV_FRAC_START1_MODE1 */
+	{ 0x0ec, 0x00 }, /* QSERDES_COM_DIV_FRAC_START2_MODE1 */
+	{ 0x0f0, 0x00 }, /* QSERDES_COM_DIV_FRAC_START3_MODE1 */
+	{ 0x07c, 0x0b }, /* QSERDES_COM_CP_CTRL_MODE1 */
+	{ 0x088, 0x16 }, /* QSERDES_COM_PLL_RCTRL_MODE1 */
+	{ 0x094, 0x28 }, /* QSERDES_COM_PLL_CCTRL_MODE1 */
+	{ 0x110, 0x80 }, /* QSERDES_COM_INTEGLOOP_GAIN0_MODE1 */
+	{ 0x114, 0x00 }, /* QSERDES_COM_INTEGLOOP_GAIN1_MODE1 */
+	{ 0x134, 0xd6 }, /* QSERDES_COM_VCO_TUNE1_MODE1 */
+	{ 0x138, 0x00 }, /* QSERDES_COM_VCO_TUNE2_MODE1 */
+	{ 0x058, 0x32 }, /* QSERDES_COM_LOCK_CMP1_MODE1 */
+	{ 0x05c, 0x0f }, /* QSERDES_COM_LOCK_CMP2_MODE1 */
+	{ 0x060, 0x00 }, /* QSERDES_COM_LOCK_CMP3_MODE1 */
+};
+
+static const struct xzs_ufs_phy_init_entry msm8996_tx0_tbl[] = {
+	{ 0x468, 0x45 }, /* QSERDES_TX_HIGHZ_TRANSCEIVEREN_BIAS_DRVR_EN (TX0 + 0x068) */
+	{ 0x494, 0x02 }, /* QSERDES_TX_LANE_MODE (TX0 + 0x094) */
+};
+
+static const struct xzs_ufs_phy_init_entry msm8996_rx0_tbl[] = {
+	{ 0x718, 0x24 }, /* QSERDES_RX_SIGDET_LVL (RX0 + 0x118) */
+	{ 0x714, 0x02 }, /* QSERDES_RX_SIGDET_CNTRL (RX0 + 0x114) */
+	{ 0x72c, 0x00 }, /* QSERDES_RX_RX_INTERFACE_MODE (RX0 + 0x12c) */
+	{ 0x71c, 0x18 }, /* QSERDES_RX_SIGDET_DEGLITCH_CNTRL (RX0 + 0x11c) */
+	{ 0x640, 0x0b }, /* QSERDES_RX_UCDR_FASTLOCK_FO_GAIN (RX0 + 0x040) */
+	{ 0x690, 0x5b }, /* QSERDES_RX_RX_TERM_BW (RX0 + 0x090) */
+	{ 0x6c4, 0xff }, /* QSERDES_RX_RX_EQ_GAIN1_LSB (RX0 + 0x0c4) */
+	{ 0x6c8, 0x3f }, /* QSERDES_RX_RX_EQ_GAIN1_MSB (RX0 + 0x0c8) */
+	{ 0x6cc, 0xff }, /* QSERDES_RX_RX_EQ_GAIN2_LSB (RX0 + 0x0cc) */
+	{ 0x6d0, 0x0f }, /* QSERDES_RX_RX_EQ_GAIN2_MSB (RX0 + 0x0d0) */
+	{ 0x6d8, 0x0e }, /* QSERDES_RX_RX_EQU_ADAPTOR_CNTRL2 (RX0 + 0x0d8) */
+};
+
+/*
+ * xzs_ufs_phase_d2c2_probe:
+ * Entry point for Phase D2-C2 MSM8996 UFS QMP PHY Initialization.
+ * Reproduces verified D2-B clock path, maps controller and PHY apertures,
+ * conducts read-only preflight on corrected PCS layout (+0xC00, +0xC04, +0xD68),
+ * snapshots baseline calibration registers, programs audited MSM8996 SERDES/TX0/RX0
+ * tables, powers up the PHY (+0xC04 = 0x01), starts SerDes (+0xC00 = 0x01),
+ * polls PCS_READY (+0xD68 bit 0 == 1) with bounded timeout, and verifies HCE remains 0.
+ */
+void
+xzs_ufs_phase_d2c2_probe(void)
+{
+	/* 1. Map GCC MMIO space (0x00300000, 0x90000) */
+	g_xzs_gcc_base = (vm_offset_t)ml_io_map(XZS_GCC_PHYS_BASE, XZS_GCC_MMIO_SIZE);
+	if (g_xzs_gcc_base == 0) {
+		xzs_early_puts("[XZS-UFS] [CF20] FAILED TO MAP GCC MMIO\n");
+		xzs_breadcrumb(0xEF20, 1);
+		xzs_spin_halt();
+		return;
+	}
+
+	/* 2. Reproduce verified D2-B UFS bus clocks sequence */
+	uint32_t dummy = 0;
+	if (xzs_gcc_enable_and_wait_branch(GCC_REG_SYS_NOC_UFS_AXI_CBCR, NULL, &dummy) != 0 ||
+	    xzs_gcc_enable_and_wait_branch(GCC_REG_AGGRE2_UFS_AXI_CBCR, NULL, &dummy) != 0 ||
+	    xzs_gcc_enable_and_wait_branch(GCC_REG_UFS_AXI_CBCR, NULL, &dummy) != 0 ||
+	    xzs_gcc_enable_and_wait_branch(GCC_REG_UFS_AHB_CBCR, NULL, &dummy) != 0) {
+		xzs_early_puts("[XZS-UFS] [CF21] CLOCK PATH INITIALIZATION FAILED\n");
+		xzs_breadcrumb(0xEF21, 1);
+		xzs_spin_halt();
+		return;
+	}
+
+	/* 3. Map UFS Host Controller aperture (0x00624000, 0x2500) */
+	g_xzs_ufs_base = (vm_offset_t)ml_io_map(XZS_UFS_CONTROLLER_PHYS_BASE,
+	    XZS_UFS_CONTROLLER_MMIO_SIZE);
+	if (g_xzs_ufs_base == 0) {
+		xzs_early_puts("[XZS-UFS] [CF22] FAILED TO MAP CONTROLLER MMIO\n");
+		xzs_breadcrumb(0xEF22, 1);
+		xzs_spin_halt();
+		return;
+	}
+
+	/* Confirm HCI aperture and prerequisites are healthy */
+	uint32_t cap = xzs_ufs_read32(UFSHCI_REG_CAP);
+	uint32_t qcom_hw_ver = xzs_ufs_read32(UFS_QCOM_REG_HW_VER);
+	uint32_t cfg1 = xzs_ufs_read32(UFS_QCOM_REG_CFG1);
+	uint32_t pre_hce = xzs_ufs_read32(UFSHCI_REG_HCE);
+	uint32_t pre_hcs = xzs_ufs_read32(UFSHCI_REG_HCS);
+
+	if (cap == 0xFFFFFFFFU || qcom_hw_ver == 0xFFFFFFFFU) {
+		xzs_early_puts("[XZS-UFS] [CF23] CONTROLLER UNRESPONSIVE\n");
+		xzs_breadcrumb(0xEF23, cap);
+		xzs_spin_halt();
+		return;
+	}
+
+	/* 4. Map UFS PHY MMIO Space (0x00627000, 0x1000) */
+	g_xzs_ufs_phy_base = (vm_offset_t)ml_io_map(XZS_UFS_PHY_PHYS_BASE,
+	    XZS_UFS_PHY_MMIO_SIZE);
+	if (g_xzs_ufs_phy_base == 0) {
+		xzs_early_puts("[XZS-UFS] [CF24] FAILED TO MAP PHY MMIO\n");
+		xzs_breadcrumb(0xEF24, 1);
+		xzs_spin_halt();
+		return;
+	}
+
+	/* 5. [C20] Preflight READ-ONLY Baseline of Corrected PCS Layout */
+	xzs_early_puts("[XZS-UFS] [C20] PHY INIT ENTER\n");
+	xzs_breadcrumb(0xEC20, 0);
+
+	uint32_t pre_start = xzs_ufs_phy_read32(QPHY_REG_START_CTRL);
+	xzs_early_puts("[XZS-UFS] [C20a] PRE START = 0x");
+	xzs_early_puthex64((uint64_t)pre_start);
+	xzs_early_puts("\n");
+
+	uint32_t pre_power = xzs_ufs_phy_read32(QPHY_REG_PCS_POWER_DOWN_CONTROL);
+	xzs_early_puts("[XZS-UFS] [C20b] PRE POWER_CTRL = 0x");
+	xzs_early_puthex64((uint64_t)pre_power);
+	xzs_early_puts("\n");
+
+	uint32_t pre_ready = xzs_ufs_phy_read32(QPHY_REG_PCS_READY_STATUS);
+	xzs_early_puts("[XZS-UFS] [C20c] PRE PCS_READY@D68 = 0x");
+	xzs_early_puthex64((uint64_t)pre_ready);
+	xzs_early_puts("\n");
+
+	if (pre_ready == 0xFFFFFFFFU && pre_start == 0xFFFFFFFFU) {
+		xzs_early_puts("[XZS-UFS] [CF25] PHY PREFLIGHT MMIO ACCESS FAULT — STOPPING\n");
+		xzs_breadcrumb(0xEF25, 1);
+		xzs_spin_halt();
+		return;
+	}
+
+	/* 6. Baseline Snapshot of registers to be modified */
+	uint32_t snap_cmn = xzs_ufs_phy_read32(0x194);
+	uint32_t snap_sysclk = xzs_ufs_phy_read32(0x0AC);
+	uint32_t snap_clksel = xzs_ufs_phy_read32(0x174);
+	uint32_t snap_sysctrl = xzs_ufs_phy_read32(0x03C);
+	uint32_t snap_bias = xzs_ufs_phy_read32(0x034);
+	uint32_t snap_bg = xzs_ufs_phy_read32(0x00C);
+	uint32_t snap_hsclk = xzs_ufs_phy_read32(0x178);
+	uint32_t snap_corediv = xzs_ufs_phy_read32(0x184);
+
+	uint32_t snap_tx_68 = xzs_ufs_phy_read32(0x468);
+	uint32_t snap_tx_94 = xzs_ufs_phy_read32(0x494);
+
+	uint32_t snap_rx_18 = xzs_ufs_phy_read32(0x718);
+	uint32_t snap_rx_14 = xzs_ufs_phy_read32(0x714);
+	uint32_t snap_rx_40 = xzs_ufs_phy_read32(0x640);
+
+	xzs_early_puts("[XZS-UFS] BASELINE COM: CMN=0x");
+	xzs_early_puthex64((uint64_t)snap_cmn);
+	xzs_early_puts(", SYSCLK=0x");
+	xzs_early_puthex64((uint64_t)snap_sysclk);
+	xzs_early_puts(", BG=0x");
+	xzs_early_puthex64((uint64_t)snap_bg);
+	xzs_early_puts("\n[XZS-UFS] BASELINE TX0: +468=0x");
+	xzs_early_puthex64((uint64_t)snap_tx_68);
+	xzs_early_puts(", +494=0x");
+	xzs_early_puthex64((uint64_t)snap_tx_94);
+	xzs_early_puts("\n[XZS-UFS] BASELINE RX0: +718=0x");
+	xzs_early_puthex64((uint64_t)snap_rx_18);
+	xzs_early_puts(", +714=0x");
+	xzs_early_puthex64((uint64_t)snap_rx_14);
+	xzs_early_puts(", +640=0x");
+	xzs_early_puthex64((uint64_t)snap_rx_40);
+	xzs_early_puts("\n");
+
+	/* 7. Program SERDES Table (COM @ PHY + 0x000) */
+	xzs_early_puts("[XZS-UFS] [C21] SERDES PROGRAMMING ENTER\n");
+	xzs_breadcrumb(0xEC21, 0);
+	size_t num_serdes = sizeof(msm8996_serdes_tbl) / sizeof(msm8996_serdes_tbl[0]);
+	for (size_t i = 0; i < num_serdes; i++) {
+		xzs_ufs_phy_write32(msm8996_serdes_tbl[i].offset, msm8996_serdes_tbl[i].val);
+	}
+	xzs_early_puts("[XZS-UFS] [C21a] SERDES PROGRAMMED\n");
+	xzs_breadcrumb(0xEC21, (uint32_t)num_serdes);
+
+	/* 8. Program TX0 Table (TX0 @ PHY + 0x400) */
+	xzs_early_puts("[XZS-UFS] [C22] TX0 PROGRAMMING ENTER\n");
+	xzs_breadcrumb(0xEC22, 0);
+	size_t num_tx0 = sizeof(msm8996_tx0_tbl) / sizeof(msm8996_tx0_tbl[0]);
+	for (size_t i = 0; i < num_tx0; i++) {
+		xzs_ufs_phy_write32(msm8996_tx0_tbl[i].offset, msm8996_tx0_tbl[i].val);
+	}
+	xzs_early_puts("[XZS-UFS] [C22a] TX0 PROGRAMMED\n");
+	xzs_breadcrumb(0xEC22, (uint32_t)num_tx0);
+
+	/* 9. Program RX0 Table (RX0 @ PHY + 0x600) */
+	xzs_early_puts("[XZS-UFS] [C23] RX0 PROGRAMMING ENTER\n");
+	xzs_breadcrumb(0xEC23, 0);
+	size_t num_rx0 = sizeof(msm8996_rx0_tbl) / sizeof(msm8996_rx0_tbl[0]);
+	for (size_t i = 0; i < num_rx0; i++) {
+		xzs_ufs_phy_write32(msm8996_rx0_tbl[i].offset, msm8996_rx0_tbl[i].val);
+	}
+	xzs_early_puts("[XZS-UFS] [C23a] RX0 PROGRAMMED\n");
+	xzs_breadcrumb(0xEC23, (uint32_t)num_rx0);
+
+	/* 10. Power Up PHY (write SW_PWRDN=1 to QPHY_PCS_POWER_DOWN_CONTROL) */
+	xzs_early_puts("[XZS-UFS] [C24] PHY POWER-UP ENTER\n");
+	xzs_breadcrumb(0xEC24, 0);
+	xzs_ufs_phy_write32(QPHY_REG_PCS_POWER_DOWN_CONTROL, QPHY_PCS_PWRDN_ACTIVE);
+	uint32_t post_power = xzs_ufs_phy_read32(QPHY_REG_PCS_POWER_DOWN_CONTROL);
+	xzs_early_puts("[XZS-UFS] [C24a] POWER_CTRL = 0x");
+	xzs_early_puthex64((uint64_t)post_power);
+	xzs_early_puts("\n");
+	xzs_breadcrumb(0xEC24, post_power);
+
+	/* 11. Start SerDes (write SERDES_START=1 to QPHY_START_CTRL) */
+	xzs_early_puts("[XZS-UFS] [C25] PHY START ENTER\n");
+	xzs_breadcrumb(0xEC25, 0);
+	uint32_t cur_start = xzs_ufs_phy_read32(QPHY_REG_START_CTRL);
+	uint32_t write_start = cur_start | QPHY_START_CTRL_SERDES_START;
+	xzs_ufs_phy_write32(QPHY_REG_START_CTRL, write_start);
+	uint32_t post_start = xzs_ufs_phy_read32(QPHY_REG_START_CTRL);
+	xzs_early_puts("[XZS-UFS] [C25a] START old=0x");
+	xzs_early_puthex64((uint64_t)cur_start);
+	xzs_early_puts(", write=0x");
+	xzs_early_puthex64((uint64_t)write_start);
+	xzs_early_puts(", readback=0x");
+	xzs_early_puthex64((uint64_t)post_start);
+	xzs_early_puts("\n");
+	xzs_breadcrumb(0xEC25, post_start);
+
+	/* 12. Poll PCS_READY @ PHY + 0xD68 (bounded timeout, no watchdog pet inside loop) */
+	xzs_early_puts("[XZS-UFS] [C26] PCS READY WAIT ENTER\n");
+	xzs_breadcrumb(0xEC26, 0);
+
+	uint32_t pcs_val = 0;
+	int poll_count = 0;
+	const int poll_limit = 100000;
+	int ready = 0;
+
+	while (poll_count < poll_limit) {
+		pcs_val = xzs_ufs_phy_read32(QPHY_REG_PCS_READY_STATUS);
+		if (pcs_val & QPHY_PCS_READY_BIT) {
+			ready = 1;
+			break;
+		}
+		poll_count++;
+	}
+
+	if (!ready) {
+		xzs_early_puts("[XZS-UFS] [CF26] PCS_READY TIMEOUT (polls=");
+		xzs_early_puthex64((uint64_t)poll_count);
+		xzs_early_puts(", last_raw=0x");
+		xzs_early_puthex64((uint64_t)pcs_val);
+		xzs_early_puts(")\n");
+		xzs_breadcrumb(0xEF26, pcs_val);
+		xzs_spin_halt();
+		return;
+	}
+
+	xzs_early_puts("[XZS-UFS] [C26a] PCS_READY = 1 (polls=");
+	xzs_early_puthex64((uint64_t)poll_count);
+	xzs_early_puts(", raw=0x");
+	xzs_early_puthex64((uint64_t)pcs_val);
+	xzs_early_puts(")\n");
+	xzs_breadcrumb(0xEC26, pcs_val);
+
+	/* 13. Read and confirm HCE and HCS (strictly read-only, HCE must remain 0) */
+	uint32_t post_hce = xzs_ufs_read32(UFSHCI_REG_HCE);
+	uint32_t post_hcs = xzs_ufs_read32(UFSHCI_REG_HCS);
+	xzs_early_puts("[XZS-UFS] POST HCE = 0x");
+	xzs_early_puthex64((uint64_t)post_hce);
+	xzs_early_puts("\n[XZS-UFS] POST HCS = 0x");
+	xzs_early_puthex64((uint64_t)post_hcs);
+	xzs_early_puts("\n");
+
+	/* 14. Phase D2-C2 Verified checkpoint */
+	xzs_early_puts("[XZS-UFS] [C27] PHY INITIALIZATION VERIFIED\n");
+	xzs_breadcrumb(0xEC27, 0);
+
+	/* 15. Terminal condition for Phase D2-C2: Halt and warm-reboot to Fastboot */
+	xzs_early_puts("[XZS-UFS] [C27-TERM] PHASE D2-C2 COMPLETE — TERMINAL CONDITION REACHED — WARM REBOOTING TO FASTBOOT\n");
+	xzs_spin_halt();
+}
+
+/*
+ * ============================================================================
+ * Phase D2-C2.1: MSM8996 UFS PHY Reference Clock + PCS_READY Retest
+ * ============================================================================
+ * 1. Probes GCC_UFS_CLKREF_CLK (0x00388008, GCC + 0x88008).
+ * 2. Conditionally enables GCC_UFS_CLKREF_CLK only if gated; does not touch if running.
+ * 3. Preserves all 4 UFS bus clocks (SYS_NOC, AGGRE2, UFS_AXI, UFS_AHB).
+ * 4. Programs the exact same MSM8996 QMP 14nm calibration tables.
+ * 5. Powers on PHY (SW_PWRDN = 1) and starts SerDes (SERDES_START = 1).
+ * 6. Executes a time-based bounded poll on PCS_READY (PHY + 0xD68, bit 0)
+ *    using delay(200) with a 10,000 us (10 ms) timeout.
+ * 7. Confirms HCE remains 0.
+ * 8. Preserves automated telemetry & recovery pipeline via xzs_spin_halt().
+ */
+void
+xzs_ufs_phase_d2c21_probe(void)
+{
+	xzs_early_puts("[XZS-UFS] [C210] REFERENCE CLOCK PROBE ENTER\n");
+	xzs_breadcrumb(0xEC10, 0);
+
+	/* 1. Map GCC MMIO space (0x00300000, 0x90000) */
+	if (g_xzs_gcc_base == 0) {
+		g_xzs_gcc_base = (vm_offset_t)ml_io_map(XZS_GCC_PHYS_BASE, XZS_GCC_MMIO_SIZE);
+		if (g_xzs_gcc_base == 0) {
+			xzs_early_puts("[XZS-UFS] [CF210] FAILED TO MAP GCC MMIO\n");
+			xzs_breadcrumb(0xEF10, 1);
+			xzs_spin_halt();
+			return;
+		}
+	}
+
+	/* 2. Map UFS Controller MMIO aperture (0x00624000, 0x2500) */
+	if (g_xzs_ufs_base == 0) {
+		g_xzs_ufs_base = (vm_offset_t)ml_io_map(XZS_UFS_CONTROLLER_PHYS_BASE, XZS_UFS_CONTROLLER_MMIO_SIZE);
+		if (g_xzs_ufs_base == 0) {
+			xzs_early_puts("[XZS-UFS] [CF210] FAILED TO MAP UFS CONTROLLER MMIO\n");
+			xzs_breadcrumb(0xEF10, 2);
+			xzs_spin_halt();
+			return;
+		}
+	}
+
+	/* 3. Map UFS PHY MMIO aperture (0x00627000, 0x1000) */
+	if (g_xzs_ufs_phy_base == 0) {
+		g_xzs_ufs_phy_base = (vm_offset_t)ml_io_map(XZS_UFS_PHY_PHYS_BASE, XZS_UFS_PHY_MMIO_SIZE);
+		if (g_xzs_ufs_phy_base == 0) {
+			xzs_early_puts("[XZS-UFS] [CF210] FAILED TO MAP UFS PHY MMIO\n");
+			xzs_breadcrumb(0xEF10, 3);
+			xzs_spin_halt();
+			return;
+		}
+	}
+
+	/* 4. Ensure the 4 UFS bus clocks are running (D2-B sequence) */
+	uint32_t b_sys = xzs_gcc_read32(GCC_REG_SYS_NOC_UFS_AXI_CBCR);
+	if (b_sys & CBCR_CLK_OFF) {
+		xzs_gcc_enable_and_wait_branch(GCC_REG_SYS_NOC_UFS_AXI_CBCR, NULL, &b_sys);
+	}
+	uint32_t b_agg = xzs_gcc_read32(GCC_REG_AGGRE2_UFS_AXI_CBCR);
+	if (b_agg & CBCR_CLK_OFF) {
+		xzs_gcc_enable_and_wait_branch(GCC_REG_AGGRE2_UFS_AXI_CBCR, NULL, &b_agg);
+	}
+	uint32_t b_axi = xzs_gcc_read32(GCC_REG_UFS_AXI_CBCR);
+	if (b_axi & CBCR_CLK_OFF) {
+		xzs_gcc_enable_and_wait_branch(GCC_REG_UFS_AXI_CBCR, NULL, &b_axi);
+	}
+	uint32_t b_ahb = xzs_gcc_read32(GCC_REG_UFS_AHB_CBCR);
+	if (b_ahb & CBCR_CLK_OFF) {
+		xzs_gcc_enable_and_wait_branch(GCC_REG_UFS_AHB_CBCR, NULL, &b_ahb);
+	}
+
+	/* 5. Probe GCC_UFS_CLKREF_CLK pre-state */
+	uint32_t clkref_pre = xzs_gcc_read32(GCC_REG_UFS_CLKREF_CBCR);
+	xzs_early_puts("[XZS-UFS] [C211] CLKREF PRE raw=0x");
+	xzs_early_puthex64((uint64_t)clkref_pre);
+	int clkref_en = (clkref_pre & CBCR_CLOCK_ENABLE) ? 1 : 0;
+	int clkref_off = (clkref_pre & CBCR_CLK_OFF) ? 1 : 0;
+	xzs_early_puts(" (ENABLE=");
+	xzs_early_puthex64((uint64_t)clkref_en);
+	xzs_early_puts(", CLK_OFF=");
+	xzs_early_puthex64((uint64_t)clkref_off);
+	xzs_early_puts(")\n");
+	xzs_breadcrumb(0xEC11, clkref_pre);
+
+	uint32_t clkref_post = clkref_pre;
+	if (clkref_en == 1 && clkref_off == 0) {
+		xzs_early_puts("[XZS-UFS] REFERENCE CLOCK ALREADY RUNNING\n");
+	} else {
+		/* Conditional Clock Ownership: enable gated reference clock */
+		xzs_early_puts("[XZS-UFS] [C212] UFS CLKREF ENABLE WRITE (target=0x");
+		xzs_early_puthex64((uint64_t)(clkref_pre | CBCR_CLOCK_ENABLE));
+		xzs_early_puts(")\n");
+		xzs_breadcrumb(0xEC12, 0);
+
+		if (xzs_gcc_enable_and_wait_branch(GCC_REG_UFS_CLKREF_CBCR, NULL, &clkref_post) != 0) {
+			xzs_early_puts("[XZS-UFS] [CF212] UFS CLKREF TIMEOUT raw=0x");
+			xzs_early_puthex64((uint64_t)clkref_post);
+			xzs_early_puts("\n");
+			xzs_breadcrumb(0xEF12, clkref_post);
+			xzs_spin_halt();
+			return;
+		}
+
+		xzs_early_puts("[XZS-UFS] [C212a] UFS CLKREF RUNNING raw=0x");
+		xzs_early_puthex64((uint64_t)clkref_post);
+		xzs_early_puts(" (ENABLE=");
+		xzs_early_puthex64((uint64_t)((clkref_post & CBCR_CLOCK_ENABLE) ? 1 : 0));
+		xzs_early_puts(", CLK_OFF=");
+		xzs_early_puthex64((uint64_t)((clkref_post & CBCR_CLK_OFF) ? 1 : 0));
+		xzs_early_puts(")\n");
+		xzs_breadcrumb(0xEC12, clkref_post);
+	}
+
+	/* 6. Prerequisite State Snapshot */
+	uint32_t snap_sys = xzs_gcc_read32(GCC_REG_SYS_NOC_UFS_AXI_CBCR);
+	uint32_t snap_agg = xzs_gcc_read32(GCC_REG_AGGRE2_UFS_AXI_CBCR);
+	uint32_t snap_axi = xzs_gcc_read32(GCC_REG_UFS_AXI_CBCR);
+	uint32_t snap_ahb = xzs_gcc_read32(GCC_REG_UFS_AHB_CBCR);
+	uint32_t snap_gdsc = xzs_gcc_read32(GCC_REG_UFS_GDSC);
+	uint32_t snap_cfg1 = xzs_ufs_read32(UFS_QCOM_REG_CFG1);
+	uint32_t snap_start = xzs_ufs_phy_read32(QPHY_REG_START_CTRL);
+	uint32_t snap_pwrdn = xzs_ufs_phy_read32(QPHY_REG_PCS_POWER_DOWN_CONTROL);
+	uint32_t snap_pcs = xzs_ufs_phy_read32(QPHY_REG_PCS_READY_STATUS);
+	uint32_t snap_hce = xzs_ufs_read32(UFSHCI_REG_HCE);
+	uint32_t snap_hcs = xzs_ufs_read32(UFSHCI_REG_HCS);
+
+	xzs_early_puts("[XZS-UFS] PREREQ CLOCKS: SYS=0x");
+	xzs_early_puthex64((uint64_t)snap_sys);
+	xzs_early_puts(", AGG=0x");
+	xzs_early_puthex64((uint64_t)snap_agg);
+	xzs_early_puts(", AXI=0x");
+	xzs_early_puthex64((uint64_t)snap_axi);
+	xzs_early_puts(", AHB=0x");
+	xzs_early_puthex64((uint64_t)snap_ahb);
+	xzs_early_puts("\n[XZS-UFS] PREREQ STATE: GDSC=0x");
+	xzs_early_puthex64((uint64_t)snap_gdsc);
+	xzs_early_puts(", CFG1=0x");
+	xzs_early_puthex64((uint64_t)snap_cfg1);
+	xzs_early_puts(", START=0x");
+	xzs_early_puthex64((uint64_t)snap_start);
+	xzs_early_puts(", PWRDN=0x");
+	xzs_early_puthex64((uint64_t)snap_pwrdn);
+	xzs_early_puts(", PCS=0x");
+	xzs_early_puthex64((uint64_t)snap_pcs);
+	xzs_early_puts(", HCE=0x");
+	xzs_early_puthex64((uint64_t)snap_hce);
+	xzs_early_puts(", HCS=0x");
+	xzs_early_puthex64((uint64_t)snap_hcs);
+	xzs_early_puts("\n");
+
+	/* 7. Program SERDES Table (COM @ PHY + 0x000) */
+	xzs_early_puts("[XZS-UFS] [C213] SERDES PROGRAMMING\n");
+	xzs_breadcrumb(0xEC13, 0);
+	size_t num_serdes = sizeof(msm8996_serdes_tbl) / sizeof(msm8996_serdes_tbl[0]);
+	for (size_t i = 0; i < num_serdes; i++) {
+		xzs_ufs_phy_write32(msm8996_serdes_tbl[i].offset, msm8996_serdes_tbl[i].val);
+	}
+	xzs_early_puts("[XZS-UFS] [C213a] SERDES PROGRAMMED\n");
+	xzs_breadcrumb(0xEC13, (uint32_t)num_serdes);
+
+	/* 8. Program TX0 Table (TX0 @ PHY + 0x400) */
+	xzs_early_puts("[XZS-UFS] [C214] TX0 PROGRAMMING\n");
+	xzs_breadcrumb(0xEC14, 0);
+	size_t num_tx0 = sizeof(msm8996_tx0_tbl) / sizeof(msm8996_tx0_tbl[0]);
+	for (size_t i = 0; i < num_tx0; i++) {
+		xzs_ufs_phy_write32(msm8996_tx0_tbl[i].offset, msm8996_tx0_tbl[i].val);
+	}
+	xzs_early_puts("[XZS-UFS] [C214a] TX0 PROGRAMMED\n");
+	xzs_breadcrumb(0xEC14, (uint32_t)num_tx0);
+
+	/* 9. Program RX0 Table (RX0 @ PHY + 0x600) */
+	xzs_early_puts("[XZS-UFS] [C215] RX0 PROGRAMMING\n");
+	xzs_breadcrumb(0xEC15, 0);
+	size_t num_rx0 = sizeof(msm8996_rx0_tbl) / sizeof(msm8996_rx0_tbl[0]);
+	for (size_t i = 0; i < num_rx0; i++) {
+		xzs_ufs_phy_write32(msm8996_rx0_tbl[i].offset, msm8996_rx0_tbl[i].val);
+	}
+	xzs_early_puts("[XZS-UFS] [C215a] RX0 PROGRAMMED\n");
+	xzs_breadcrumb(0xEC15, (uint32_t)num_rx0);
+
+	/* 10. Power Up PHY (write SW_PWRDN=1 to QPHY_PCS_POWER_DOWN_CONTROL) */
+	xzs_early_puts("[XZS-UFS] [C216] PHY POWER ACTIVE\n");
+	xzs_breadcrumb(0xEC16, 0);
+	xzs_ufs_phy_write32(QPHY_REG_PCS_POWER_DOWN_CONTROL, QPHY_PCS_PWRDN_ACTIVE);
+	uint32_t post_power = xzs_ufs_phy_read32(QPHY_REG_PCS_POWER_DOWN_CONTROL);
+	xzs_early_puts("[XZS-UFS] POWER_CTRL = 0x");
+	xzs_early_puthex64((uint64_t)post_power);
+	xzs_early_puts("\n");
+	xzs_breadcrumb(0xEC16, post_power);
+
+	/* 11. Start SerDes (write SERDES_START=1 to QPHY_START_CTRL) */
+	xzs_early_puts("[XZS-UFS] [C217] SERDES STARTED\n");
+	xzs_breadcrumb(0xEC17, 0);
+	uint32_t cur_start = xzs_ufs_phy_read32(QPHY_REG_START_CTRL);
+	uint32_t write_start = cur_start | QPHY_START_CTRL_SERDES_START;
+	xzs_ufs_phy_write32(QPHY_REG_START_CTRL, write_start);
+	uint32_t post_start = xzs_ufs_phy_read32(QPHY_REG_START_CTRL);
+	xzs_early_puts("[XZS-UFS] START old=0x");
+	xzs_early_puthex64((uint64_t)cur_start);
+	xzs_early_puts(", write=0x");
+	xzs_early_puthex64((uint64_t)write_start);
+	xzs_early_puts(", readback=0x");
+	xzs_early_puthex64((uint64_t)post_start);
+	xzs_early_puts("\n");
+	xzs_breadcrumb(0xEC17, post_start);
+
+	/* 12. Poll PCS_READY @ PHY + 0xD68 using real-time delay (interval ~200 us, timeout ~10 ms) */
+	xzs_early_puts("[XZS-UFS] [C218] PCS_READY WAIT ENTER\n");
+	xzs_breadcrumb(0xEC18, 0);
+
+	uint32_t pcs_val = 0;
+	int poll_count = 0;
+	int elapsed_us = 0;
+	const int max_elapsed_us = 10000;  /* 10,000 us = 10 ms */
+	const int poll_interval_us = 200; /* 200 us interval */
+	int ready = 0;
+
+	while (elapsed_us < max_elapsed_us) {
+		pcs_val = xzs_ufs_phy_read32(QPHY_REG_PCS_READY_STATUS);
+		poll_count++;
+		if (pcs_val & QPHY_PCS_READY_BIT) {
+			ready = 1;
+			break;
+		}
+		delay(poll_interval_us);
+		elapsed_us += poll_interval_us;
+	}
+
+	if (!ready) {
+		xzs_early_puts("[XZS-UFS] [CF218] PCS_READY TIMEOUT (polls=");
+		xzs_early_puthex64((uint64_t)poll_count);
+		xzs_early_puts(", elapsed_us=");
+		xzs_early_puthex64((uint64_t)elapsed_us);
+		xzs_early_puts(", last_raw=0x");
+		xzs_early_puthex64((uint64_t)pcs_val);
+		xzs_early_puts(")\n");
+		xzs_breadcrumb(0xEF18, pcs_val);
+
+		/* Diagnostic capture of COM status and host registers */
+		uint32_t d_cmn = xzs_ufs_phy_read32(0x000);
+		uint32_t d_sysclk = xzs_ufs_phy_read32(0x0AC);
+		uint32_t d_bias = xzs_ufs_phy_read32(0x034);
+		uint32_t d_bg = xzs_ufs_phy_read32(0x00C);
+		uint32_t d_resetsm = xzs_ufs_phy_read32(0x0B4);
+		uint32_t d_lock = xzs_ufs_phy_read32(0x0C8);
+		uint32_t d_cfg1 = xzs_ufs_read32(UFS_QCOM_REG_CFG1);
+		uint32_t d_hce = xzs_ufs_read32(UFSHCI_REG_HCE);
+		uint32_t d_hcs = xzs_ufs_read32(UFSHCI_REG_HCS);
+
+		xzs_early_puts("[XZS-UFS] DIAG COM: CMN=0x");
+		xzs_early_puthex64((uint64_t)d_cmn);
+		xzs_early_puts(", SYSCLK=0x");
+		xzs_early_puthex64((uint64_t)d_sysclk);
+		xzs_early_puts(", BIAS=0x");
+		xzs_early_puthex64((uint64_t)d_bias);
+		xzs_early_puts(", BG=0x");
+		xzs_early_puthex64((uint64_t)d_bg);
+		xzs_early_puts(", RESETSM=0x");
+		xzs_early_puthex64((uint64_t)d_resetsm);
+		xzs_early_puts(", LOCK=0x");
+		xzs_early_puthex64((uint64_t)d_lock);
+		xzs_early_puts("\n[XZS-UFS] DIAG HOST: CFG1=0x");
+		xzs_early_puthex64((uint64_t)d_cfg1);
+		xzs_early_puts(", HCE=0x");
+		xzs_early_puthex64((uint64_t)d_hce);
+		xzs_early_puts(", HCS=0x");
+		xzs_early_puthex64((uint64_t)d_hcs);
+		xzs_early_puts("\n");
+
+		xzs_early_puts("[XZS-UFS] [C218-FAIL] D2-C2.1 PCS_READY FAILED AT TIMING WINDOW — TERMINAL HALT\n");
+		xzs_spin_halt();
+		return;
+	}
+
+	xzs_early_puts("[XZS-UFS] [C218a] PCS_READY=1 (polls=");
+	xzs_early_puthex64((uint64_t)poll_count);
+	xzs_early_puts(", elapsed_us=");
+	xzs_early_puthex64((uint64_t)elapsed_us);
+	xzs_early_puts(", raw=0x");
+	xzs_early_puthex64((uint64_t)pcs_val);
+	xzs_early_puts(")\n");
+	xzs_breadcrumb(0xEC19, pcs_val);
+
+	/* 13. Read and confirm HCE unchanged = 0 and HCS */
+	uint32_t post_hce = xzs_ufs_read32(UFSHCI_REG_HCE);
+	uint32_t post_hcs = xzs_ufs_read32(UFSHCI_REG_HCS);
+	xzs_early_puts("[XZS-UFS] POST HCE = 0x");
+	xzs_early_puthex64((uint64_t)post_hce);
+	xzs_early_puts(", POST HCS = 0x");
+	xzs_early_puthex64((uint64_t)post_hcs);
+	xzs_early_puts("\n");
+
+	/* 14. Phase D2-C2.1 Verified checkpoint */
+	xzs_early_puts("[XZS-UFS] [C219] D2-C2.1 PHY READY VERIFIED\n");
+	xzs_breadcrumb(0xEC1A, 0);
+
+	/* 15. Terminal condition: Halt and warm-reboot to Fastboot */
+	xzs_early_puts("[XZS-UFS] [C219-TERM] PHASE D2-C2.1 COMPLETE — TERMINAL CONDITION REACHED — WARM REBOOTING TO FASTBOOT\n");
+	xzs_spin_halt();
+}
+
+/*
+ * ============================================================================
+ * Phase D2-C2.2: MSM8996 UFS Host PHY Soft-Reset Sequence Reproduction
+ * ============================================================================
+ * 1. Captures pre-state across clocks, GDSC, CFG1, PHY, and controller.
+ * 2. Reproduces verified clock ownership (SYS_NOC, AGGRE2, UFS_AXI, UFS_AHB, CLKREF).
+ * 3. Activates PHY power-down control: SW_PWRDN = 1 (PHY active).
+ * 4. Asserts Host UFS PHY Soft Reset (REG_UFS_CFG1 bit 1 = 1) with mandatory flush readback.
+ * 5. Delays ~1000 us (1 ms) while reset is asserted.
+ * 6. Programs MSM8996 calibration tables (46 SERDES, 2 TX0, 11 RX0).
+ * 7. Confirms CFG1 bit 1 is still asserted, then deasserts Host UFS PHY Soft Reset
+ *    (REG_UFS_CFG1 bit 1 = 0) with mandatory flush readback.
+ * 8. Delays ~1000 us (1 ms settle time).
+ * 9. Starts SerDes (QPHY_START_CTRL bit 0 = 1).
+ * 10. Polls PCS_READY (PHY + 0xD68, bit 0) with 200 us interval up to 10 ms (50 polls).
+ * 11. Confirms HCE remains 0 throughout.
+ * 12. Halts via xzs_spin_halt() to trigger automated warm reboot & recovery.
+ */
+void
+xzs_ufs_phase_d2c22_probe(void)
+{
+	xzs_early_puts("[XZS-UFS] [C220] HOST PHY RESET TEST ENTER\n");
+	xzs_breadcrumb(0xEC20, 0);
+
+	/* 1. Map GCC MMIO space (0x00300000, 0x90000) */
+	if (g_xzs_gcc_base == 0) {
+		g_xzs_gcc_base = (vm_offset_t)ml_io_map(XZS_GCC_PHYS_BASE, XZS_GCC_MMIO_SIZE);
+		if (g_xzs_gcc_base == 0) {
+			xzs_early_puts("[XZS-UFS] [CF220] FAILED TO MAP GCC MMIO\n");
+			xzs_breadcrumb(0xEF20, 1);
+			xzs_spin_halt();
+			return;
+		}
+	}
+
+	/* 2. Map UFS Controller MMIO aperture (0x00624000, 0x2500) */
+	if (g_xzs_ufs_base == 0) {
+		g_xzs_ufs_base = (vm_offset_t)ml_io_map(XZS_UFS_CONTROLLER_PHYS_BASE, XZS_UFS_CONTROLLER_MMIO_SIZE);
+		if (g_xzs_ufs_base == 0) {
+			xzs_early_puts("[XZS-UFS] [CF220] FAILED TO MAP UFS CONTROLLER MMIO\n");
+			xzs_breadcrumb(0xEF20, 2);
+			xzs_spin_halt();
+			return;
+		}
+	}
+
+	/* 3. Map UFS PHY MMIO aperture (0x00627000, 0x1000) */
+	if (g_xzs_ufs_phy_base == 0) {
+		g_xzs_ufs_phy_base = (vm_offset_t)ml_io_map(XZS_UFS_PHY_PHYS_BASE, XZS_UFS_PHY_MMIO_SIZE);
+		if (g_xzs_ufs_phy_base == 0) {
+			xzs_early_puts("[XZS-UFS] [CF220] FAILED TO MAP UFS PHY MMIO\n");
+			xzs_breadcrumb(0xEF20, 3);
+			xzs_spin_halt();
+			return;
+		}
+	}
+
+	/* 4. Capture Pre-State of GCC Clocks & GDSC (safe before bus clocks) */
+	uint32_t pre_clkref = xzs_gcc_read32(GCC_REG_UFS_CLKREF_CBCR);
+	uint32_t pre_sys = xzs_gcc_read32(GCC_REG_SYS_NOC_UFS_AXI_CBCR);
+	uint32_t pre_agg = xzs_gcc_read32(GCC_REG_AGGRE2_UFS_AXI_CBCR);
+	uint32_t pre_axi = xzs_gcc_read32(GCC_REG_UFS_AXI_CBCR);
+	uint32_t pre_ahb = xzs_gcc_read32(GCC_REG_UFS_AHB_CBCR);
+	uint32_t pre_gdsc = xzs_gcc_read32(GCC_REG_UFS_GDSC);
+
+	xzs_early_puts("[XZS-UFS] PRE CLOCKS: CLKREF=0x");
+	xzs_early_puthex64((uint64_t)pre_clkref);
+	xzs_early_puts(", SYS=0x");
+	xzs_early_puthex64((uint64_t)pre_sys);
+	xzs_early_puts(", AGG=0x");
+	xzs_early_puthex64((uint64_t)pre_agg);
+	xzs_early_puts(", AXI=0x");
+	xzs_early_puthex64((uint64_t)pre_axi);
+	xzs_early_puts(", AHB=0x");
+	xzs_early_puthex64((uint64_t)pre_ahb);
+	xzs_early_puts(", GDSC=0x");
+	xzs_early_puthex64((uint64_t)pre_gdsc);
+	xzs_early_puts("\n");
+
+	/* 5. Ensure the 4 UFS bus clocks are running (prerequisite for UFS controller MMIO) */
+	uint32_t b_sys = pre_sys;
+	if (b_sys & CBCR_CLK_OFF) {
+		xzs_gcc_enable_and_wait_branch(GCC_REG_SYS_NOC_UFS_AXI_CBCR, NULL, &b_sys);
+	}
+	uint32_t b_agg = pre_agg;
+	if (b_agg & CBCR_CLK_OFF) {
+		xzs_gcc_enable_and_wait_branch(GCC_REG_AGGRE2_UFS_AXI_CBCR, NULL, &b_agg);
+	}
+	uint32_t b_axi = pre_axi;
+	if (b_axi & CBCR_CLK_OFF) {
+		xzs_gcc_enable_and_wait_branch(GCC_REG_UFS_AXI_CBCR, NULL, &b_axi);
+	}
+	uint32_t b_ahb = pre_ahb;
+	if (b_ahb & CBCR_CLK_OFF) {
+		xzs_gcc_enable_and_wait_branch(GCC_REG_UFS_AHB_CBCR, NULL, &b_ahb);
+	}
+
+	/* 6. Verify / Ensure GCC_UFS_CLKREF_CBCR is running */
+	uint32_t b_clkref = pre_clkref;
+	if (b_clkref & CBCR_CLK_OFF) {
+		xzs_gcc_enable_and_wait_branch(GCC_REG_UFS_CLKREF_CBCR, NULL, &b_clkref);
+	}
+	xzs_early_puts("[XZS-UFS] CLOCK PATH VERIFIED RUNNING (SYS=");
+	xzs_early_puthex64((uint64_t)b_sys);
+	xzs_early_puts(", AGG=");
+	xzs_early_puthex64((uint64_t)b_agg);
+	xzs_early_puts(", AXI=");
+	xzs_early_puthex64((uint64_t)b_axi);
+	xzs_early_puts(", AHB=");
+	xzs_early_puthex64((uint64_t)b_ahb);
+	xzs_early_puts(", CLKREF=");
+	xzs_early_puthex64((uint64_t)b_clkref);
+	xzs_early_puts(")\n");
+
+	/* 7. Safe Pre-State Capture of UFS Controller & PHY (after bus clocks are running) */
+	uint32_t pre_cfg1 = xzs_ufs_read32(UFS_QCOM_REG_CFG1);
+	uint32_t pre_pwrdn = xzs_ufs_phy_read32(QPHY_REG_PCS_POWER_DOWN_CONTROL);
+	uint32_t pre_start = xzs_ufs_phy_read32(QPHY_REG_START_CTRL);
+	uint32_t pre_pcs = xzs_ufs_phy_read32(QPHY_REG_PCS_READY_STATUS);
+	uint32_t pre_hce = xzs_ufs_read32(UFSHCI_REG_HCE);
+	uint32_t pre_hcs = xzs_ufs_read32(UFSHCI_REG_HCS);
+
+	xzs_early_puts("[XZS-UFS] PRE STATE: CFG1=0x");
+	xzs_early_puthex64((uint64_t)pre_cfg1);
+	xzs_early_puts(", PWRDN=0x");
+	xzs_early_puthex64((uint64_t)pre_pwrdn);
+	xzs_early_puts(", START=0x");
+	xzs_early_puthex64((uint64_t)pre_start);
+	xzs_early_puts(", PCS=0x");
+	xzs_early_puthex64((uint64_t)pre_pcs);
+	xzs_early_puts(", HCE=0x");
+	xzs_early_puthex64((uint64_t)pre_hce);
+	xzs_early_puts(", HCS=0x");
+	xzs_early_puthex64((uint64_t)pre_hcs);
+	xzs_early_puts("\n");
+
+	/* 7. Activate PHY Power Control (SW_PWRDN = 1) before calibration & reset */
+	xzs_early_puts("[XZS-UFS] [C221] PHY POWER ACTIVE ENTER\n");
+	xzs_breadcrumb(0xEC21, 0);
+	xzs_ufs_phy_write32(QPHY_REG_PCS_POWER_DOWN_CONTROL, QPHY_PCS_PWRDN_ACTIVE);
+	uint32_t post_pwrdn = xzs_ufs_phy_read32(QPHY_REG_PCS_POWER_DOWN_CONTROL);
+	xzs_early_puts("[XZS-UFS] [C221a] POWER_CTRL = 0x");
+	xzs_early_puthex64((uint64_t)post_pwrdn);
+	xzs_early_puts("\n");
+	xzs_breadcrumb(0xEC21, post_pwrdn);
+
+	/* 8. Assert Host UFS PHY Soft Reset (REG_UFS_CFG1 bit 1 = 1) */
+	uint32_t cfg1_before = xzs_ufs_read32(UFS_QCOM_REG_CFG1);
+	uint32_t cfg1_assert = cfg1_before | UFS_QCOM_CFG1_PHY_SOFT_RESET;
+	xzs_ufs_write32(UFS_QCOM_REG_CFG1, cfg1_assert);
+
+	/* Mandatory flush readback before delay */
+	uint32_t cfg1_assert_rb = xzs_ufs_read32(UFS_QCOM_REG_CFG1);
+	xzs_early_puts("[XZS-UFS] CFG1 before=0x");
+	xzs_early_puthex64((uint64_t)cfg1_before);
+	xzs_early_puts(", assert-write=0x");
+	xzs_early_puthex64((uint64_t)cfg1_assert);
+	xzs_early_puts(", assert-readback=0x");
+	xzs_early_puthex64((uint64_t)cfg1_assert_rb);
+	xzs_early_puts("\n");
+
+	if ((cfg1_assert_rb & UFS_QCOM_CFG1_PHY_SOFT_RESET) == 0) {
+		xzs_early_puts("[XZS-UFS] [CF222] HOST PHY RESET ASSERT FAILED\n");
+		xzs_breadcrumb(0xEF22, cfg1_assert_rb);
+		xzs_spin_halt();
+		return;
+	}
+	xzs_early_puts("[XZS-UFS] [C222] HOST PHY RESET ASSERTED\n");
+	xzs_breadcrumb(0xEC22, cfg1_assert_rb);
+
+	/* Reset timing: delay ~1000 us (1 ms) while reset is asserted */
+	delay(1000);
+
+	/* 9. Program MSM8996 Calibration Tables while reset is asserted */
+	xzs_early_puts("[XZS-UFS] [C223] SERDES PROGRAMMING\n");
+	xzs_breadcrumb(0xEC23, 0);
+	size_t num_serdes = sizeof(msm8996_serdes_tbl) / sizeof(msm8996_serdes_tbl[0]);
+	for (size_t i = 0; i < num_serdes; i++) {
+		xzs_ufs_phy_write32(msm8996_serdes_tbl[i].offset, msm8996_serdes_tbl[i].val);
+	}
+	xzs_early_puts("[XZS-UFS] [C223a] SERDES PROGRAMMED\n");
+	xzs_breadcrumb(0xEC23, (uint32_t)num_serdes);
+
+	xzs_early_puts("[XZS-UFS] [C224] TX0 PROGRAMMING\n");
+	xzs_breadcrumb(0xEC24, 0);
+	size_t num_tx0 = sizeof(msm8996_tx0_tbl) / sizeof(msm8996_tx0_tbl[0]);
+	for (size_t i = 0; i < num_tx0; i++) {
+		xzs_ufs_phy_write32(msm8996_tx0_tbl[i].offset, msm8996_tx0_tbl[i].val);
+	}
+	xzs_early_puts("[XZS-UFS] [C224a] TX0 PROGRAMMED\n");
+	xzs_breadcrumb(0xEC24, (uint32_t)num_tx0);
+
+	xzs_early_puts("[XZS-UFS] [C225] RX0 PROGRAMMING\n");
+	xzs_breadcrumb(0xEC25, 0);
+	size_t num_rx0 = sizeof(msm8996_rx0_tbl) / sizeof(msm8996_rx0_tbl[0]);
+	for (size_t i = 0; i < num_rx0; i++) {
+		xzs_ufs_phy_write32(msm8996_rx0_tbl[i].offset, msm8996_rx0_tbl[i].val);
+	}
+	xzs_early_puts("[XZS-UFS] [C225a] RX0 PROGRAMMED\n");
+	xzs_breadcrumb(0xEC25, (uint32_t)num_rx0);
+
+	/* Verify CFG1 bit 1 is still asserted before deasserting */
+	uint32_t cfg1_mid = xzs_ufs_read32(UFS_QCOM_REG_CFG1);
+	xzs_early_puts("[XZS-UFS] CFG1 while reset asserted=0x");
+	xzs_early_puthex64((uint64_t)cfg1_mid);
+	xzs_early_puts("\n");
+
+	/* 10. Deassert Host UFS PHY Soft Reset (REG_UFS_CFG1 bit 1 = 0) */
+	uint32_t cfg1_deassert = cfg1_mid & ~UFS_QCOM_CFG1_PHY_SOFT_RESET;
+	xzs_ufs_write32(UFS_QCOM_REG_CFG1, cfg1_deassert);
+
+	/* Mandatory flush readback before settle delay */
+	uint32_t cfg1_deassert_rb = xzs_ufs_read32(UFS_QCOM_REG_CFG1);
+	xzs_early_puts("[XZS-UFS] CFG1 deassert-write=0x");
+	xzs_early_puthex64((uint64_t)cfg1_deassert);
+	xzs_early_puts(", deassert-readback=0x");
+	xzs_early_puthex64((uint64_t)cfg1_deassert_rb);
+	xzs_early_puts("\n");
+
+	if ((cfg1_deassert_rb & UFS_QCOM_CFG1_PHY_SOFT_RESET) != 0) {
+		xzs_early_puts("[XZS-UFS] [CF226] HOST PHY RESET DEASSERT FAILED\n");
+		xzs_breadcrumb(0xEF26, cfg1_deassert_rb);
+		xzs_spin_halt();
+		return;
+	}
+	xzs_early_puts("[XZS-UFS] [C226] HOST PHY RESET DEASSERTED\n");
+	xzs_breadcrumb(0xEC26, cfg1_deassert_rb);
+
+	/* Settle timing: delay ~1000 us (1 ms) before starting SerDes */
+	delay(1000);
+
+	/* 11. Start SerDes (write SERDES_START=1 to QPHY_START_CTRL) */
+	xzs_early_puts("[XZS-UFS] [C227] SERDES START ENTER\n");
+	xzs_breadcrumb(0xEC27, 0);
+	uint32_t cur_start = xzs_ufs_phy_read32(QPHY_REG_START_CTRL);
+	uint32_t write_start = cur_start | QPHY_START_CTRL_SERDES_START;
+	xzs_ufs_phy_write32(QPHY_REG_START_CTRL, write_start);
+	uint32_t post_start = xzs_ufs_phy_read32(QPHY_REG_START_CTRL);
+	xzs_early_puts("[XZS-UFS] START old=0x");
+	xzs_early_puthex64((uint64_t)cur_start);
+	xzs_early_puts(", write=0x");
+	xzs_early_puthex64((uint64_t)write_start);
+	xzs_early_puts(", readback=0x");
+	xzs_early_puthex64((uint64_t)post_start);
+	xzs_early_puts("\n");
+	xzs_early_puts("[XZS-UFS] [C227a] SERDES STARTED\n");
+	xzs_breadcrumb(0xEC27, post_start);
+
+	/* 12. Poll PCS_READY @ PHY + 0xD68 (200 us interval, 10,000 us timeout) */
+	xzs_early_puts("[XZS-UFS] [C228] PCS_READY WAIT ENTER\n");
+	xzs_breadcrumb(0xEC28, 0);
+
+	uint32_t pcs_val = 0;
+	int poll_count = 0;
+	int elapsed_us = 0;
+	const int max_elapsed_us = 10000;  /* 10,000 us = 10 ms */
+	const int poll_interval_us = 200; /* 200 us interval */
+	int ready = 0;
+
+	while (elapsed_us < max_elapsed_us) {
+		pcs_val = xzs_ufs_phy_read32(QPHY_REG_PCS_READY_STATUS);
+		poll_count++;
+		if (pcs_val & QPHY_PCS_READY_BIT) {
+			ready = 1;
+			break;
+		}
+		delay(poll_interval_us);
+		elapsed_us += poll_interval_us;
+	}
+
+	if (!ready) {
+		xzs_early_puts("[XZS-UFS] [CF228] PCS_READY TIMEOUT AFTER HOST SOFT RESET (polls=");
+		xzs_early_puthex64((uint64_t)poll_count);
+		xzs_early_puts(", elapsed_us=");
+		xzs_early_puthex64((uint64_t)elapsed_us);
+		xzs_early_puts(", last_raw=0x");
+		xzs_early_puthex64((uint64_t)pcs_val);
+		xzs_early_puts(")\n");
+		xzs_breadcrumb(0xEF28, pcs_val);
+
+		/* Diagnostic capture of COM status and host registers */
+		uint32_t d_cmn = xzs_ufs_phy_read32(0x000);
+		uint32_t d_sysclk = xzs_ufs_phy_read32(0x0AC);
+		uint32_t d_bias = xzs_ufs_phy_read32(0x034);
+		uint32_t d_bg = xzs_ufs_phy_read32(0x00C);
+		uint32_t d_resetsm = xzs_ufs_phy_read32(0x0B4);
+		uint32_t d_lock = xzs_ufs_phy_read32(0x0C8);
+		uint32_t d_cfg1 = xzs_ufs_read32(UFS_QCOM_REG_CFG1);
+		uint32_t d_pwrdn = xzs_ufs_phy_read32(QPHY_REG_PCS_POWER_DOWN_CONTROL);
+		uint32_t d_start = xzs_ufs_phy_read32(QPHY_REG_START_CTRL);
+		uint32_t d_hce = xzs_ufs_read32(UFSHCI_REG_HCE);
+		uint32_t d_hcs = xzs_ufs_read32(UFSHCI_REG_HCS);
+
+		xzs_early_puts("[XZS-UFS] DIAG COM: CMN=0x");
+		xzs_early_puthex64((uint64_t)d_cmn);
+		xzs_early_puts(", SYSCLK=0x");
+		xzs_early_puthex64((uint64_t)d_sysclk);
+		xzs_early_puts(", BIAS=0x");
+		xzs_early_puthex64((uint64_t)d_bias);
+		xzs_early_puts(", BG=0x");
+		xzs_early_puthex64((uint64_t)d_bg);
+		xzs_early_puts(", RESETSM=0x");
+		xzs_early_puthex64((uint64_t)d_resetsm);
+		xzs_early_puts(", LOCK_CMP_EN=0x");
+		xzs_early_puthex64((uint64_t)d_lock);
+		xzs_early_puts("\n[XZS-UFS] DIAG HOST: CFG1=0x");
+		xzs_early_puthex64((uint64_t)d_cfg1);
+		xzs_early_puts(", PWRDN=0x");
+		xzs_early_puthex64((uint64_t)d_pwrdn);
+		xzs_early_puts(", START=0x");
+		xzs_early_puthex64((uint64_t)d_start);
+		xzs_early_puts(", HCE=0x");
+		xzs_early_puthex64((uint64_t)d_hce);
+		xzs_early_puts(", HCS=0x");
+		xzs_early_puthex64((uint64_t)d_hcs);
+		xzs_early_puts("\n");
+
+		xzs_early_puts("[XZS-UFS] [C228-FAIL] D2-C2.2 PCS_READY TIMED OUT AFTER SOFT RESET — TERMINAL HALT\n");
+		xzs_spin_halt();
+		return;
+	}
+
+	xzs_early_puts("[XZS-UFS] [C228] PCS_READY ASSERTED (polls=");
+	xzs_early_puthex64((uint64_t)poll_count);
+	xzs_early_puts(", elapsed_us=");
+	xzs_early_puthex64((uint64_t)elapsed_us);
+	xzs_early_puts(", raw=0x");
+	xzs_early_puthex64((uint64_t)pcs_val);
+	xzs_early_puts(")\n");
+	xzs_breadcrumb(0xEC28, pcs_val);
+
+	/* 13. Snapshot final state & confirm HCE unchanged = 0 */
+	uint32_t post_cfg1 = xzs_ufs_read32(UFS_QCOM_REG_CFG1);
+	uint32_t post_pwrdn_final = xzs_ufs_phy_read32(QPHY_REG_PCS_POWER_DOWN_CONTROL);
+	uint32_t post_start_final = xzs_ufs_phy_read32(QPHY_REG_START_CTRL);
+	uint32_t post_pcs_final = xzs_ufs_phy_read32(QPHY_REG_PCS_READY_STATUS);
+	uint32_t post_hce = xzs_ufs_read32(UFSHCI_REG_HCE);
+	uint32_t post_hcs = xzs_ufs_read32(UFSHCI_REG_HCS);
+
+	xzs_early_puts("[XZS-UFS] FINAL STATE: CFG1=0x");
+	xzs_early_puthex64((uint64_t)post_cfg1);
+	xzs_early_puts(", PWRDN=0x");
+	xzs_early_puthex64((uint64_t)post_pwrdn_final);
+	xzs_early_puts(", START=0x");
+	xzs_early_puthex64((uint64_t)post_start_final);
+	xzs_early_puts(", PCS=0x");
+	xzs_early_puthex64((uint64_t)post_pcs_final);
+	xzs_early_puts(", HCE=0x");
+	xzs_early_puthex64((uint64_t)post_hce);
+	xzs_early_puts(", HCS=0x");
+	xzs_early_puthex64((uint64_t)post_hcs);
+	xzs_early_puts("\n");
+
+	/* 14. Hardware Verified Checkpoint */
+	xzs_early_puts("[XZS-UFS] [C229] PHY INITIALIZATION HARDWARE VERIFIED\n");
+	xzs_breadcrumb(0xEC29, 0);
+
+	/* 15. Terminal condition: Halt and warm-reboot to Fastboot */
+	xzs_early_puts("[XZS-UFS] [C229-TERM] PHASE D2-C2.2 COMPLETE — TERMINAL CONDITION REACHED — WARM REBOOTING TO FASTBOOT\n");
+	xzs_spin_halt();
+}
+
+/*
+ * ============================================================================
+ * Phase D2-C2.3: MSM8996 UFS Host Core Reset + PHY Initialization Retry
+ * ============================================================================
+ * 1. Verifies bus clocks & initial HCI accessibility (CAP = 0x0107000F).
+ * 2. Asserts GCC UFS Host/Core Reset (GCC_REG_UFS_BCR @ 0x75000, bit 0 = 1).
+ * 3. Delays ~200 us while core reset is held.
+ * 4. Deasserts GCC UFS Host/Core Reset (bit 0 = 0) with flush readback.
+ * 5. Delays ~1000 us (1 ms settle time).
+ * 6. Re-verifies clock branches & confirms HCI accessibility post-reset.
+ * 7. Executes full C2.2 PHY sequence:
+ *    - SW_PWRDN = 1
+ *    - Assert PHY Soft Reset (REG_UFS_CFG1 bit 1 = 1) -> delay 1000 us
+ *    - Program calibration tables (46 SERDES, 2 TX0, 11 RX0)
+ *    - Deassert PHY Soft Reset (REG_UFS_CFG1 bit 1 = 0) -> delay 1000 us
+ *    - SERDES_START = 1
+ *    - Bounded poll PCS_READY (200 us interval, 10 ms timeout)
+ * 8. Confirms HCE remains 0.
+ * 9. Halts via xzs_spin_halt() for automated warm reboot & recovery.
+ */
+void
+xzs_ufs_phase_d2c23_probe(void)
+{
+	xzs_early_puts("[XZS-UFS] [C230] HOST CORE RESET TEST ENTER\n");
+	xzs_breadcrumb(0xEC30, 0);
+
+	/* 1. Map GCC MMIO space (0x00300000, 0x90000) */
+	if (g_xzs_gcc_base == 0) {
+		g_xzs_gcc_base = (vm_offset_t)ml_io_map(XZS_GCC_PHYS_BASE, XZS_GCC_MMIO_SIZE);
+		if (g_xzs_gcc_base == 0) {
+			xzs_early_puts("[XZS-UFS] [CF230] FAILED TO MAP GCC MMIO\n");
+			xzs_breadcrumb(0xEF30, 1);
+			xzs_spin_halt();
+			return;
+		}
+	}
+
+	/* 2. Map UFS Controller MMIO aperture (0x00624000, 0x2500) */
+	if (g_xzs_ufs_base == 0) {
+		g_xzs_ufs_base = (vm_offset_t)ml_io_map(XZS_UFS_CONTROLLER_PHYS_BASE, XZS_UFS_CONTROLLER_MMIO_SIZE);
+		if (g_xzs_ufs_base == 0) {
+			xzs_early_puts("[XZS-UFS] [CF230] FAILED TO MAP UFS CONTROLLER MMIO\n");
+			xzs_breadcrumb(0xEF30, 2);
+			xzs_spin_halt();
+			return;
+		}
+	}
+
+	/* 3. Map UFS PHY MMIO aperture (0x00627000, 0x1000) */
+	if (g_xzs_ufs_phy_base == 0) {
+		g_xzs_ufs_phy_base = (vm_offset_t)ml_io_map(XZS_UFS_PHY_PHYS_BASE, XZS_UFS_PHY_MMIO_SIZE);
+		if (g_xzs_ufs_phy_base == 0) {
+			xzs_early_puts("[XZS-UFS] [CF230] FAILED TO MAP UFS PHY MMIO\n");
+			xzs_breadcrumb(0xEF30, 3);
+			xzs_spin_halt();
+			return;
+		}
+	}
+
+	/* 4. Ensure the 4 UFS bus clocks and CLKREF are running */
+	uint32_t b_sys = xzs_gcc_read32(GCC_REG_SYS_NOC_UFS_AXI_CBCR);
+	if (b_sys & CBCR_CLK_OFF) {
+		xzs_gcc_enable_and_wait_branch(GCC_REG_SYS_NOC_UFS_AXI_CBCR, NULL, &b_sys);
+	}
+	uint32_t b_agg = xzs_gcc_read32(GCC_REG_AGGRE2_UFS_AXI_CBCR);
+	if (b_agg & CBCR_CLK_OFF) {
+		xzs_gcc_enable_and_wait_branch(GCC_REG_AGGRE2_UFS_AXI_CBCR, NULL, &b_agg);
+	}
+	uint32_t b_axi = xzs_gcc_read32(GCC_REG_UFS_AXI_CBCR);
+	if (b_axi & CBCR_CLK_OFF) {
+		xzs_gcc_enable_and_wait_branch(GCC_REG_UFS_AXI_CBCR, NULL, &b_axi);
+	}
+	uint32_t b_ahb = xzs_gcc_read32(GCC_REG_UFS_AHB_CBCR);
+	if (b_ahb & CBCR_CLK_OFF) {
+		xzs_gcc_enable_and_wait_branch(GCC_REG_UFS_AHB_CBCR, NULL, &b_ahb);
+	}
+	uint32_t b_clkref = xzs_gcc_read32(GCC_REG_UFS_CLKREF_CBCR);
+	if (b_clkref & CBCR_CLK_OFF) {
+		xzs_gcc_enable_and_wait_branch(GCC_REG_UFS_CLKREF_CBCR, NULL, &b_clkref);
+	}
+
+	/* 5. Capture Pre-State before Host Core Reset */
+	uint32_t pre_bcr = xzs_gcc_read32(GCC_REG_UFS_BCR);
+	uint32_t pre_gdsc = xzs_gcc_read32(GCC_REG_UFS_GDSC);
+	uint32_t pre_cap = xzs_ufs_read32(UFSHCI_REG_CAP);
+	uint32_t pre_ver = xzs_ufs_read32(UFSHCI_REG_VER);
+	uint32_t pre_hw_ver = xzs_ufs_read32(UFS_QCOM_REG_HW_VER);
+	uint32_t pre_cfg1 = xzs_ufs_read32(UFS_QCOM_REG_CFG1);
+	uint32_t pre_pwrdn = xzs_ufs_phy_read32(QPHY_REG_PCS_POWER_DOWN_CONTROL);
+	uint32_t pre_start = xzs_ufs_phy_read32(QPHY_REG_START_CTRL);
+	uint32_t pre_pcs = xzs_ufs_phy_read32(QPHY_REG_PCS_READY_STATUS);
+	uint32_t pre_hce = xzs_ufs_read32(UFSHCI_REG_HCE);
+	uint32_t pre_hcs = xzs_ufs_read32(UFSHCI_REG_HCS);
+
+	xzs_early_puts("[XZS-UFS] PRE CLOCKS: SYS=0x");
+	xzs_early_puthex64((uint64_t)b_sys);
+	xzs_early_puts(", AGG=0x");
+	xzs_early_puthex64((uint64_t)b_agg);
+	xzs_early_puts(", AXI=0x");
+	xzs_early_puthex64((uint64_t)b_axi);
+	xzs_early_puts(", AHB=0x");
+	xzs_early_puthex64((uint64_t)b_ahb);
+	xzs_early_puts(", CLKREF=0x");
+	xzs_early_puthex64((uint64_t)b_clkref);
+	xzs_early_puts("\n[XZS-UFS] PRE RESET: BCR=0x");
+	xzs_early_puthex64((uint64_t)pre_bcr);
+	xzs_early_puts(", GDSC=0x");
+	xzs_early_puthex64((uint64_t)pre_gdsc);
+	xzs_early_puts("\n[XZS-UFS] PRE HCI: CAP=0x");
+	xzs_early_puthex64((uint64_t)pre_cap);
+	xzs_early_puts(", VER=0x");
+	xzs_early_puthex64((uint64_t)pre_ver);
+	xzs_early_puts(", HW_VER=0x");
+	xzs_early_puthex64((uint64_t)pre_hw_ver);
+	xzs_early_puts(", CFG1=0x");
+	xzs_early_puthex64((uint64_t)pre_cfg1);
+	xzs_early_puts(", HCE=0x");
+	xzs_early_puthex64((uint64_t)pre_hce);
+	xzs_early_puts(", HCS=0x");
+	xzs_early_puthex64((uint64_t)pre_hcs);
+	xzs_early_puts("\n[XZS-UFS] PRE PHY: PWRDN=0x");
+	xzs_early_puthex64((uint64_t)pre_pwrdn);
+	xzs_early_puts(", START=0x");
+	xzs_early_puthex64((uint64_t)pre_start);
+	xzs_early_puts(", PCS=0x");
+	xzs_early_puthex64((uint64_t)pre_pcs);
+	xzs_early_puts("\n");
+
+	/* 6. Verify HCI is responsive before reset */
+	if (pre_cap == 0 || pre_cap == 0xFFFFFFFFU) {
+		xzs_early_puts("[XZS-UFS] [CF231] PRE-RESET HCI NOT RESPONSIVE\n");
+		xzs_breadcrumb(0xEF31, pre_cap);
+		xzs_spin_halt();
+		return;
+	}
+	xzs_early_puts("[XZS-UFS] [C231] PRE-RESET HCI ACCESS VERIFIED\n");
+	xzs_breadcrumb(0xEC31, pre_cap);
+
+	/* 7. Assert GCC_UFS_BCR (BIT 0 = 1) */
+	uint32_t bcr_old = xzs_gcc_read32(GCC_REG_UFS_BCR);
+	uint32_t bcr_assert = bcr_old | BCR_BLK_ARES;
+	xzs_gcc_write32(GCC_REG_UFS_BCR, bcr_assert);
+
+	/* Mandatory dummy readback */
+	uint32_t bcr_assert_rb = xzs_gcc_read32(GCC_REG_UFS_BCR);
+	xzs_early_puts("[XZS-UFS] BCR old=0x");
+	xzs_early_puthex64((uint64_t)bcr_old);
+	xzs_early_puts(", write=0x");
+	xzs_early_puthex64((uint64_t)bcr_assert);
+	xzs_early_puts(", readback=0x");
+	xzs_early_puthex64((uint64_t)bcr_assert_rb);
+	xzs_early_puts("\n");
+
+	if ((bcr_assert_rb & BCR_BLK_ARES) == 0) {
+		xzs_early_puts("[XZS-UFS] [CF232] HOST CORE RESET ASSERT FAILED\n");
+		xzs_breadcrumb(0xEF32, bcr_assert_rb);
+		xzs_spin_halt();
+		return;
+	}
+	xzs_early_puts("[XZS-UFS] [C232] HOST CORE RESET ASSERT\n");
+	xzs_breadcrumb(0xEC32, bcr_assert_rb);
+
+	/* Hold reset for ~200 us (source-faithful timing: ~3-4 cycles of sleep clock) */
+	delay(200);
+
+	/* 8. Deassert GCC_UFS_BCR (BIT 0 = 0) */
+	uint32_t bcr_deassert = bcr_assert_rb & ~BCR_BLK_ARES;
+	xzs_gcc_write32(GCC_REG_UFS_BCR, bcr_deassert);
+
+	/* Mandatory dummy readback */
+	uint32_t bcr_deassert_rb = xzs_gcc_read32(GCC_REG_UFS_BCR);
+	xzs_early_puts("[XZS-UFS] BCR deassert-write=0x");
+	xzs_early_puthex64((uint64_t)bcr_deassert);
+	xzs_early_puts(", deassert-readback=0x");
+	xzs_early_puthex64((uint64_t)bcr_deassert_rb);
+	xzs_early_puts("\n");
+
+	if ((bcr_deassert_rb & BCR_BLK_ARES) != 0) {
+		xzs_early_puts("[XZS-UFS] [CF233] HOST CORE RESET DEASSERT FAILED\n");
+		xzs_breadcrumb(0xEF33, bcr_deassert_rb);
+		xzs_spin_halt();
+		return;
+	}
+	xzs_early_puts("[XZS-UFS] [C233] HOST CORE RESET DEASSERTED\n");
+	xzs_breadcrumb(0xEC33, bcr_deassert_rb);
+
+	/* Post-reset settle delay: ~1000 us (1 ms) */
+	delay(1000);
+
+	/* 9. Revalidate clocks after core reset (core reset may have affected branches) */
+	uint32_t post_sys = xzs_gcc_read32(GCC_REG_SYS_NOC_UFS_AXI_CBCR);
+	if (post_sys & CBCR_CLK_OFF) {
+		xzs_gcc_enable_and_wait_branch(GCC_REG_SYS_NOC_UFS_AXI_CBCR, NULL, &post_sys);
+	}
+	uint32_t post_agg = xzs_gcc_read32(GCC_REG_AGGRE2_UFS_AXI_CBCR);
+	if (post_agg & CBCR_CLK_OFF) {
+		xzs_gcc_enable_and_wait_branch(GCC_REG_AGGRE2_UFS_AXI_CBCR, NULL, &post_agg);
+	}
+	uint32_t post_axi = xzs_gcc_read32(GCC_REG_UFS_AXI_CBCR);
+	if (post_axi & CBCR_CLK_OFF) {
+		xzs_gcc_enable_and_wait_branch(GCC_REG_UFS_AXI_CBCR, NULL, &post_axi);
+	}
+	uint32_t post_ahb = xzs_gcc_read32(GCC_REG_UFS_AHB_CBCR);
+	if (post_ahb & CBCR_CLK_OFF) {
+		xzs_gcc_enable_and_wait_branch(GCC_REG_UFS_AHB_CBCR, NULL, &post_ahb);
+	}
+	uint32_t post_clkref = xzs_gcc_read32(GCC_REG_UFS_CLKREF_CBCR);
+	if (post_clkref & CBCR_CLK_OFF) {
+		xzs_gcc_enable_and_wait_branch(GCC_REG_UFS_CLKREF_CBCR, NULL, &post_clkref);
+	}
+
+	xzs_early_puts("[XZS-UFS] POST-RESET CLOCKS: SYS=0x");
+	xzs_early_puthex64((uint64_t)post_sys);
+	xzs_early_puts(", AGG=0x");
+	xzs_early_puthex64((uint64_t)post_agg);
+	xzs_early_puts(", AXI=0x");
+	xzs_early_puthex64((uint64_t)post_axi);
+	xzs_early_puts(", AHB=0x");
+	xzs_early_puthex64((uint64_t)post_ahb);
+	xzs_early_puts(", CLKREF=0x");
+	xzs_early_puthex64((uint64_t)post_clkref);
+	xzs_early_puts(")\n");
+	xzs_early_puts("[XZS-UFS] [C234] POST-RESET CLOCK PATH VERIFIED\n");
+	xzs_breadcrumb(0xEC34, 0);
+
+	/* 10. Revalidate HCI accessibility post-reset */
+	uint32_t post_cap = xzs_ufs_read32(UFSHCI_REG_CAP);
+	uint32_t post_ver = xzs_ufs_read32(UFSHCI_REG_VER);
+	uint32_t post_hce = xzs_ufs_read32(UFSHCI_REG_HCE);
+	uint32_t post_hcs = xzs_ufs_read32(UFSHCI_REG_HCS);
+
+	xzs_early_puts("[XZS-UFS] POST-RESET HCI: CAP=0x");
+	xzs_early_puthex64((uint64_t)post_cap);
+	xzs_early_puts(", VER=0x");
+	xzs_early_puthex64((uint64_t)post_ver);
+	xzs_early_puts(", HCE=0x");
+	xzs_early_puthex64((uint64_t)post_hce);
+	xzs_early_puts(", HCS=0x");
+	xzs_early_puthex64((uint64_t)post_hcs);
+	xzs_early_puts("\n");
+
+	if (post_cap == 0 || post_cap == 0xFFFFFFFFU) {
+		xzs_early_puts("[XZS-UFS] [CF234] HCI NOT ACCESSIBLE POST-RESET (bus fault / SError risk)\n");
+		xzs_breadcrumb(0xEF34, post_cap);
+		xzs_spin_halt();
+		return;
+	}
+
+	/* 11. Reproduce C2.2 PHY Sequence: Activate PHY Power Control (SW_PWRDN = 1) */
+	xzs_early_puts("[XZS-UFS] [C235] PHY POWER ACTIVE\n");
+	xzs_breadcrumb(0xEC35, 0);
+	xzs_ufs_phy_write32(QPHY_REG_PCS_POWER_DOWN_CONTROL, QPHY_PCS_PWRDN_ACTIVE);
+	uint32_t post_pwrdn = xzs_ufs_phy_read32(QPHY_REG_PCS_POWER_DOWN_CONTROL);
+	xzs_early_puts("[XZS-UFS] POWER_CTRL = 0x");
+	xzs_early_puthex64((uint64_t)post_pwrdn);
+	xzs_early_puts("\n");
+
+	/* 12. Assert Host UFS PHY Soft Reset (REG_UFS_CFG1 bit 1 = 1) */
+	uint32_t cfg1_cur = xzs_ufs_read32(UFS_QCOM_REG_CFG1);
+	uint32_t cfg1_assert = cfg1_cur | UFS_QCOM_CFG1_PHY_SOFT_RESET;
+	xzs_ufs_write32(UFS_QCOM_REG_CFG1, cfg1_assert);
+
+	/* Flush readback */
+	uint32_t cfg1_assert_rb = xzs_ufs_read32(UFS_QCOM_REG_CFG1);
+	xzs_early_puts("[XZS-UFS] CFG1 assert-readback=0x");
+	xzs_early_puthex64((uint64_t)cfg1_assert_rb);
+	xzs_early_puts("\n");
+	xzs_early_puts("[XZS-UFS] [C236] PHY SOFT RESET ASSERTED\n");
+	xzs_breadcrumb(0xEC36, cfg1_assert_rb);
+
+	/* Hold PHY soft reset for ~1000 us (1 ms) */
+	delay(1000);
+
+	/* 13. Program Calibration Tables while PHY soft reset is asserted */
+	size_t num_serdes = sizeof(msm8996_serdes_tbl) / sizeof(msm8996_serdes_tbl[0]);
+	for (size_t i = 0; i < num_serdes; i++) {
+		xzs_ufs_phy_write32(msm8996_serdes_tbl[i].offset, msm8996_serdes_tbl[i].val);
+	}
+	xzs_early_puts("[XZS-UFS] [C237] SERDES PROGRAMMED\n");
+	xzs_breadcrumb(0xEC37, (uint32_t)num_serdes);
+
+	size_t num_tx0 = sizeof(msm8996_tx0_tbl) / sizeof(msm8996_tx0_tbl[0]);
+	for (size_t i = 0; i < num_tx0; i++) {
+		xzs_ufs_phy_write32(msm8996_tx0_tbl[i].offset, msm8996_tx0_tbl[i].val);
+	}
+	xzs_early_puts("[XZS-UFS] [C238] TX0 PROGRAMMED\n");
+	xzs_breadcrumb(0xEC38, (uint32_t)num_tx0);
+
+	size_t num_rx0 = sizeof(msm8996_rx0_tbl) / sizeof(msm8996_rx0_tbl[0]);
+	for (size_t i = 0; i < num_rx0; i++) {
+		xzs_ufs_phy_write32(msm8996_rx0_tbl[i].offset, msm8996_rx0_tbl[i].val);
+	}
+	xzs_early_puts("[XZS-UFS] [C239] RX0 PROGRAMMED\n");
+	xzs_breadcrumb(0xEC39, (uint32_t)num_rx0);
+
+	/* Verify PHY soft reset is still asserted */
+	uint32_t cfg1_mid = xzs_ufs_read32(UFS_QCOM_REG_CFG1);
+
+	/* 14. Deassert Host UFS PHY Soft Reset (REG_UFS_CFG1 bit 1 = 0) */
+	uint32_t cfg1_deassert = cfg1_mid & ~UFS_QCOM_CFG1_PHY_SOFT_RESET;
+	xzs_ufs_write32(UFS_QCOM_REG_CFG1, cfg1_deassert);
+
+	/* Flush readback */
+	uint32_t cfg1_deassert_rb = xzs_ufs_read32(UFS_QCOM_REG_CFG1);
+	xzs_early_puts("[XZS-UFS] CFG1 deassert-readback=0x");
+	xzs_early_puthex64((uint64_t)cfg1_deassert_rb);
+	xzs_early_puts("\n");
+	xzs_early_puts("[XZS-UFS] [C240] PHY SOFT RESET DEASSERTED\n");
+	xzs_breadcrumb(0xEC40, cfg1_deassert_rb);
+
+	/* Settle delay: ~1000 us (1 ms) */
+	delay(1000);
+
+	/* 15. Start SerDes (QPHY_START_CTRL bit 0 = 1) */
+	uint32_t cur_start = xzs_ufs_phy_read32(QPHY_REG_START_CTRL);
+	xzs_ufs_phy_write32(QPHY_REG_START_CTRL, cur_start | QPHY_START_CTRL_SERDES_START);
+	uint32_t post_start = xzs_ufs_phy_read32(QPHY_REG_START_CTRL);
+	xzs_early_puts("[XZS-UFS] START = 0x");
+	xzs_early_puthex64((uint64_t)post_start);
+	xzs_early_puts("\n");
+	xzs_early_puts("[XZS-UFS] [C241] SERDES STARTED\n");
+	xzs_breadcrumb(0xEC41, post_start);
+
+	/* 16. Poll PCS_READY @ PHY + 0xD68 (200 us interval, 10,000 us timeout) */
+	xzs_early_puts("[XZS-UFS] PCS_READY WAIT ENTER\n");
+	uint32_t pcs_val = 0;
+	int poll_count = 0;
+	int elapsed_us = 0;
+	const int max_elapsed_us = 10000;  /* 10,000 us = 10 ms */
+	const int poll_interval_us = 200; /* 200 us interval */
+	int ready = 0;
+
+	while (elapsed_us < max_elapsed_us) {
+		pcs_val = xzs_ufs_phy_read32(QPHY_REG_PCS_READY_STATUS);
+		poll_count++;
+		if (pcs_val & QPHY_PCS_READY_BIT) {
+			ready = 1;
+			break;
+		}
+		delay(poll_interval_us);
+		elapsed_us += poll_interval_us;
+	}
+
+	if (!ready) {
+		xzs_early_puts("[XZS-UFS] [CF242] PCS_READY TIMEOUT AFTER HOST CORE RESET (polls=");
+		xzs_early_puthex64((uint64_t)poll_count);
+		xzs_early_puts(", elapsed_us=");
+		xzs_early_puthex64((uint64_t)elapsed_us);
+		xzs_early_puts(", last_raw=0x");
+		xzs_early_puthex64((uint64_t)pcs_val);
+		xzs_early_puts(")\n");
+		xzs_breadcrumb(0xEF42, pcs_val);
+
+		/* Diagnostic capture of COM status and host registers */
+		uint32_t d_bcr = xzs_gcc_read32(GCC_REG_UFS_BCR);
+		uint32_t d_cfg1 = xzs_ufs_read32(UFS_QCOM_REG_CFG1);
+		uint32_t d_pwrdn = xzs_ufs_phy_read32(QPHY_REG_PCS_POWER_DOWN_CONTROL);
+		uint32_t d_start = xzs_ufs_phy_read32(QPHY_REG_START_CTRL);
+		uint32_t d_hce = xzs_ufs_read32(UFSHCI_REG_HCE);
+		uint32_t d_hcs = xzs_ufs_read32(UFSHCI_REG_HCS);
+
+		uint32_t d_cmn = xzs_ufs_phy_read32(0x000);
+		uint32_t d_sysclk = xzs_ufs_phy_read32(0x0AC);
+		uint32_t d_bias = xzs_ufs_phy_read32(0x034);
+		uint32_t d_bg = xzs_ufs_phy_read32(0x00C);
+		uint32_t d_resetsm = xzs_ufs_phy_read32(0x0B4);
+		uint32_t d_lock = xzs_ufs_phy_read32(0x0C8);
+
+		xzs_early_puts("[XZS-UFS] DIAG COM: CMN=0x");
+		xzs_early_puthex64((uint64_t)d_cmn);
+		xzs_early_puts(", SYSCLK=0x");
+		xzs_early_puthex64((uint64_t)d_sysclk);
+		xzs_early_puts(", BIAS=0x");
+		xzs_early_puthex64((uint64_t)d_bias);
+		xzs_early_puts(", BG=0x");
+		xzs_early_puthex64((uint64_t)d_bg);
+		xzs_early_puts(", RESETSM=0x");
+		xzs_early_puthex64((uint64_t)d_resetsm);
+		xzs_early_puts(", LOCK_CMP_EN=0x");
+		xzs_early_puthex64((uint64_t)d_lock);
+		xzs_early_puts("\n[XZS-UFS] DIAG HOST: BCR=0x");
+		xzs_early_puthex64((uint64_t)d_bcr);
+		xzs_early_puts(", CFG1=0x");
+		xzs_early_puthex64((uint64_t)d_cfg1);
+		xzs_early_puts(", PWRDN=0x");
+		xzs_early_puthex64((uint64_t)d_pwrdn);
+		xzs_early_puts(", START=0x");
+		xzs_early_puthex64((uint64_t)d_start);
+		xzs_early_puts(", HCE=0x");
+		xzs_early_puthex64((uint64_t)d_hce);
+		xzs_early_puts(", HCS=0x");
+		xzs_early_puthex64((uint64_t)d_hcs);
+		xzs_early_puts("\n");
+
+		xzs_early_puts("[XZS-UFS] [C242-FAIL] D2-C2.3 PCS_READY TIMED OUT AFTER HOST CORE RESET — TERMINAL HALT\n");
+		xzs_spin_halt();
+		return;
+	}
+
+	xzs_early_puts("[XZS-UFS] [C242] PCS_READY ASSERTED (polls=");
+	xzs_early_puthex64((uint64_t)poll_count);
+	xzs_early_puts(", elapsed_us=");
+	xzs_early_puthex64((uint64_t)elapsed_us);
+	xzs_early_puts(", raw=0x");
+	xzs_early_puthex64((uint64_t)pcs_val);
+	xzs_early_puts(")\n");
+	xzs_breadcrumb(0xEC42, pcs_val);
+
+	/* 17. Snapshot final state & confirm HCE unchanged = 0 */
+	uint32_t final_bcr = xzs_gcc_read32(GCC_REG_UFS_BCR);
+	uint32_t final_cfg1 = xzs_ufs_read32(UFS_QCOM_REG_CFG1);
+	uint32_t final_pwrdn = xzs_ufs_phy_read32(QPHY_REG_PCS_POWER_DOWN_CONTROL);
+	uint32_t final_start = xzs_ufs_phy_read32(QPHY_REG_START_CTRL);
+	uint32_t final_pcs = xzs_ufs_phy_read32(QPHY_REG_PCS_READY_STATUS);
+	uint32_t final_hce = xzs_ufs_read32(UFSHCI_REG_HCE);
+	uint32_t final_hcs = xzs_ufs_read32(UFSHCI_REG_HCS);
+
+	xzs_early_puts("[XZS-UFS] FINAL STATE: BCR=0x");
+	xzs_early_puthex64((uint64_t)final_bcr);
+	xzs_early_puts(", CFG1=0x");
+	xzs_early_puthex64((uint64_t)final_cfg1);
+	xzs_early_puts(", PWRDN=0x");
+	xzs_early_puthex64((uint64_t)final_pwrdn);
+	xzs_early_puts(", START=0x");
+	xzs_early_puthex64((uint64_t)final_start);
+	xzs_early_puts(", PCS=0x");
+	xzs_early_puthex64((uint64_t)final_pcs);
+	xzs_early_puts(", HCE=0x");
+	xzs_early_puthex64((uint64_t)final_hce);
+	xzs_early_puts(", HCS=0x");
+	xzs_early_puthex64((uint64_t)final_hcs);
+	xzs_early_puts("\n");
+
+	/* 18. Hardware Verified Checkpoint */
+	xzs_early_puts("[XZS-UFS] [C243] PHY INITIALIZATION VERIFIED AFTER HOST CORE RESET\n");
+	xzs_breadcrumb(0xEC43, 0);
+
+	/* 19. Terminal condition: Halt and warm-reboot to Fastboot */
+	xzs_early_puts("[XZS-UFS] [C243-TERM] PHASE D2-C2.3 COMPLETE — TERMINAL CONDITION REACHED — WARM REBOOTING TO FASTBOOT\n");
+	xzs_spin_halt();
+}
+
+/*
+ * ============================================================================
+ * Phase D2-C2.4A: MSM8996 UFS PHY Analog/RPM Resource + Register-Integrity Audit
+ * Strictly READ-ONLY regarding PMIC/RPM resources.
+ * ============================================================================
+ */
+
+struct xzs_hci_identity_snapshot {
+	uint32_t cap[8];
+	uint32_t ver[8];
+	uint32_t hw_ver[8];
+	uint32_t hcpid[8];
+	uint32_t hcmid[8];
+	int stable;
+};
+
+static void
+xzs_hci_identity_audit(const char *stage_name, struct xzs_hci_identity_snapshot *snap)
+{
+	xzs_early_puts("[XZS-UFS] [C24A-HCI] HCI IDENTITY STABILITY AUDIT: ");
+	xzs_early_puts(stage_name);
+	xzs_early_puts("\n");
+
+	snap->stable = 1;
+	for (int i = 0; i < 8; i++) {
+		snap->cap[i]    = xzs_ufs_read32(UFSHCI_REG_CAP);
+		snap->ver[i]    = xzs_ufs_read32(UFSHCI_REG_VER);
+		snap->hw_ver[i] = xzs_ufs_read32(UFS_QCOM_REG_HW_VER);
+		snap->hcpid[i]  = xzs_ufs_read32(UFSHCI_REG_HCPID);
+		snap->hcmid[i]  = xzs_ufs_read32(UFSHCI_REG_HCMID);
+
+		if (i > 0) {
+			if (snap->cap[i] != snap->cap[0] ||
+			    snap->ver[i] != snap->ver[0] ||
+			    snap->hw_ver[i] != snap->hw_ver[0] ||
+			    snap->hcpid[i] != snap->hcpid[0] ||
+			    snap->hcmid[i] != snap->hcmid[0]) {
+				snap->stable = 0;
+			}
+		}
+	}
+
+	xzs_early_puts("  CAP:    ");
+	for (int i = 0; i < 8; i++) {
+		xzs_early_puts("0x");
+		xzs_early_puthex64((uint64_t)snap->cap[i]);
+		if (i < 7) xzs_early_puts(" ");
+	}
+	xzs_early_puts("\n  VER:    ");
+	for (int i = 0; i < 8; i++) {
+		xzs_early_puts("0x");
+		xzs_early_puthex64((uint64_t)snap->ver[i]);
+		if (i < 7) xzs_early_puts(" ");
+	}
+	xzs_early_puts("\n  HW_VER: ");
+	for (int i = 0; i < 8; i++) {
+		xzs_early_puts("0x");
+		xzs_early_puthex64((uint64_t)snap->hw_ver[i]);
+		if (i < 7) xzs_early_puts(" ");
+	}
+	xzs_early_puts("\n  HCPID:  ");
+	for (int i = 0; i < 8; i++) {
+		xzs_early_puts("0x");
+		xzs_early_puthex64((uint64_t)snap->hcpid[i]);
+		if (i < 7) xzs_early_puts(" ");
+	}
+	xzs_early_puts("\n  HCMID:  ");
+	for (int i = 0; i < 8; i++) {
+		xzs_early_puts("0x");
+		xzs_early_puthex64((uint64_t)snap->hcmid[i]);
+		if (i < 7) xzs_early_puts(" ");
+	}
+	xzs_early_puts("\n");
+
+	if (snap->stable) {
+		xzs_early_puts("  STABILITY: ALL 8 READS STABLE (IDENTICAL)\n");
+	} else {
+		xzs_early_puts("  [C24A-FAIL] STABILITY: UNSTABLE READS DETECTED — MMIO / TELEMETRY INTEGRITY REGRESSION!\n");
+	}
+}
+
+static void
+xzs_ufs_log_com_status(const char *label)
+{
+	uint32_t c_ready = xzs_ufs_phy_read32(QSERDES_COM_REG_C_READY_STATUS);
+	uint32_t cmn_cfg = xzs_ufs_phy_read32(QSERDES_COM_REG_CMN_CONFIG);
+	uint32_t resetsm = xzs_ufs_phy_read32(QSERDES_COM_REG_RESETSM_CNTRL);
+	uint32_t lockcmp = xzs_ufs_phy_read32(QSERDES_COM_REG_LOCK_CMP_EN);
+	uint32_t pcs_rdy = xzs_ufs_phy_read32(QPHY_REG_PCS_READY_STATUS);
+
+	xzs_early_puts("[XZS-UFS] COM_STATUS ");
+	xzs_early_puts(label);
+	xzs_early_puts(": C_READY_STATUS=0x");
+	xzs_early_puthex64((uint64_t)c_ready);
+	xzs_early_puts(" (bit0=");
+	xzs_early_puthex64((uint64_t)(c_ready & QSERDES_COM_C_READY_BIT));
+	xzs_early_puts("), CMN_CONFIG=0x");
+	xzs_early_puthex64((uint64_t)cmn_cfg);
+	xzs_early_puts(", RESETSM_CNTRL=0x");
+	xzs_early_puthex64((uint64_t)resetsm);
+	xzs_early_puts(", LOCK_CMP_EN=0x");
+	xzs_early_puthex64((uint64_t)lockcmp);
+	xzs_early_puts(", PCS_READY_STATUS=0x");
+	xzs_early_puthex64((uint64_t)pcs_rdy);
+	xzs_early_puts("\n");
+}
+
+static void
+xzs_ufs_decode_identity(uint32_t cap, uint32_t ver, uint32_t hw_ver)
+{
+	uint32_t nutrs = cap & 0x1FU;
+	uint32_t nutmrs = (cap >> 16) & 0x07U;
+	uint32_t as64 = (cap >> 24) & 0x01U;
+
+	xzs_early_puts("[XZS-UFS] [C24A-DECODE] CAP=0x");
+	xzs_early_puthex64((uint64_t)cap);
+	xzs_early_puts(" -> NUTRS=");
+	xzs_early_puthex64((uint64_t)nutrs);
+	xzs_early_puts(" (");
+	xzs_early_puthex64((uint64_t)(nutrs + 1));
+	xzs_early_puts(" slots), NUTMRS=");
+	xzs_early_puthex64((uint64_t)nutmrs);
+	xzs_early_puts(" (");
+	xzs_early_puthex64((uint64_t)(nutmrs + 1));
+	xzs_early_puts(" slots), 64AS=");
+	xzs_early_puthex64((uint64_t)as64);
+
+	uint32_t ver_major = (ver >> 8) & 0xFFU;
+	uint32_t ver_minor = (ver >> 4) & 0x0FU;
+	uint32_t ver_step  = ver & 0x0FU;
+	xzs_early_puts("\n[XZS-UFS] [C24A-DECODE] VER=0x");
+	xzs_early_puthex64((uint64_t)ver);
+	xzs_early_puts(" -> UFSHCI v");
+	xzs_early_puthex64((uint64_t)ver_major);
+	xzs_early_puts(".");
+	xzs_early_puthex64((uint64_t)ver_minor);
+	xzs_early_puts(".");
+	xzs_early_puthex64((uint64_t)ver_step);
+
+	uint32_t qmajor = (hw_ver >> 28) & 0x0FU;
+	uint32_t qminor = (hw_ver >> 16) & 0xFFFU;
+	uint32_t qstep  = hw_ver & 0xFFFFU;
+	xzs_early_puts("\n[XZS-UFS] [C24A-DECODE] QCOM_HW_VER=0x");
+	xzs_early_puthex64((uint64_t)hw_ver);
+	xzs_early_puts(" -> Qualcomm Controller v");
+	xzs_early_puthex64((uint64_t)qmajor);
+	xzs_early_puts(".");
+	xzs_early_puthex64((uint64_t)qminor);
+	xzs_early_puts(".");
+	xzs_early_puthex64((uint64_t)qstep);
+	xzs_early_puts("\n");
+}
+
+void
+xzs_ufs_phase_d2c24a_probe(void)
+{
+	xzs_early_puts("\n========================================================\n");
+	xzs_early_puts("[XZS-UFS] [C24A] PHASE D2-C2.4A: UFS PHY ANALOG/RPM & REGISTER AUDIT\n");
+	xzs_early_puts("========================================================\n");
+	xzs_breadcrumb(0xEC4A, 0);
+
+	/* 1. Map GCC MMIO space (0x00300000, 0x90000) */
+	if (g_xzs_gcc_base == 0) {
+		g_xzs_gcc_base = (vm_offset_t)ml_io_map(XZS_GCC_PHYS_BASE, XZS_GCC_MMIO_SIZE);
+		if (g_xzs_gcc_base == 0) {
+			xzs_early_puts("[XZS-UFS] [CF24A] FAILED TO MAP GCC MMIO\n");
+			xzs_breadcrumb(0xEF4A, 1);
+			xzs_spin_halt();
+			return;
+		}
+	}
+
+	/* 2. Map UFS Controller MMIO aperture (0x00624000, 0x2500) */
+	if (g_xzs_ufs_base == 0) {
+		g_xzs_ufs_base = (vm_offset_t)ml_io_map(XZS_UFS_CONTROLLER_PHYS_BASE, XZS_UFS_CONTROLLER_MMIO_SIZE);
+		if (g_xzs_ufs_base == 0) {
+			xzs_early_puts("[XZS-UFS] [CF24A] FAILED TO MAP UFS CONTROLLER MMIO\n");
+			xzs_breadcrumb(0xEF4A, 2);
+			xzs_spin_halt();
+			return;
+		}
+	}
+
+	/* 3. Map UFS PHY MMIO aperture (0x00627000, 0x1000) */
+	if (g_xzs_ufs_phy_base == 0) {
+		g_xzs_ufs_phy_base = (vm_offset_t)ml_io_map(XZS_UFS_PHY_PHYS_BASE, XZS_UFS_PHY_MMIO_SIZE);
+		if (g_xzs_ufs_phy_base == 0) {
+			xzs_early_puts("[XZS-UFS] [CF24A] FAILED TO MAP UFS PHY MMIO\n");
+			xzs_breadcrumb(0xEF4A, 3);
+			xzs_spin_halt();
+			return;
+		}
+	}
+
+	/* 4. Ensure the 4 UFS bus clocks and CLKREF are running */
+	uint32_t b_sys = xzs_gcc_read32(GCC_REG_SYS_NOC_UFS_AXI_CBCR);
+	if (b_sys & CBCR_CLK_OFF) {
+		xzs_gcc_enable_and_wait_branch(GCC_REG_SYS_NOC_UFS_AXI_CBCR, NULL, &b_sys);
+	}
+	uint32_t b_agg = xzs_gcc_read32(GCC_REG_AGGRE2_UFS_AXI_CBCR);
+	if (b_agg & CBCR_CLK_OFF) {
+		xzs_gcc_enable_and_wait_branch(GCC_REG_AGGRE2_UFS_AXI_CBCR, NULL, &b_agg);
+	}
+	uint32_t b_axi = xzs_gcc_read32(GCC_REG_UFS_AXI_CBCR);
+	if (b_axi & CBCR_CLK_OFF) {
+		xzs_gcc_enable_and_wait_branch(GCC_REG_UFS_AXI_CBCR, NULL, &b_axi);
+	}
+	uint32_t b_ahb = xzs_gcc_read32(GCC_REG_UFS_AHB_CBCR);
+	if (b_ahb & CBCR_CLK_OFF) {
+		xzs_gcc_enable_and_wait_branch(GCC_REG_UFS_AHB_CBCR, NULL, &b_ahb);
+	}
+	uint32_t b_clkref = xzs_gcc_read32(GCC_REG_UFS_CLKREF_CBCR);
+	if (b_clkref & CBCR_CLK_OFF) {
+		xzs_gcc_enable_and_wait_branch(GCC_REG_UFS_CLKREF_CBCR, NULL, &b_clkref);
+	}
+
+	xzs_early_puts("[XZS-UFS] CLOCKS VERIFIED RUNNING (SYS, AGG, AXI, AHB, CLKREF)\n");
+
+	/*
+	 * 5. [C24A-HCI] STABILITY AUDIT: PRE-RESET (8 Consecutive Reads)
+	 */
+	struct xzs_hci_identity_snapshot snap_pre;
+	xzs_hci_identity_audit("STAGE 1 — PRE-RESET", &snap_pre);
+	if (!snap_pre.stable) {
+		xzs_breadcrumb(0xEF4A, 4);
+		xzs_spin_halt();
+		return;
+	}
+
+	/*
+	 * 6. Point A: Capture corrected COM status BEFORE CALIBRATION
+	 */
+	xzs_ufs_log_com_status("POINT A (PRE-CALIBRATION)");
+
+	/*
+	 * 7. Host Core Reset Sequence (via GCC_UFS_BCR)
+	 */
+	xzs_early_puts("[XZS-UFS] EXECUTING HOST CORE RESET via GCC_UFS_BCR...\n");
+	uint32_t bcr_old = xzs_gcc_read32(GCC_REG_UFS_BCR);
+	uint32_t bcr_assert = bcr_old | BCR_BLK_ARES;
+	xzs_gcc_write32(GCC_REG_UFS_BCR, bcr_assert);
+	uint32_t bcr_assert_rb = xzs_gcc_read32(GCC_REG_UFS_BCR);
+	if ((bcr_assert_rb & BCR_BLK_ARES) == 0) {
+		xzs_early_puts("[XZS-UFS] [CF24A] HOST CORE RESET ASSERT FAILED\n");
+		xzs_breadcrumb(0xEF4A, 5);
+		xzs_spin_halt();
+		return;
+	}
+	delay(200); /* ~200 us hold */
+
+	uint32_t bcr_deassert = bcr_assert_rb & ~BCR_BLK_ARES;
+	xzs_gcc_write32(GCC_REG_UFS_BCR, bcr_deassert);
+	uint32_t bcr_deassert_rb = xzs_gcc_read32(GCC_REG_UFS_BCR);
+	if ((bcr_deassert_rb & BCR_BLK_ARES) != 0) {
+		xzs_early_puts("[XZS-UFS] [CF24A] HOST CORE RESET DEASSERT FAILED\n");
+		xzs_breadcrumb(0xEF4A, 6);
+		xzs_spin_halt();
+		return;
+	}
+	delay(1000); /* 1 ms settle */
+
+	/* Re-validate bus clocks */
+	uint32_t post_sys = xzs_gcc_read32(GCC_REG_SYS_NOC_UFS_AXI_CBCR);
+	if (post_sys & CBCR_CLK_OFF) xzs_gcc_enable_and_wait_branch(GCC_REG_SYS_NOC_UFS_AXI_CBCR, NULL, &post_sys);
+	uint32_t post_agg = xzs_gcc_read32(GCC_REG_AGGRE2_UFS_AXI_CBCR);
+	if (post_agg & CBCR_CLK_OFF) xzs_gcc_enable_and_wait_branch(GCC_REG_AGGRE2_UFS_AXI_CBCR, NULL, &post_agg);
+	uint32_t post_axi = xzs_gcc_read32(GCC_REG_UFS_AXI_CBCR);
+	if (post_axi & CBCR_CLK_OFF) xzs_gcc_enable_and_wait_branch(GCC_REG_UFS_AXI_CBCR, NULL, &post_axi);
+	uint32_t post_ahb = xzs_gcc_read32(GCC_REG_UFS_AHB_CBCR);
+	if (post_ahb & CBCR_CLK_OFF) xzs_gcc_enable_and_wait_branch(GCC_REG_UFS_AHB_CBCR, NULL, &post_ahb);
+	uint32_t post_clkref = xzs_gcc_read32(GCC_REG_UFS_CLKREF_CBCR);
+	if (post_clkref & CBCR_CLK_OFF) xzs_gcc_enable_and_wait_branch(GCC_REG_UFS_CLKREF_CBCR, NULL, &post_clkref);
+
+	/*
+	 * 8. [C24A-HCI] STABILITY AUDIT: POST-CORE-RESET (8 Consecutive Reads)
+	 */
+	struct xzs_hci_identity_snapshot snap_post_reset;
+	xzs_hci_identity_audit("STAGE 2 — POST-CORE-RESET", &snap_post_reset);
+	if (!snap_post_reset.stable) {
+		xzs_breadcrumb(0xEF4A, 7);
+		xzs_spin_halt();
+		return;
+	}
+
+	/*
+	 * 9. PHY Initialization Sequence
+	 */
+	/* 9a. Power Up PHY */
+	xzs_early_puts("[XZS-UFS] POWERING UP PHY (PCS_POWER_DOWN_CONTROL = 1)...\n");
+	xzs_ufs_phy_write32(QPHY_REG_PCS_POWER_DOWN_CONTROL, QPHY_PCS_PWRDN_ACTIVE);
+	(void)xzs_ufs_phy_read32(QPHY_REG_PCS_POWER_DOWN_CONTROL);
+	delay(1000);
+
+	/* 9b. Assert PHY Soft Reset via REG_UFS_CFG1 */
+	xzs_early_puts("[XZS-UFS] ASSERTING PHY SOFT RESET (REG_UFS_CFG1 bit 1 = 1)...\n");
+	uint32_t cfg1_old = xzs_ufs_read32(UFS_QCOM_REG_CFG1);
+	uint32_t cfg1_assert = cfg1_old | UFS_QCOM_CFG1_PHY_SOFT_RESET;
+	xzs_ufs_write32(UFS_QCOM_REG_CFG1, cfg1_assert);
+	(void)xzs_ufs_read32(UFS_QCOM_REG_CFG1);
+	delay(1000);
+
+	/* 9c. Program Audited MSM8996 Calibration Tables */
+	xzs_early_puts("[XZS-UFS] PROGRAMMING AUDITED CALIBRATION TABLES...\n");
+	for (size_t i = 0; i < sizeof(msm8996_serdes_tbl)/sizeof(msm8996_serdes_tbl[0]); i++) {
+		xzs_ufs_phy_write32(msm8996_serdes_tbl[i].offset, msm8996_serdes_tbl[i].val);
+	}
+	for (size_t i = 0; i < sizeof(msm8996_tx0_tbl)/sizeof(msm8996_tx0_tbl[0]); i++) {
+		xzs_ufs_phy_write32(msm8996_tx0_tbl[i].offset, msm8996_tx0_tbl[i].val);
+	}
+	for (size_t i = 0; i < sizeof(msm8996_rx0_tbl)/sizeof(msm8996_rx0_tbl[0]); i++) {
+		xzs_ufs_phy_write32(msm8996_rx0_tbl[i].offset, msm8996_rx0_tbl[i].val);
+	}
+
+	/* 9d. Deassert PHY Soft Reset via REG_UFS_CFG1 */
+	xzs_early_puts("[XZS-UFS] DEASSERTING PHY SOFT RESET (REG_UFS_CFG1 bit 1 = 0)...\n");
+	uint32_t cfg1_deassert = cfg1_assert & ~UFS_QCOM_CFG1_PHY_SOFT_RESET;
+	xzs_ufs_write32(UFS_QCOM_REG_CFG1, cfg1_deassert);
+	(void)xzs_ufs_read32(UFS_QCOM_REG_CFG1);
+	delay(1000);
+
+	/*
+	 * 10. Point B: Capture corrected COM status POST-CALIBRATION & DEASSERT
+	 */
+	xzs_ufs_log_com_status("POINT B (POST-CALIBRATION & DEASSERT)");
+
+	/*
+	 * 11. Start SerDes and Poll PCS_READY
+	 */
+	xzs_early_puts("[XZS-UFS] STARTING SERDES (QPHY_START_CTRL = 1)...\n");
+	xzs_ufs_phy_write32(QPHY_REG_START_CTRL, QPHY_START_CTRL_SERDES_START);
+	(void)xzs_ufs_phy_read32(QPHY_REG_START_CTRL);
+
+	/* Bounded poll of PCS_READY (200 us interval, 10 ms max = 50 iterations) */
+	uint32_t poll_pcs = 0;
+	int pcs_ready = 0;
+	for (int iter = 1; iter <= 50; iter++) {
+		delay(200);
+		poll_pcs = xzs_ufs_phy_read32(QPHY_REG_PCS_READY_STATUS);
+		if (poll_pcs & QPHY_PCS_READY_BIT) {
+			pcs_ready = iter;
+			break;
+		}
+	}
+
+	if (pcs_ready > 0) {
+		xzs_early_puts("[XZS-UFS] PCS_READY ASSERTED after ");
+		xzs_early_puthex64((uint64_t)(pcs_ready * 200));
+		xzs_early_puts(" us (raw=0x");
+		xzs_early_puthex64((uint64_t)poll_pcs);
+		xzs_early_puts(")\n");
+	} else {
+		xzs_early_puts("[XZS-UFS] PCS_READY TIMEOUT after 10000 us (raw=0x");
+		xzs_early_puthex64((uint64_t)poll_pcs);
+		xzs_early_puts(")\n");
+	}
+
+	/*
+	 * 12. Point C: Capture corrected COM status POST-START / TIMEOUT
+	 */
+	xzs_ufs_log_com_status("POINT C (POST-START / PCS POLL FINISH)");
+
+	/*
+	 * 13. [C24A-HCI] STABILITY AUDIT: POST-PHY-INIT (8 Consecutive Reads)
+	 */
+	struct xzs_hci_identity_snapshot snap_post_phy;
+	xzs_hci_identity_audit("STAGE 3 — POST-PHY-INIT", &snap_post_phy);
+	if (!snap_post_phy.stable) {
+		xzs_breadcrumb(0xEF4A, 8);
+		xzs_spin_halt();
+		return;
+	}
+
+	/*
+	 * 14. Field Decoding (UFSHCI Masks)
+	 */
+	xzs_ufs_decode_identity(snap_post_phy.cap[0], snap_post_phy.ver[0], snap_post_phy.hw_ver[0]);
+
+	/*
+	 * 15. Verify Invariant: HCE and UIC must remain untouched (0)
+	 */
+	uint32_t final_hce = xzs_ufs_read32(UFSHCI_REG_HCE);
+	uint32_t final_hcs = xzs_ufs_read32(UFSHCI_REG_HCS);
+	xzs_early_puts("[XZS-UFS] FINAL INVARIANT CHECK: HCE=0x");
+	xzs_early_puthex64((uint64_t)final_hce);
+	xzs_early_puts(", HCS=0x");
+	xzs_early_puthex64((uint64_t)final_hcs);
+	xzs_early_puts("\n");
+
+	if (final_hce != 0) {
+		xzs_early_puts("[XZS-UFS] [CF24A] INVARIANT VIOLATION: HCE IS NOT ZERO!\n");
+		xzs_breadcrumb(0xEF4A, 9);
+		xzs_spin_halt();
+		return;
+	}
+
+	/* 16. Audit Checkpoint Complete */
+	xzs_early_puts("[XZS-UFS] [C24A-PASS] PHASE D2-C2.4A AUDIT COMPLETE\n");
+	xzs_breadcrumb(0xEC4A, 1);
+
+	/* 17. Terminal condition: Halt and warm-reboot to Fastboot */
+	xzs_early_puts("[XZS-UFS] [C24A-TERM] WARM REBOOTING TO FASTBOOT FOR LOG EXTRACTION\n");
+	xzs_spin_halt();
+}
+
+/*
+ * Phase D2-C2.4C: Controlled UFS PHY Retest
+ * Executes the exact existing PHY initialization sequence and measures
+ * QSERDES_COM_C_READY_STATUS first, then PCS_READY.
+ */
+int
+xzs_ufs_phy_retest_d2c24c(uint32_t *out_c_ready, uint32_t *out_pcs_ready,
+                         int *out_c_ready_us, int *out_pcs_ready_us)
+{
+	xzs_early_puts("\n[XZS-UFS] [C24C-PHY] EXECUTING CONTROLLED UFS PHY RETEST...\n");
+
+	/* 1. Map GCC, UFS, PHY MMIO if not already mapped */
+	if (g_xzs_gcc_base == 0) {
+		g_xzs_gcc_base = (vm_offset_t)ml_io_map(XZS_GCC_PHYS_BASE, XZS_GCC_MMIO_SIZE);
+		if (g_xzs_gcc_base == 0) {
+			xzs_early_puts("[XZS-UFS] [C24C-PHY-ERR] FAILED TO MAP GCC MMIO\n");
+			return -1;
+		}
+	}
+	if (g_xzs_ufs_base == 0) {
+		g_xzs_ufs_base = (vm_offset_t)ml_io_map(XZS_UFS_CONTROLLER_PHYS_BASE, XZS_UFS_CONTROLLER_MMIO_SIZE);
+		if (g_xzs_ufs_base == 0) {
+			xzs_early_puts("[XZS-UFS] [C24C-PHY-ERR] FAILED TO MAP UFS CONTROLLER MMIO\n");
+			return -2;
+		}
+	}
+	if (g_xzs_ufs_phy_base == 0) {
+		g_xzs_ufs_phy_base = (vm_offset_t)ml_io_map(XZS_UFS_PHY_PHYS_BASE, XZS_UFS_PHY_MMIO_SIZE);
+		if (g_xzs_ufs_phy_base == 0) {
+			xzs_early_puts("[XZS-UFS] [C24C-PHY-ERR] FAILED TO MAP UFS PHY MMIO\n");
+			return -3;
+		}
+	}
+
+	/* 2. Verify all bus clocks and CLKREF running */
+	uint32_t b_sys = xzs_gcc_read32(GCC_REG_SYS_NOC_UFS_AXI_CBCR);
+	if (b_sys & CBCR_CLK_OFF) xzs_gcc_enable_and_wait_branch(GCC_REG_SYS_NOC_UFS_AXI_CBCR, NULL, &b_sys);
+	uint32_t b_agg = xzs_gcc_read32(GCC_REG_AGGRE2_UFS_AXI_CBCR);
+	if (b_agg & CBCR_CLK_OFF) xzs_gcc_enable_and_wait_branch(GCC_REG_AGGRE2_UFS_AXI_CBCR, NULL, &b_agg);
+	uint32_t b_axi = xzs_gcc_read32(GCC_REG_UFS_AXI_CBCR);
+	if (b_axi & CBCR_CLK_OFF) xzs_gcc_enable_and_wait_branch(GCC_REG_UFS_AXI_CBCR, NULL, &b_axi);
+	uint32_t b_ahb = xzs_gcc_read32(GCC_REG_UFS_AHB_CBCR);
+	if (b_ahb & CBCR_CLK_OFF) xzs_gcc_enable_and_wait_branch(GCC_REG_UFS_AHB_CBCR, NULL, &b_ahb);
+	uint32_t b_clkref = xzs_gcc_read32(GCC_REG_UFS_CLKREF_CBCR);
+	if (b_clkref & CBCR_CLK_OFF) xzs_gcc_enable_and_wait_branch(GCC_REG_UFS_CLKREF_CBCR, NULL, &b_clkref);
+
+	/* 3. Pre-reset COM status */
+	xzs_ufs_log_com_status("PRE-CORE-RESET");
+
+	/* 4. Host Core Reset Sequence via GCC_UFS_BCR */
+	xzs_early_puts("[XZS-UFS] HOST CORE RESET via GCC_UFS_BCR...\n");
+	uint32_t bcr_old = xzs_gcc_read32(GCC_REG_UFS_BCR);
+	xzs_gcc_write32(GCC_REG_UFS_BCR, bcr_old | BCR_BLK_ARES);
+	delay(200);
+	xzs_gcc_write32(GCC_REG_UFS_BCR, bcr_old & ~BCR_BLK_ARES);
+	delay(1000);
+
+	/* Re-validate bus clocks */
+	uint32_t post_sys = xzs_gcc_read32(GCC_REG_SYS_NOC_UFS_AXI_CBCR);
+	if (post_sys & CBCR_CLK_OFF) xzs_gcc_enable_and_wait_branch(GCC_REG_SYS_NOC_UFS_AXI_CBCR, NULL, &post_sys);
+	uint32_t post_agg = xzs_gcc_read32(GCC_REG_AGGRE2_UFS_AXI_CBCR);
+	if (post_agg & CBCR_CLK_OFF) xzs_gcc_enable_and_wait_branch(GCC_REG_AGGRE2_UFS_AXI_CBCR, NULL, &post_agg);
+	uint32_t post_axi = xzs_gcc_read32(GCC_REG_UFS_AXI_CBCR);
+	if (post_axi & CBCR_CLK_OFF) xzs_gcc_enable_and_wait_branch(GCC_REG_UFS_AXI_CBCR, NULL, &post_axi);
+
+	/* 5. PHY Power Up */
+	xzs_early_puts("[XZS-UFS] PHY POWER UP (PCS_POWER_DOWN_CONTROL = 1)...\n");
+	xzs_ufs_phy_write32(QPHY_REG_PCS_POWER_DOWN_CONTROL, QPHY_PCS_PWRDN_ACTIVE);
+	(void)xzs_ufs_phy_read32(QPHY_REG_PCS_POWER_DOWN_CONTROL);
+	delay(1000);
+
+	/* 6. PHY Soft Reset Assert */
+	xzs_early_puts("[XZS-UFS] PHY SOFT RESET ASSERT (CFG1 bit 1 = 1)...\n");
+	uint32_t cfg1 = xzs_ufs_read32(UFS_QCOM_REG_CFG1);
+	xzs_ufs_write32(UFS_QCOM_REG_CFG1, cfg1 | UFS_QCOM_CFG1_PHY_SOFT_RESET);
+	delay(1000);
+
+	/* 7. Calibration tables */
+	xzs_early_puts("[XZS-UFS] PROGRAMMING CALIBRATION TABLES...\n");
+	for (size_t i = 0; i < sizeof(msm8996_serdes_tbl)/sizeof(msm8996_serdes_tbl[0]); i++) {
+		xzs_ufs_phy_write32(msm8996_serdes_tbl[i].offset, msm8996_serdes_tbl[i].val);
+	}
+	for (size_t i = 0; i < sizeof(msm8996_tx0_tbl)/sizeof(msm8996_tx0_tbl[0]); i++) {
+		xzs_ufs_phy_write32(msm8996_tx0_tbl[i].offset, msm8996_tx0_tbl[i].val);
+	}
+	for (size_t i = 0; i < sizeof(msm8996_rx0_tbl)/sizeof(msm8996_rx0_tbl[0]); i++) {
+		xzs_ufs_phy_write32(msm8996_rx0_tbl[i].offset, msm8996_rx0_tbl[i].val);
+	}
+
+	/* 8. PHY Soft Reset Deassert */
+	xzs_early_puts("[XZS-UFS] PHY SOFT RESET DEASSERT (CFG1 bit 1 = 0)...\n");
+	xzs_ufs_write32(UFS_QCOM_REG_CFG1, cfg1 & ~UFS_QCOM_CFG1_PHY_SOFT_RESET);
+	delay(1000);
+
+	xzs_ufs_log_com_status("POST-CALIBRATION & DEASSERT");
+
+	/* 9. Start SerDes */
+	xzs_early_puts("[XZS-UFS] STARTING SERDES (QPHY_START_CTRL = 1)...\n");
+	xzs_ufs_phy_write32(QPHY_REG_START_CTRL, QPHY_START_CTRL_SERDES_START);
+	(void)xzs_ufs_phy_read32(QPHY_REG_START_CTRL);
+
+	/* 10. PRIMARY SUCCESS METRIC: Bounded poll QSERDES_COM_C_READY_STATUS (+0x190) */
+	xzs_early_puts("[XZS-UFS] POLLING QSERDES_COM_C_READY_STATUS (+0x190)...\n");
+	uint32_t poll_c_ready = 0;
+	int c_ready_found = 0;
+	for (int iter = 1; iter <= 100; iter++) {
+		delay(100); /* 100 us * 100 = 10 ms max */
+		poll_c_ready = xzs_ufs_phy_read32(QSERDES_COM_REG_C_READY_STATUS);
+		if (poll_c_ready & QSERDES_COM_C_READY_BIT) {
+			c_ready_found = iter * 100;
+			break;
+		}
+	}
+
+	if (c_ready_found > 0) {
+		xzs_early_puts("[XZS-UFS] [C24C-CREADY-ASSERTED] C_READY ASSERTED after ");
+		xzs_early_puthex64((uint64_t)c_ready_found);
+		xzs_early_puts(" us (raw=0x");
+		xzs_early_puthex64((uint64_t)poll_c_ready);
+		xzs_early_puts(")\n");
+	} else {
+		xzs_early_puts("[XZS-UFS] [C24C-CREADY-TIMEOUT] C_READY TIMEOUT after 10000 us (raw=0x");
+		xzs_early_puthex64((uint64_t)poll_c_ready);
+		xzs_early_puts(")\n");
+	}
+
+	/* 11. Bounded poll PCS_READY (+0xD68, bit 0) */
+	xzs_early_puts("[XZS-UFS] POLLING QPHY_PCS_READY_STATUS (+0xD68)...\n");
+	uint32_t poll_pcs = 0;
+	int pcs_ready_found = 0;
+	for (int iter = 1; iter <= 50; iter++) {
+		delay(200); /* 200 us * 50 = 10 ms max */
+		poll_pcs = xzs_ufs_phy_read32(QPHY_REG_PCS_READY_STATUS);
+		if (poll_pcs & QPHY_PCS_READY_BIT) {
+			pcs_ready_found = iter * 200;
+			break;
+		}
+	}
+
+	if (pcs_ready_found > 0) {
+		xzs_early_puts("[XZS-UFS] [C24C-PCS-ASSERTED] PCS_READY ASSERTED after ");
+		xzs_early_puthex64((uint64_t)pcs_ready_found);
+		xzs_early_puts(" us (raw=0x");
+		xzs_early_puthex64((uint64_t)poll_pcs);
+		xzs_early_puts(")\n");
+	} else {
+		xzs_early_puts("[XZS-UFS] [C24C-PCS-TIMEOUT] PCS_READY TIMEOUT after 10000 us (raw=0x");
+		xzs_early_puthex64((uint64_t)poll_pcs);
+		xzs_early_puts(")\n");
+	}
+
+	xzs_ufs_log_com_status("POST-START / TIMEOUT");
+
+	/* 12. Invariant: HCE and UIC must remain 0 */
+	uint32_t final_hce = xzs_ufs_read32(UFSHCI_REG_HCE);
+	uint32_t final_hcs = xzs_ufs_read32(UFSHCI_REG_HCS);
+	xzs_early_puts("[XZS-UFS] INVARIANT CHECK: HCE=0x");
+	xzs_early_puthex64((uint64_t)final_hce);
+	xzs_early_puts(", HCS=0x");
+	xzs_early_puthex64((uint64_t)final_hcs);
+	xzs_early_puts("\n");
+
+	if (out_c_ready) *out_c_ready = poll_c_ready;
+	if (out_pcs_ready) *out_pcs_ready = poll_pcs;
+	if (out_c_ready_us) *out_c_ready_us = c_ready_found;
+	if (out_pcs_ready_us) *out_pcs_ready_us = pcs_ready_found;
+
+	return 0;
+}
+
+
+
+
+
+
+

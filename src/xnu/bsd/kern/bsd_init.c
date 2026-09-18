@@ -487,6 +487,12 @@ void
 bsd_init(void)
 {
 	xzs_early_puts("[XZS-BOOT] [D30] bsd_init ENTERED\n");
+
+#if CONFIG_XZS_BRINGUP
+	/* Phase D2-C2.4E: Exact Sony/Linux L28 Regulator Replay + PMIC State Discovery + Controlled PHY Retest */
+	extern void xzs_rpm_phase_d2c24e_probe(void);
+	xzs_rpm_phase_d2c24e_probe();
+#endif
 	struct uthread *ut;
 	vnode_t init_rootvnode = NULLVP;
 	struct proc_ro_data kernproc_ro_data = {
@@ -1022,6 +1028,8 @@ bsd_init(void)
 	inittodr(0);
 	xzs_early_puts("[XZS-BOOT] [D49a] inittodr DONE\n");
 	xzs_watchdog_pet();
+
+
 
 	/* Mount the root file system. */
 	xzs_early_puts("[XZS-BOOT] [D50] ROOT DEVICE SELECTION ENTER\n");
