@@ -896,13 +896,28 @@ IOFindBSDRoot( char * rootName, unsigned int rootNameSize,
 
 	if (matching) {
 		xzs_early_puts("[XZS-BOOT] [D50-I5] serialize matching ENTER\n");
+#if CONFIG_XZS_BRINGUP
+		/*
+		 * [XZS-WORKAROUND] IOFindBSDRoot matching serialization/logging DEFERRED
+		 * Classification: XZS-WORKAROUND (debug-only early-boot allocation avoidance).
+		 * OSSerialize::ensureCapacity calls kmem_realloc_guard which allocates from kernel_map.
+		 * Deferring debug serialization avoids early VM lock/page stalls without altering matching.
+		 */
+		xzs_early_puts(
+		    "[XZS-BOOT] [XZS-WORKAROUND] "
+		    "IOFindBSDRoot matching serialization/logging DEFERRED\n");
+#else
 		OSSerialize * s = OSSerialize::withCapacity( 5 );
 
-		if (matching->serialize( s )) {
-			IOLog( "Waiting on %s\n", s->text());
+		if (s != nullptr) {
+			if (matching->serialize( s )) {
+				IOLog( "Waiting on %s\n", s->text());
+			}
+			s->release();
 		}
-		s->release();
-		xzs_early_puts("[XZS-BOOT] [D50-I5a] serialize matching RETURN\n");
+#endif
+		xzs_early_puts("[XZS-BOOT] [D50-I5a] serialize matching RETURN / DEFERRED\n");
+		xzs_watchdog_pet();
 	}
 
 	char namep[8];
