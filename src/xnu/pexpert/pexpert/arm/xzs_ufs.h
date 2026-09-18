@@ -160,6 +160,9 @@ void xzs_ufs_phase_d2c23_probe(void);
 void xzs_ufs_phase_d2c24a_probe(void);
 int xzs_ufs_phy_retest_d2c24c(uint32_t *out_c_ready, uint32_t *out_pcs_ready,
                              int *out_c_ready_us, int *out_pcs_ready_us);
+int xzs_ufs_phy_retest_d2c25(uint32_t *out_c_ready, uint32_t *out_pcs_ready_d74,
+                            uint32_t *out_pcs_ready_d68, int *out_c_ready_us,
+                            int *out_pcs_ready_us);
 
 #endif /* _PEXPERT_ARM_XZS_UFS_H */
 

@@ -1279,6 +1279,199 @@ void xzs_rpm_phase_d2c24e_probe(void)
 
 void xzs_rpm_phase_d2c24d_probe(void)
 {
-	xzs_rpm_phase_d2c24f_probe();
+	xzs_rpm_phase_d2c25_probe();
 }
 
+/*
+ * Phase D2-C2.5: Exact MSM8996 UFS QMP 14nm v2.2.0 Calibration + Power/Clock Sequence Replay
+ * Replays exact Sony sequence with:
+ * - L28 (0.925V, 18mA)
+ * - L12 (1.800V, 9mA)
+ * - LN_BB (clka/8, SWEN=1)
+ * - GCC branch clkref (0x88008 bit 0)
+ * - 76 Rate-A + 1 Rate-B calibration
+ * - 1-second bounded diagnostics
+ */
+void xzs_rpm_phase_d2c25_probe(void)
+{
+	xzs_early_puts("\n================================================================\n");
+	xzs_early_puts("  PHASE D2-C2.5: EXACT MSM8996 UFS QMP 14nm v2.2.0 REPLAY\n");
+	xzs_early_puts("  CALIBRATION (76 Rate-A + 1 Rate-B) + POWER/RESET ORDER\n");
+	xzs_early_puts("================================================================\n");
+	xzs_watchdog_pet();
+	xzs_breadcrumb(0xD250, 0x00);
+
+	/* 1. Source & Disassembly Audit Summary */
+	xzs_early_puts("\n[XZS-RPM] 1. HARDWARE REVISION & CALIBRATION AUDIT:\n");
+	xzs_early_puts("  QCOM_HW_VER:                 0x20020000 -> Major=2, Minor=2, Step=0 (v2.2.0)\n");
+	xzs_early_puts("  CALIBRATION SOURCE:          Genuine Sony twrp-Image binary (0x19df8a8 / 0x19df8a0)\n");
+	xzs_early_puts("  RATE-A ENTRIES:              76 entries (v2.2.0 exact)\n");
+	xzs_early_puts("  RATE-B OVERRIDES:            1 entry (0x0128 = 0x44)\n");
+	xzs_early_puts("  RATE SELECTION:              INITIAL_IS_RATE_B = true (ufs_qcom_power_up_sequence)\n");
+	xzs_early_puts("  GCC UFS CLKREF:              Branch clock @ GCC+0x88008 bit 0 (no RCG)\n");
+	xzs_early_puts("  TIMEOUT POLICY:              1,000,000 us (1 second) source-faithful bounded poll\n");
+	xzs_breadcrumb(0xD250, 0x10);
+
+	/* 2. Memory Mapping & GLINK Transport */
+	xzs_early_puts("\n[XZS-RPM] 2. MAPPING RPM REGISTERS & MESSAGE RAM:\n");
+	if (g_msgram_base == 0) {
+		g_msgram_base = (uintptr_t)ml_io_map(RPM_MSGRAM_PHYS_BASE, RPM_MSGRAM_SIZE);
+		if (g_msgram_base == 0) {
+			xzs_early_puts("[XZS-RPM] [FATAL] FAILED TO MAP RPM MESSAGE RAM\n");
+			xzs_spin_halt();
+			return;
+		}
+	}
+	if (g_apcs_ipc_base == 0) {
+		g_apcs_ipc_base = (uintptr_t)ml_io_map(RPM_APCS_IPC_PHYS_BASE, 0x1000);
+		if (g_apcs_ipc_base == 0) {
+			xzs_early_puts("[XZS-RPM] [FATAL] FAILED TO MAP APCS IPC DOORBELL\n");
+			xzs_spin_halt();
+			return;
+		}
+	}
+
+	uintptr_t toc_addr = g_msgram_base + RPM_MSGRAM_SIZE - RPM_TOC_SIZE;
+	struct rpm_toc *toc = (struct rpm_toc *)toc_addr;
+	if (toc->magic != RPM_TOC_MAGIC) {
+		xzs_early_puts("[XZS-RPM] [FAIL] INVALID TOC MAGIC\n");
+		xzs_spin_halt();
+		return;
+	}
+
+	uint32_t tx_offset = 0, tx_size = 0;
+	uint32_t rx_offset = 0, rx_size = 0;
+	bool tx_found = false, rx_found = false;
+	for (uint32_t i = 0; i < toc->count; i++) {
+		if (toc->entries[i].id == RPM_TX_FIFO_ID) {
+			tx_offset = toc->entries[i].offset;
+			tx_size = toc->entries[i].size;
+			tx_found = true;
+		} else if (toc->entries[i].id == RPM_RX_FIFO_ID) {
+			rx_offset = toc->entries[i].offset;
+			rx_size = toc->entries[i].size;
+			rx_found = true;
+		}
+	}
+	if (!tx_found || !rx_found) {
+		xzs_early_puts("[XZS-RPM] [FAIL] FIFOS NOT FOUND IN TOC\n");
+		xzs_spin_halt();
+		return;
+	}
+
+	g_tx_desc = (volatile struct channel_desc *)(g_msgram_base + tx_offset);
+	g_tx_fifo = (volatile uint8_t *)(g_msgram_base + tx_offset + 8U);
+	g_tx_fifo_size = tx_size;
+	g_rx_desc = (volatile struct channel_desc *)(g_msgram_base + rx_offset);
+	g_rx_fifo = (volatile uint8_t *)(g_msgram_base + rx_offset + 8U);
+	g_rx_fifo_size = rx_size;
+
+	g_tx_desc->write_index = 0;
+	g_rx_desc->read_index = 0;
+	xzs_rpm_wmb();
+
+	int h_rc = xzs_rpm_glink_handshake();
+	if (h_rc != 0) {
+		xzs_early_puts("[XZS-RPM] [FAIL] GLINK HANDSHAKE FAILED\n");
+		xzs_spin_halt();
+		return;
+	}
+	xzs_early_puts("[XZS-RPM] [PASS] RPM GLINK TRANSPORT CHANNEL VERIFIED\n");
+
+	bool l28_voted = false;
+	bool l12_voted = false;
+	bool ln_bb_voted = false;
+
+	/* 3. Vote L28 (0.925V, 18mA, SWEN=1) */
+	xzs_early_puts("\n[XZS-RPM] 3. VOTING L28 (0.925V, 18 mA, SWEN=1)...\n");
+	uint32_t l28_elapsed = 0;
+	int rc = xzs_rpm_send_request_and_wait_ack(QCOM_SMD_RPM_LDOA, 28, 925000U, 18U, true, &l28_elapsed);
+	if (rc != 0) {
+		xzs_early_puts("[XZS-RPM] [FAIL] L28 RPM VOTE FAILED\n");
+		goto rollback;
+	}
+	l28_voted = true;
+	delay(1000);
+
+	/* 4. Vote L12 (1.800V, 9mA, SWEN=1) */
+	xzs_early_puts("\n[XZS-RPM] 4. VOTING L12 (1.800V, 9 mA, SWEN=1)...\n");
+	uint32_t l12_elapsed = 0;
+	rc = xzs_rpm_send_request_and_wait_ack(QCOM_SMD_RPM_LDOA, 12, 1800000U, 9U, true, &l12_elapsed);
+	if (rc != 0) {
+		xzs_early_puts("[XZS-RPM] [FAIL] L12 RPM VOTE FAILED\n");
+		goto rollback;
+	}
+	l12_voted = true;
+	delay(1000);
+
+	/* 5. Vote LN_BB (clka/8, SWEN=1, ACTIVE + SLEEP) */
+	xzs_early_puts("\n[XZS-RPM] 5. VOTING LN_BB REF CLOCK (clka / ID 8, SWEN=1)...\n");
+	uint32_t ln_act_elapsed = 0, ln_slp_elapsed = 0;
+	rc = xzs_rpm_vote_clk_buffer(RPM_LN_BB_CLK_ID, MSM_RPM_CTX_ACTIVE_SET, true, &ln_act_elapsed);
+	if (rc != 0) {
+		xzs_early_puts("[XZS-RPM] [FAIL] LN_BB ACTIVE SET VOTE FAILED\n");
+		goto rollback;
+	}
+	rc = xzs_rpm_vote_clk_buffer(RPM_LN_BB_CLK_ID, MSM_RPM_CTX_SLEEP_SET, true, &ln_slp_elapsed);
+	if (rc != 0) {
+		xzs_early_puts("[XZS-RPM] [FAIL] LN_BB SLEEP SET VOTE FAILED\n");
+		goto rollback;
+	}
+	ln_bb_voted = true;
+	xzs_breadcrumb(0xD250, 0x20);
+	delay(1000);
+
+	/* 6. Execute Exact Sony v2.2.0 Sequence Replay */
+	uint32_t c_ready = 0, pcs_d74 = 0, pcs_d68 = 0;
+	int c_ready_us = 0, pcs_ready_us = 0;
+	xzs_ufs_phy_retest_d2c25(&c_ready, &pcs_d74, &pcs_d68, &c_ready_us, &pcs_ready_us);
+
+	/* 7. Result Classification */
+	xzs_early_puts("\n================================================================\n");
+	xzs_early_puts("  PHASE D2-C2.5 FINAL RESULT CLASSIFICATION:\n");
+	xzs_early_puts("================================================================\n");
+
+	if ((c_ready & 1U) && (pcs_d74 & 1U)) {
+		xzs_early_puts("[CLASSIFICATION: CASE A — D2-C2 COMPLETE!]\n");
+		xzs_early_puts("  C_READY=1 and PCS_READY=1 on silicon!\n");
+		xzs_early_puts("  MSM8996 UFS QMP PHY hardware initialization successful!\n");
+	} else if (c_ready & 1U) {
+		xzs_early_puts("[CLASSIFICATION: CASE B — COMMON PLL SOLVED!]\n");
+		xzs_early_puts("  C_READY=1, but PCS_READY=0 after 1-second timeout.\n");
+		xzs_early_puts("  Common PLL setup is correct; focus on PCS/lane start sequence.\n");
+	} else {
+		xzs_early_puts("[CLASSIFICATION: CASE C — C_READY=0 AFTER 1-SECOND POLL]\n");
+		xzs_early_puts("  Common PLL failed to lock with exact Sony v2.2.0 table and power order.\n");
+		xzs_early_puts("  Freeze regulators/clocks. Direct Linux-vs-XNU register comparison required.\n");
+	}
+	xzs_early_puts("================================================================\n");
+
+rollback:
+	/* 8. Reverse Order Rollback */
+	xzs_early_puts("\n[XZS-RPM] 8. REVERSE ORDER ROLLBACK:\n");
+	if (ln_bb_voted) {
+		xzs_early_puts("  Releasing LN_BB (clka/8) in SLEEP set (SWEN=0)...\n");
+		uint32_t rb_ln_slp = 0;
+		(void)xzs_rpm_vote_clk_buffer(RPM_LN_BB_CLK_ID, MSM_RPM_CTX_SLEEP_SET, false, &rb_ln_slp);
+		xzs_early_puts("  Releasing LN_BB (clka/8) in ACTIVE set (SWEN=0)...\n");
+		uint32_t rb_ln_act = 0;
+		(void)xzs_rpm_vote_clk_buffer(RPM_LN_BB_CLK_ID, MSM_RPM_CTX_ACTIVE_SET, false, &rb_ln_act);
+	}
+	if (l12_voted) {
+		xzs_early_puts("  Releasing L12 in ACTIVE set (SWEN=0)...\n");
+		uint32_t rb_l12 = 0;
+		(void)xzs_rpm_send_request_and_wait_ack(QCOM_SMD_RPM_LDOA, 12, 1800000U, 9U, false, &rb_l12);
+	}
+	if (l28_voted) {
+		xzs_early_puts("  Releasing L28 in ACTIVE set (SWEN=0)...\n");
+		uint32_t rb_l28 = 0;
+		(void)xzs_rpm_send_request_and_wait_ack(QCOM_SMD_RPM_LDOA, 28, 925000U, 18U, false, &rb_l28);
+	}
+	xzs_breadcrumb(0xD250, 0x80);
+	xzs_early_puts("[XZS-RPM] ROLLBACK COMPLETE\n");
+
+	/* 9. Terminal Recovery Pipeline */
+	xzs_early_puts("\n[XZS-RPM] 9. EXPERIMENT COMPLETE — TRIGGERING WARM RESET TO FASTBOOT\n");
+	xzs_breadcrumb(0xD250, 0x01);
+	xzs_spin_halt();
+}

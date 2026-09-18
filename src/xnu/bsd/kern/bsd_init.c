@@ -489,9 +489,9 @@ bsd_init(void)
 	xzs_early_puts("[XZS-BOOT] [D30] bsd_init ENTERED\n");
 
 #if CONFIG_XZS_BRINGUP
-	/* Phase D2-C2.4F: PM8994 L12 / VDDA-PLL + RPM LN_BB Reference Clock — Stepwise QMP UFS PHY Bring-Up */
-	extern void xzs_rpm_phase_d2c24f_probe(void);
-	xzs_rpm_phase_d2c24f_probe();
+	/* Phase D2-C2.5: Exact MSM8996 UFS QMP 14nm v2.2.0 Calibration + Sequence Replay */
+	extern void xzs_rpm_phase_d2c25_probe(void);
+	xzs_rpm_phase_d2c25_probe();
 #endif
 	struct uthread *ut;
 	vnode_t init_rootvnode = NULLVP;

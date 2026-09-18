@@ -1068,6 +1068,97 @@ static const struct xzs_ufs_phy_init_entry msm8996_rx0_tbl[] = {
 };
 
 /*
+ * Sony MSM8996 v2.2.0 Rate-A Table (76 entries)
+ * Extracted directly from genuine Xperia XZs TWRP kernel binary (twrp-Image offset 0x19df8a8).
+ */
+static const struct xzs_ufs_phy_init_entry msm8996_v2_2_0_rate_A_tbl[] = {
+	{ 0x0c04, 0x01 }, /* [ 0] UFS_PHY_POWER_DOWN_CONTROL */
+	{ 0x0194, 0x0e }, /* [ 1] QSERDES_COM_CMN_CONFIG */
+	{ 0x00ac, 0x14 }, /* [ 2] QSERDES_COM_SYSCLK_EN_SEL */
+	{ 0x0174, 0x30 }, /* [ 3] QSERDES_COM_CLK_SELECT */
+	{ 0x003c, 0x02 }, /* [ 4] QSERDES_COM_SYS_CLK_CTRL */
+	{ 0x0034, 0x08 }, /* [ 5] QSERDES_COM_BIAS_EN_CLKBUFLR_EN */
+	{ 0x000c, 0x0a }, /* [ 6] QSERDES_COM_BG_TIMER */
+	{ 0x0178, 0x00 }, /* [ 7] QSERDES_COM_HSCLK_SEL */
+	{ 0x0184, 0x0a }, /* [ 8] QSERDES_COM_CORECLK_DIV */
+	{ 0x01bc, 0x0a }, /* [ 9] QSERDES_COM_CORECLK_DIV_MODE1 */
+	{ 0x00c8, 0x01 }, /* [10] QSERDES_COM_LOCK_CMP_EN */
+	{ 0x0124, 0x00 }, /* [11] QSERDES_COM_VCO_TUNE_CTRL */
+	{ 0x00b4, 0x20 }, /* [12] QSERDES_COM_RESETSM_CNTRL */
+	{ 0x018c, 0x00 }, /* [13] QSERDES_COM_CORE_CLK_EN */
+	{ 0x00cc, 0x00 }, /* [14] QSERDES_COM_LOCK_CMP_CFG */
+	{ 0x0144, 0xff }, /* [15] QSERDES_COM_VCO_TUNE_TIMER1 */
+	{ 0x0148, 0x3f }, /* [16] QSERDES_COM_VCO_TUNE_TIMER2 */
+	{ 0x0128, 0x04 }, /* [17] QSERDES_COM_VCO_TUNE_MAP */
+	{ 0x019c, 0x05 }, /* [18] QSERDES_COM_SVS_MODE_CLK_SEL */
+	{ 0x00d0, 0x82 }, /* [19] QSERDES_COM_DEC_START_MODE0 */
+	{ 0x00dc, 0x00 }, /* [20] QSERDES_COM_DIV_FRAC_START1_MODE0 */
+	{ 0x00e0, 0x00 }, /* [21] QSERDES_COM_DIV_FRAC_START2_MODE0 */
+	{ 0x00e4, 0x00 }, /* [22] QSERDES_COM_DIV_FRAC_START3_MODE0 */
+	{ 0x0078, 0x0b }, /* [23] QSERDES_COM_CP_CTRL_MODE0 */
+	{ 0x0084, 0x16 }, /* [24] QSERDES_COM_PLL_RCTRL_MODE0 */
+	{ 0x0090, 0x28 }, /* [25] QSERDES_COM_PLL_CCTRL_MODE0 */
+	{ 0x0108, 0x80 }, /* [26] QSERDES_COM_INTEGLOOP_GAIN0_MODE0 */
+	{ 0x010c, 0x00 }, /* [27] QSERDES_COM_INTEGLOOP_GAIN1_MODE0 */
+	{ 0x012c, 0x28 }, /* [28] QSERDES_COM_VCO_TUNE1_MODE0 */
+	{ 0x0130, 0x02 }, /* [29] QSERDES_COM_VCO_TUNE2_MODE0 */
+	{ 0x004c, 0xff }, /* [30] QSERDES_COM_LOCK_CMP1_MODE0 */
+	{ 0x0050, 0x0c }, /* [31] QSERDES_COM_LOCK_CMP2_MODE0 */
+	{ 0x0054, 0x00 }, /* [32] QSERDES_COM_LOCK_CMP3_MODE0 */
+	{ 0x00d4, 0x98 }, /* [33] QSERDES_COM_DEC_START_MODE1 */
+	{ 0x00e8, 0x00 }, /* [34] QSERDES_COM_DIV_FRAC_START1_MODE1 */
+	{ 0x00ec, 0x00 }, /* [35] QSERDES_COM_DIV_FRAC_START2_MODE1 */
+	{ 0x00f0, 0x00 }, /* [36] QSERDES_COM_DIV_FRAC_START3_MODE1 */
+	{ 0x007c, 0x0b }, /* [37] QSERDES_COM_CP_CTRL_MODE1 */
+	{ 0x0088, 0x16 }, /* [38] QSERDES_COM_PLL_RCTRL_MODE1 */
+	{ 0x0094, 0x28 }, /* [39] QSERDES_COM_PLL_CCTRL_MODE1 */
+	{ 0x0110, 0x80 }, /* [40] QSERDES_COM_INTEGLOOP_GAIN0_MODE1 */
+	{ 0x0114, 0x00 }, /* [41] QSERDES_COM_INTEGLOOP_GAIN1_MODE1 */
+	{ 0x0134, 0xd6 }, /* [42] QSERDES_COM_VCO_TUNE1_MODE1 */
+	{ 0x0138, 0x00 }, /* [43] QSERDES_COM_VCO_TUNE2_MODE1 */
+	{ 0x0058, 0x32 }, /* [44] QSERDES_COM_LOCK_CMP1_MODE1 */
+	{ 0x005c, 0x0f }, /* [45] QSERDES_COM_LOCK_CMP2_MODE1 */
+	{ 0x0060, 0x00 }, /* [46] QSERDES_COM_LOCK_CMP3_MODE1 */
+	{ 0x0468, 0x45 }, /* [47] QSERDES_TX_HIGHZ_TRANSCEIVER_BIAS_DRVR_EN */
+	{ 0x0494, 0x06 }, /* [48] QSERDES_TX_LANE_MODE */
+	{ 0x0718, 0x24 }, /* [49] QSERDES_RX_SIGDET_LVL */
+	{ 0x0714, 0x0f }, /* [50] QSERDES_RX_SIGDET_CNTRL */
+	{ 0x072c, 0x40 }, /* [51] QSERDES_RX_RX_INTERFACE_MODE */
+	{ 0x071c, 0x1e }, /* [52] QSERDES_RX_SIGDET_DEGLITCH_CNTRL */
+	{ 0x0640, 0x0b }, /* [53] QSERDES_RX_UCDR_FASTLOCK_FO_GAIN */
+	{ 0x0690, 0x5b }, /* [54] QSERDES_RX_RX_TERM_BW */
+	{ 0x06c4, 0xff }, /* [55] QSERDES_RX_RX_EQ_GAIN1_LSB */
+	{ 0x06c8, 0x3f }, /* [56] QSERDES_RX_RX_EQ_GAIN1_MSB */
+	{ 0x06cc, 0xff }, /* [57] QSERDES_RX_RX_EQ_GAIN2_LSB */
+	{ 0x06d0, 0x3f }, /* [58] QSERDES_RX_RX_EQ_GAIN2_MSB */
+	{ 0x06d8, 0x0d }, /* [59] QSERDES_RX_RX_EQU_ADAPTOR_CNTRL2 */
+	{ 0x0048, 0x0f }, /* [60] */
+	{ 0x0070, 0x0f }, /* [61] */
+	{ 0x0d54, 0x15 }, /* [62] */
+	{ 0x00c4, 0x40 }, /* [63] */
+	{ 0x01b8, 0x63 }, /* [64] */
+	{ 0x0630, 0x04 }, /* [65] */
+	{ 0x0634, 0x04 }, /* [66] */
+	{ 0x063c, 0x04 }, /* [67] */
+	{ 0x0648, 0x4b }, /* [68] */
+	{ 0x013c, 0xff }, /* [69] */
+	{ 0x0140, 0x00 }, /* [70] */
+	{ 0x0d48, 0x6c }, /* [71] */
+	{ 0x0c34, 0x0a }, /* [72] */
+	{ 0x0c3c, 0x02 }, /* [73] */
+	{ 0x0ccc, 0x28 }, /* [74] */
+	{ 0x0d3c, 0x03 }, /* [75] */
+};
+
+/*
+ * Sony MSM8996 v2.2.0 Rate-B Override Table (1 entry)
+ * Extracted directly from genuine Xperia XZs TWRP kernel binary (twrp-Image offset 0x19df8a0).
+ */
+static const struct xzs_ufs_phy_init_entry msm8996_v2_2_0_rate_B_tbl[] = {
+	{ 0x0128, 0x44 }, /* QSERDES_COM_VCO_TUNE_MAP override */
+};
+
+/*
  * xzs_ufs_phase_d2c2_probe:
  * Entry point for Phase D2-C2 MSM8996 UFS QMP PHY Initialization.
  * Reproduces verified D2-B clock path, maps controller and PHY apertures,
@@ -2498,23 +2589,43 @@ xzs_ufs_log_com_status(const char *label)
 	uint32_t cmn_cfg = xzs_ufs_phy_read32(QSERDES_COM_REG_CMN_CONFIG);
 	uint32_t resetsm = xzs_ufs_phy_read32(QSERDES_COM_REG_RESETSM_CNTRL);
 	uint32_t lockcmp = xzs_ufs_phy_read32(QSERDES_COM_REG_LOCK_CMP_EN);
-	uint32_t pcs_rdy = xzs_ufs_phy_read32(QPHY_REG_PCS_READY_STATUS);
+	uint32_t sysclk  = xzs_ufs_phy_read32(0x0AC); /* SYSCLK_EN_SEL */
+	uint32_t sysctrl = xzs_ufs_phy_read32(0x03C); /* SYS_CLK_CTRL */
+	uint32_t vcoctrl = xzs_ufs_phy_read32(0x124); /* VCO_TUNE_CTRL */
+	uint32_t vcomap  = xzs_ufs_phy_read32(0x128); /* VCO_TUNE_MAP */
+	uint32_t pcs_d74 = xzs_ufs_phy_read32(0xD74); /* PCS_READY (Sony downstream) */
+	uint32_t pcs_d68 = xzs_ufs_phy_read32(0xD68); /* PCS_READY (Mainline) */
 
-	xzs_early_puts("[XZS-UFS] COM_STATUS ");
+	xzs_early_puts("[XZS-UFS] COM_SNAPSHOT [");
 	xzs_early_puts(label);
-	xzs_early_puts(": C_READY_STATUS=0x");
+	xzs_early_puts("]:\n");
+	xzs_early_puts("  C_READY_STATUS(+0x190)=0x");
 	xzs_early_puthex64((uint64_t)c_ready);
 	xzs_early_puts(" (bit0=");
-	xzs_early_puthex64((uint64_t)(c_ready & QSERDES_COM_C_READY_BIT));
-	xzs_early_puts("), CMN_CONFIG=0x");
+	xzs_early_puthex64((uint64_t)(c_ready & 1U));
+	xzs_early_puts("), CMN_CONFIG(+0x194)=0x");
 	xzs_early_puthex64((uint64_t)cmn_cfg);
-	xzs_early_puts(", RESETSM_CNTRL=0x");
+	xzs_early_puts(", RESETSM(+0x0B4)=0x");
 	xzs_early_puthex64((uint64_t)resetsm);
-	xzs_early_puts(", LOCK_CMP_EN=0x");
+	xzs_early_puts("\n  LOCK_CMP_EN(+0x0C8)=0x");
 	xzs_early_puthex64((uint64_t)lockcmp);
-	xzs_early_puts(", PCS_READY_STATUS=0x");
-	xzs_early_puthex64((uint64_t)pcs_rdy);
-	xzs_early_puts("\n");
+	xzs_early_puts(", SYSCLK_EN_SEL(+0x0AC)=0x");
+	xzs_early_puthex64((uint64_t)sysclk);
+	xzs_early_puts(", SYS_CLK_CTRL(+0x03C)=0x");
+	xzs_early_puthex64((uint64_t)sysctrl);
+	xzs_early_puts("\n  VCO_TUNE_CTRL(+0x124)=0x");
+	xzs_early_puthex64((uint64_t)vcoctrl);
+	xzs_early_puts(", VCO_TUNE_MAP(+0x128)=0x");
+	xzs_early_puthex64((uint64_t)vcomap);
+	xzs_early_puts("\n  PCS_READY_D74(+0xD74)=0x");
+	xzs_early_puthex64((uint64_t)pcs_d74);
+	xzs_early_puts(" (bit0=");
+	xzs_early_puthex64((uint64_t)(pcs_d74 & 1U));
+	xzs_early_puts("), PCS_READY_D68(+0xD68)=0x");
+	xzs_early_puthex64((uint64_t)pcs_d68);
+	xzs_early_puts(" (bit0=");
+	xzs_early_puthex64((uint64_t)(pcs_d68 & 1U));
+	xzs_early_puts(")\n");
 }
 
 static void
@@ -2978,6 +3089,236 @@ xzs_ufs_phy_retest_d2c24c(uint32_t *out_c_ready, uint32_t *out_pcs_ready,
 
 	if (out_c_ready) *out_c_ready = poll_c_ready;
 	if (out_pcs_ready) *out_pcs_ready = poll_pcs;
+	if (out_c_ready_us) *out_c_ready_us = c_ready_found;
+	if (out_pcs_ready_us) *out_pcs_ready_us = pcs_ready_found;
+
+	return 0;
+}
+
+/*
+ * Phase D2-C2.5: Exact MSM8996 UFS QMP 14nm v2.2.0 Calibration + Power/Clock Sequence Replay
+ * Replays exact Sony sequence audited from twrp-Image binary:
+ * 1. Power control (PCS_POWER_DOWN_CONTROL = 1)
+ * 2. Host PHY Soft Reset Assert (REG_UFS_CFG1 bit 1 = 1)
+ * 3. Exact 76-entry Rate A calibration table + 1-entry Rate B override (0x0128 = 0x44)
+ * 4. Host PHY Soft Reset Deassert (REG_UFS_CFG1 bit 1 = 0)
+ * 5. Start SerDes (UFS_PHY_PHY_START = 1)
+ * 6. Source-faithful bounded poll up to 1,000,000 us (1 second) with checkpoints at
+ *    10ms, 100ms, 500ms, 1000ms.
+ */
+int
+xzs_ufs_phy_retest_d2c25(uint32_t *out_c_ready, uint32_t *out_pcs_ready_d74,
+                         uint32_t *out_pcs_ready_d68, int *out_c_ready_us,
+                         int *out_pcs_ready_us)
+{
+	xzs_early_puts("\n================================================================\n");
+	xzs_early_puts("  PHASE D2-C2.5: EXACT SONY MSM8996 v2.2.0 PHY REPLAY\n");
+	xzs_early_puts("  CALIBRATION (76 Rate-A + 1 Rate-B) + POWER/RESET ORDER\n");
+	xzs_early_puts("================================================================\n");
+
+	/* 1. Map GCC, UFS, PHY MMIO if not already mapped */
+	if (g_xzs_gcc_base == 0) {
+		g_xzs_gcc_base = (vm_offset_t)ml_io_map(XZS_GCC_PHYS_BASE, XZS_GCC_MMIO_SIZE);
+		if (g_xzs_gcc_base == 0) {
+			xzs_early_puts("[XZS-UFS] [ERR] FAILED TO MAP GCC MMIO\n");
+			return -1;
+		}
+	}
+	if (g_xzs_ufs_base == 0) {
+		g_xzs_ufs_base = (vm_offset_t)ml_io_map(XZS_UFS_CONTROLLER_PHYS_BASE, XZS_UFS_CONTROLLER_MMIO_SIZE);
+		if (g_xzs_ufs_base == 0) {
+			xzs_early_puts("[XZS-UFS] [ERR] FAILED TO MAP UFS CONTROLLER MMIO\n");
+			return -2;
+		}
+	}
+	if (g_xzs_ufs_phy_base == 0) {
+		g_xzs_ufs_phy_base = (vm_offset_t)ml_io_map(XZS_UFS_PHY_PHYS_BASE, XZS_UFS_PHY_MMIO_SIZE);
+		if (g_xzs_ufs_phy_base == 0) {
+			xzs_early_puts("[XZS-UFS] [ERR] FAILED TO MAP UFS PHY MMIO\n");
+			return -3;
+		}
+	}
+
+	/* 2. Verify all bus clocks and CLKREF branch clock running */
+	uint32_t b_sys = xzs_gcc_read32(GCC_REG_SYS_NOC_UFS_AXI_CBCR);
+	if (b_sys & CBCR_CLK_OFF) xzs_gcc_enable_and_wait_branch(GCC_REG_SYS_NOC_UFS_AXI_CBCR, NULL, &b_sys);
+	uint32_t b_agg = xzs_gcc_read32(GCC_REG_AGGRE2_UFS_AXI_CBCR);
+	if (b_agg & CBCR_CLK_OFF) xzs_gcc_enable_and_wait_branch(GCC_REG_AGGRE2_UFS_AXI_CBCR, NULL, &b_agg);
+	uint32_t b_axi = xzs_gcc_read32(GCC_REG_UFS_AXI_CBCR);
+	if (b_axi & CBCR_CLK_OFF) xzs_gcc_enable_and_wait_branch(GCC_REG_UFS_AXI_CBCR, NULL, &b_axi);
+	uint32_t b_ahb = xzs_gcc_read32(GCC_REG_UFS_AHB_CBCR);
+	if (b_ahb & CBCR_CLK_OFF) xzs_gcc_enable_and_wait_branch(GCC_REG_UFS_AHB_CBCR, NULL, &b_ahb);
+	uint32_t b_clkref = xzs_gcc_read32(GCC_REG_UFS_CLKREF_CBCR);
+	if (b_clkref & CBCR_CLK_OFF) xzs_gcc_enable_and_wait_branch(GCC_REG_UFS_CLKREF_CBCR, NULL, &b_clkref);
+
+	xzs_early_puts("[XZS-UFS] GCC CLKREF branch status: 0x");
+	xzs_early_puthex64((uint64_t)b_clkref);
+	xzs_early_puts(" (CLK_OFF=");
+	xzs_early_puthex64((uint64_t)((b_clkref >> 31) & 1U));
+	xzs_early_puts(")\n");
+
+	/* Snapshot: PRE_POWER */
+	xzs_ufs_log_com_status("PRE_POWER");
+
+	/* 3. Host Core Reset Sequence via GCC_UFS_BCR */
+	xzs_early_puts("[XZS-UFS] HOST CORE RESET via GCC_UFS_BCR...\n");
+	uint32_t bcr_old = xzs_gcc_read32(GCC_REG_UFS_BCR);
+	xzs_gcc_write32(GCC_REG_UFS_BCR, bcr_old | BCR_BLK_ARES);
+	delay(200);
+	xzs_gcc_write32(GCC_REG_UFS_BCR, bcr_old & ~BCR_BLK_ARES);
+	delay(1000);
+
+	/* Re-validate bus clocks */
+	uint32_t post_sys = xzs_gcc_read32(GCC_REG_SYS_NOC_UFS_AXI_CBCR);
+	if (post_sys & CBCR_CLK_OFF) xzs_gcc_enable_and_wait_branch(GCC_REG_SYS_NOC_UFS_AXI_CBCR, NULL, &post_sys);
+	uint32_t post_agg = xzs_gcc_read32(GCC_REG_AGGRE2_UFS_AXI_CBCR);
+	if (post_agg & CBCR_CLK_OFF) xzs_gcc_enable_and_wait_branch(GCC_REG_AGGRE2_UFS_AXI_CBCR, NULL, &post_agg);
+	uint32_t post_axi = xzs_gcc_read32(GCC_REG_UFS_AXI_CBCR);
+	if (post_axi & CBCR_CLK_OFF) xzs_gcc_enable_and_wait_branch(GCC_REG_UFS_AXI_CBCR, NULL, &post_axi);
+
+	/* 4. PHY Analog Power Control: power_control(true) */
+	xzs_early_puts("[XZS-UFS] PHY POWER CONTROL (UFS_PHY_POWER_DOWN_CONTROL = 1)...\n");
+	xzs_ufs_phy_write32(QPHY_REG_PCS_POWER_DOWN_CONTROL, QPHY_PCS_PWRDN_ACTIVE);
+	__asm__ volatile("dsb sy; isb; dsb sy" ::: "memory");
+	delay(1000);
+
+	/* Snapshot: POST_POWER */
+	xzs_ufs_log_com_status("POST_POWER");
+	xzs_breadcrumb(0xD250, 0x30);
+
+	/* 5. Host PHY Soft Reset Assert (REG_UFS_CFG1 bit 1 = 1) */
+	xzs_early_puts("[XZS-UFS] ASSERTING HOST PHY SOFT RESET (REG_UFS_CFG1 bit 1 = 1)...\n");
+	uint32_t cfg1 = xzs_ufs_read32(UFS_QCOM_REG_CFG1);
+	xzs_ufs_write32(UFS_QCOM_REG_CFG1, cfg1 | UFS_QCOM_CFG1_PHY_SOFT_RESET);
+	__asm__ volatile("dsb sy; isb; dsb sy" ::: "memory");
+	delay(1000);
+
+	/* 6. Program Exact Sony v2.2.0 Rate-A Table (76 entries) */
+	xzs_early_puts("[XZS-UFS] PROGRAMMING SONY v2.2.0 RATE-A TABLE (76 entries)...\n");
+	for (size_t i = 0; i < sizeof(msm8996_v2_2_0_rate_A_tbl)/sizeof(msm8996_v2_2_0_rate_A_tbl[0]); i++) {
+		xzs_ufs_phy_write32(msm8996_v2_2_0_rate_A_tbl[i].offset, msm8996_v2_2_0_rate_A_tbl[i].val);
+	}
+	__asm__ volatile("dsb sy; isb" ::: "memory");
+
+	/* 7. Program Exact Sony v2.2.0 Rate-B Override (1 entry: 0x0128 = 0x44) */
+	xzs_early_puts("[XZS-UFS] APPLYING SONY v2.2.0 RATE-B OVERRIDE (0x0128 = 0x44)...\n");
+	xzs_ufs_phy_write32(msm8996_v2_2_0_rate_B_tbl[0].offset, msm8996_v2_2_0_rate_B_tbl[0].val);
+	__asm__ volatile("dsb sy; isb" ::: "memory");
+
+	/* 8. Host PHY Soft Reset Deassert (REG_UFS_CFG1 bit 1 = 0) */
+	xzs_early_puts("[XZS-UFS] DEASSERTING HOST PHY SOFT RESET (REG_UFS_CFG1 bit 1 = 0)...\n");
+	xzs_ufs_write32(UFS_QCOM_REG_CFG1, cfg1 & ~UFS_QCOM_CFG1_PHY_SOFT_RESET);
+	__asm__ volatile("dsb sy; isb; dsb sy" ::: "memory");
+	delay(1000);
+
+	/* Snapshot: POST_CAL */
+	xzs_ufs_log_com_status("POST_CAL");
+	xzs_breadcrumb(0xD250, 0x40);
+
+	/* 9. Start SerDes */
+	xzs_early_puts("[XZS-UFS] STARTING SERDES (UFS_PHY_PHY_START = 1)...\n");
+	uint32_t start_val = xzs_ufs_phy_read32(QPHY_REG_START_CTRL);
+	xzs_ufs_phy_write32(QPHY_REG_START_CTRL, start_val | QPHY_START_CTRL_SERDES_START);
+	__asm__ volatile("dsb sy; isb; dsb sy" ::: "memory");
+	xzs_breadcrumb(0xD250, 0x50);
+
+	/* 10. Source-Faithful Bounded Poll (up to 1,000,000 us = 1 second) */
+	xzs_early_puts("[XZS-UFS] POLLING READINESS (100 us interval, up to 1,000,000 us = 1 sec)...\n");
+	uint32_t poll_c_ready = 0;
+	uint32_t poll_pcs_d74 = 0;
+	uint32_t poll_pcs_d68 = 0;
+	int c_ready_found = 0;
+	int pcs_ready_found = 0;
+
+	for (int iter = 1; iter <= 10000; iter++) {
+		delay(100); /* 100 us */
+		poll_c_ready = xzs_ufs_phy_read32(QSERDES_COM_REG_C_READY_STATUS);
+		poll_pcs_d74 = xzs_ufs_phy_read32(0xD74);
+		poll_pcs_d68 = xzs_ufs_phy_read32(0xD68);
+
+		if ((poll_c_ready & 1U) && c_ready_found == 0) {
+			c_ready_found = iter * 100;
+			xzs_early_puts("[XZS-UFS] >>> C_READY ASSERTED @ ");
+			xzs_early_puthex64((uint64_t)c_ready_found);
+			xzs_early_puts(" us (raw=0x");
+			xzs_early_puthex64((uint64_t)poll_c_ready);
+			xzs_early_puts(") <<<\n");
+			xzs_breadcrumb(0xD250, 0x65);
+		}
+
+		if ((poll_pcs_d74 & 1U) && pcs_ready_found == 0) {
+			pcs_ready_found = iter * 100;
+			xzs_early_puts("[XZS-UFS] >>> PCS_READY (D74) ASSERTED @ ");
+			xzs_early_puthex64((uint64_t)pcs_ready_found);
+			xzs_early_puts(" us (raw=0x");
+			xzs_early_puthex64((uint64_t)poll_pcs_d74);
+			xzs_early_puts(") <<<\n");
+			xzs_breadcrumb(0xD250, 0x75);
+		}
+
+		/* Diagnostic checkpoints */
+		if (iter == 100) { /* 10 ms */
+			xzs_ufs_log_com_status("POST_START_10ms");
+			if (c_ready_found == 0) xzs_breadcrumb(0xD250, 0x61);
+			if (pcs_ready_found == 0) xzs_breadcrumb(0xD250, 0x71);
+		} else if (iter == 1000) { /* 100 ms */
+			xzs_ufs_log_com_status("POST_START_100ms");
+			if (c_ready_found == 0) xzs_breadcrumb(0xD250, 0x62);
+			if (pcs_ready_found == 0) xzs_breadcrumb(0xD250, 0x72);
+		} else if (iter == 5000) { /* 500 ms */
+			xzs_ufs_log_com_status("POST_START_500ms");
+			if (c_ready_found == 0) xzs_breadcrumb(0xD250, 0x63);
+			if (pcs_ready_found == 0) xzs_breadcrumb(0xD250, 0x73);
+		} else if (iter == 10000) { /* 1000 ms */
+			xzs_ufs_log_com_status("POST_START_1s");
+			if (c_ready_found == 0) xzs_breadcrumb(0xD250, 0x64);
+			if (pcs_ready_found == 0) xzs_breadcrumb(0xD250, 0x74);
+		}
+
+		if (c_ready_found > 0 && pcs_ready_found > 0) {
+			xzs_early_puts("[XZS-UFS] BOTH C_READY AND PCS_READY ASSERTED! Exiting poll early.\n");
+			break;
+		}
+	}
+
+	/* Summary */
+	xzs_early_puts("\n[XZS-UFS] POLL RESULTS SUMMARY:\n");
+	xzs_early_puts("  C_READY:   ");
+	if (c_ready_found > 0) {
+		xzs_early_puts("PASS @ ");
+		xzs_early_puthex64((uint64_t)c_ready_found);
+		xzs_early_puts(" us\n");
+	} else {
+		xzs_early_puts("TIMEOUT (0 after 1s, raw=0x");
+		xzs_early_puthex64((uint64_t)poll_c_ready);
+		xzs_early_puts(")\n");
+	}
+
+	xzs_early_puts("  PCS_READY: ");
+	if (pcs_ready_found > 0) {
+		xzs_early_puts("PASS @ ");
+		xzs_early_puthex64((uint64_t)pcs_ready_found);
+		xzs_early_puts(" us\n");
+	} else {
+		xzs_early_puts("TIMEOUT (0 after 1s, d74=0x");
+		xzs_early_puthex64((uint64_t)poll_pcs_d74);
+		xzs_early_puts(", d68=0x");
+		xzs_early_puthex64((uint64_t)poll_pcs_d68);
+		xzs_early_puts(")\n");
+	}
+
+	/* 11. Invariant Check: HCE and UIC must remain 0 */
+	uint32_t final_hce = xzs_ufs_read32(UFSHCI_REG_HCE);
+	uint32_t final_hcs = xzs_ufs_read32(UFSHCI_REG_HCS);
+	xzs_early_puts("[XZS-UFS] INVARIANT CHECK: HCE=0x");
+	xzs_early_puthex64((uint64_t)final_hce);
+	xzs_early_puts(", HCS=0x");
+	xzs_early_puthex64((uint64_t)final_hcs);
+	xzs_early_puts("\n");
+
+	if (out_c_ready) *out_c_ready = poll_c_ready;
+	if (out_pcs_ready_d74) *out_pcs_ready_d74 = poll_pcs_d74;
+	if (out_pcs_ready_d68) *out_pcs_ready_d68 = poll_pcs_d68;
 	if (out_c_ready_us) *out_c_ready_us = c_ready_found;
 	if (out_pcs_ready_us) *out_pcs_ready_us = pcs_ready_found;
 
