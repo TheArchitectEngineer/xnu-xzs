@@ -489,9 +489,9 @@ bsd_init(void)
 	xzs_early_puts("[XZS-BOOT] [D30] bsd_init ENTERED\n");
 
 #if CONFIG_XZS_BRINGUP
-	/* Phase D2-M4E: First Physical eMMC Data Transfer — CMD8 / SEND_EXT_CSD */
-	extern void xzs_sdhci_phase_d2m4e_probe(void);
-	xzs_sdhci_phase_d2m4e_probe();
+	/* Phase D2-M5: Final D2 Acceptance — CMD17 / READ_SINGLE_BLOCK */
+	extern void xzs_sdhci_phase_d2m5_probe(void);
+	xzs_sdhci_phase_d2m5_probe();
 #endif
 	struct uthread *ut;
 	vnode_t init_rootvnode = NULLVP;
