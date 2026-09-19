@@ -310,4 +310,35 @@ void xzs_sdhci_phase_d2m4dd_probe(void);
 void xzs_sdhci_phase_d2m4e_probe(void);
 void xzs_sdhci_phase_d2m5_probe(void);
 
+/*
+ * Phase D3: GPT Header & Partition Parsing Declarations & Invariants
+ */
+#define GPT_SIGNATURE_MAGIC             0x5452415020494645ULL /* "EFI PART" in little-endian */
+#define GPT_REVISION_1_0                0x00010000U
+#define GPT_MIN_HEADER_SIZE             92U
+#define GPT_MAX_HEADER_SIZE             512U
+#define GPT_MIN_ENTRY_SIZE              128U
+
+int  xzs_emmc_read_sector_pio(uint32_t lba, uint64_t validated_sector_count, uint8_t out[512]);
+void xzs_sdhci_phase_d3m1_probe(void);
+
+/*
+ * Phase D3-M2A: Primary GPT Partition Entry Array Declarations
+ */
+#define GPT_PRIMARY_ARRAY_BUFFER_CAPACITY 16384U
+
+void xzs_sdhci_phase_d3m2a_probe(void);
+
+/*
+ * Phase D3-M2B: Primary GPT Partition Map Parsing Declarations
+ */
+#define GPT_MAX_ENTRY_SLOTS             128U
+
+void xzs_sdhci_phase_d3m2b_probe(void);
+
+/*
+ * Phase D3-M3: Backup GPT Header & Partition Entry Array Verification
+ */
+void xzs_sdhci_phase_d3m3_probe(void);
+
 #endif /* _PEXPERT_ARM_XZS_SDHCI_H */
