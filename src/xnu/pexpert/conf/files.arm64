@@ -11,4 +11,5 @@ pexpert/arm/hwtrace/apt_msg.c         standard
 pexpert/arm/xzs_ufs.c                 standard
 pexpert/arm/xzs_spmi.c                standard
 pexpert/arm/xzs_rpm.c                 standard
+pexpert/arm/xzs_sdhci.c               standard
 

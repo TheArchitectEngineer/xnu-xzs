@@ -489,9 +489,9 @@ bsd_init(void)
 	xzs_early_puts("[XZS-BOOT] [D30] bsd_init ENTERED\n");
 
 #if CONFIG_XZS_BRINGUP
-	/* Phase D2-C2.10: MSM8996 QMP UFS — Analog Power / Reference Clock Proof + Exact vddp-ref-clk Replay */
-	extern void xzs_rpm_phase_d2c210_probe(void);
-	xzs_rpm_phase_d2c210_probe();
+	/* Phase D2-M1: MSM8996 SDC1 / eMMC Hardware Identity + Read-Only Probe */
+	extern void xzs_sdhci_phase_d2m1_probe(void);
+	xzs_sdhci_phase_d2m1_probe();
 #endif
 	struct uthread *ut;
 	vnode_t init_rootvnode = NULLVP;

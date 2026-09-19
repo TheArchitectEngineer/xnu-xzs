@@ -619,12 +619,14 @@ Hardware readback on MSM8996 silicon before controller bus bringup:
    - `aboot` (`target/msm8996/init.c` `0xaa07b71c`): calls `mmc_init()`. UFS initialization is uncalled dead code.
    - `xbl.img`: loads images via `BDEV_SD_DRIVER` (`/hdev/sdc1`). UFS driver is uninvoked.
    - Boot firmware contains **ZERO** QMP UFS PHY calibration tables or SerDes start logic.
-4. **Resolution of Linux Probe Failure & C_READY = 0:**
-   - Explains why `ufshcd 624000.ufshc` probe failed in Linux with `-ENODEV` (`err -19`).
-   - Explains why `C_READY` never asserted across D2-C2.1 through D2-C2.10: the differential SerDes lanes terminate without a partner transceiver.
+4. **Hardware Verified Findings:**
+   - HARDWARE VERIFIED: Physical primary storage is eMMC.
+   - HARDWARE VERIFIED: No UFS block device participates in the boot/storage path.
+   - PROJECT CONCLUSION: UFS is an invalid storage target for XZs.
+   - UNRESOLVED / NO LONGER RELEVANT: Reason unused QMP UFS C_READY remained 0.
 
 ### 14.3 Outcome & Status
 ```text
-D2-C2 STATUS: CLOSED / PHYSICAL_STORAGE_IS_EMMC (7464900.sdhci)
+D2-C2 STATUS: CLOSED / PHYSICAL_STORAGE_IS_EMMC (sdhc_1 @ 0x7464900)
 ```
-- All storage bringup must pivot to the Qualcomm SDCC v5 controller at `0x7464900` (`sdhci@7464900`).
+- All storage bringup pivots to Qualcomm SDCC v5 controller SDC1 (`sdhc_1` @ `0x7464900`).

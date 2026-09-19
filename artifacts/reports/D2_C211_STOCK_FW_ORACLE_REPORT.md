@@ -298,25 +298,35 @@ Summary of top rows:
 
 ---
 
-## INFERENCES
+## HARDWARE VERIFIED & PROJECT CONCLUSIONS
 
-1. **Root Cause of `C_READY = 0` Across All Phases (D2-C2.1 through D2-C2.10):**
-   The QMP UFS SerDes common PLL fails to lock and PCS never achieves ready status because **there is no physical UFS device soldered to the PCB**. The differential TX/RX SerDes lines are floating or terminated without a partner transceiver.
-2. **Sony Platform Architecture:**
+```text
+HARDWARE VERIFIED:
+Physical primary storage is eMMC.
+
+HARDWARE VERIFIED:
+No UFS block device participates in the boot/storage path.
+
+PROJECT CONCLUSION:
+UFS is an invalid storage target for XZs.
+
+UNRESOLVED / NO LONGER RELEVANT:
+Reason unused QMP UFS C_READY remained 0.
+```
+
+1. **Sony Platform Architecture:**
    Sony selected eMMC 5.1 for the Xperia XZ (Kagura) and Xperia XZs (Keyaki / G8231), retaining Qualcomm's default MSM8996 device tree skeleton with unpopulated UFS nodes.
-3. **Path Forward for Storage:**
-   To boot XNU and access storage partitions (Mach-O kernel, ramdisk, rootfs) on Sony Xperia XZs, XNU must initialize the Qualcomm SDHCI controller at `0x7464900` (`sdhci@7464900`), NOT the UFS controller.
+2. **Path Forward for Storage:**
+   To boot XNU and access storage partitions (Mach-O kernel, ramdisk, rootfs) on Sony Xperia XZs, XNU must initialize the Qualcomm SDHCI controller SDC1 (`sdhc_1` @ `0x7464900`), NOT UFS.
 
 ---
 
-## Candidate for D2-C2.12
-
-### Proposed Pivot to Primary Boot Storage: MSM8996 SDHCI eMMC Bringup
-1. **Target Hardware:** Qualcomm SDCC v5 controller at `0x7464900` (`sdhci@7464900`).
-2. **Clocks:** `SDCC2_APPS_CLK_SRC` (GPLL0 divider) + `GCC_SDCC2_APPS_CBCR` + `GCC_SDCC2_AHB_CBCR`.
-3. **Power Rails:** `PM8994_L20` (VDD) and `PM8994_L21` (VDD_IO).
-4. **Physical Storage:** Samsung `BJNB4R` eMMC 5.1.
-5. **Phase Objective:** Prove MMIO communication and read MBR/GPT partition table from `mmcblk0` in native XNU.
+## Primary Boot Storage Target: MSM8996 SDC1 eMMC (sdhc_1)
+1. **Target Hardware:** Qualcomm SDCC v5 controller SDC1 (`sdhc_1` @ `0x7464900` / core @ `0x7464000` / CMDQ @ `0x7464E00`).
+2. **Clocks:** `GCC_SDCC1_APPS_CLK`, `GCC_SDCC1_AHB_CLK`, `GCC_SDCC1_ICE_CORE_CLK`.
+3. **Power Rails:** Derived directly from live Sony DT (`vdd` = `pm8994_l20`, `vdd-io` = `pm8994_s4`).
+4. **Physical Storage:** Samsung `BJNB4R` eMMC 5.1 (`/dev/block/mmcblk0`).
+5. **Phase Objective:** Pivot storage bringup to SDC1 eMMC.
 
 ---
 
@@ -324,4 +334,4 @@ Summary of top rows:
 ```text
 D2-C2 STATUS: CLOSED / HARDWARE_TARGET_RESOLVED (PHYSICAL_STORAGE_IS_EMMC)
 ```
-The UFS hardware line is conclusively resolved: physical UFS hardware is absent on the Sony Xperia XZs. All storage bringup must target `sdhci@7464900`.
+The UFS investigation is closed: physical UFS hardware is absent on the Sony Xperia XZs. All storage bringup must target `sdhc_1` @ `0x7464900` (SDC1).
