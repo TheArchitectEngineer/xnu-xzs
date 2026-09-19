@@ -489,9 +489,9 @@ bsd_init(void)
 	xzs_early_puts("[XZS-BOOT] [D30] bsd_init ENTERED\n");
 
 #if CONFIG_XZS_BRINGUP
-	/* Phase D2-M4D-C: eMMC CSD Identification — CMD9 / SEND_CSD */
-	extern void xzs_sdhci_phase_d2m4dc_probe(void);
-	xzs_sdhci_phase_d2m4dc_probe();
+	/* Phase D2-M4D-D: eMMC Card Selection — CMD7 / SELECT_CARD */
+	extern void xzs_sdhci_phase_d2m4dd_probe(void);
+	xzs_sdhci_phase_d2m4dd_probe();
 #endif
 	struct uthread *ut;
 	vnode_t init_rootvnode = NULLVP;

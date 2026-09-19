@@ -96,9 +96,9 @@ This exactly matches stock Sony ABOOT and SDHCI specification.
 Every physical execution executes the complete, deterministic bringup pipeline:
 1. **Clock & Host Reset**:
    - `SDCC1_APPS_CFG_RCGR = 0x00002017` (verified 400-kHz SDC1 configuration).
-   - `SDCC1_HC_VENDOR_SPEC = 0x00000100` (POR prerequisite).
+   - `SDCC1_HC_VENDOR_SPEC = 0x00000A1C` (POR prerequisite `SDCC1_HC_VENDOR_SPEC_POR`).
    - `SDHCI_SOFTWARE_RESET = 0x01` (`SDHCI_RESET_ALL`).
-   - `MSM_SDCC_HC_MODE = 0x00000001` (re-asserted).
+   - `MSM_SDCC_HC_MODE = 0x00002001` (`MSM_SDCC_HC_MODE_PREREQ = HC_MODE_EN | FF_CLK_SW_RST_DIS`).
 2. **Host Power & Clocks**:
    - `SDHCI_POWER_CONTROL = 0x0B` (1.8-V bus voltage selector + `SD_BUS_POWER` ON).
    - `SDHCI_CLOCK_CONTROL = 0x0007` (Internal clock enabled, stable, card clock enabled).
@@ -205,7 +205,7 @@ Decoded in accordance with JEDEC Standard JESD84-B51:
 | `READ_BL_LEN` | `0x9` | 512 bytes max read block length ($2^9$) |
 | `C_SIZE` | `0x0FFF` | Device size parameter (4095) |
 | `C_SIZE_MULT` | `0x7` | Device size multiplier ($2^{7+2} = 512$) |
-| `ERASE_GRP_SIZE` | `0x1F` | Erase group size (31 write blocks) |
+| `ERASE_GRP_SIZE` | `0x1F` | Legacy erase group size raw field (legacy formula: $(ERASE\_GRP\_SIZE + 1) \times (ERASE\_GRP\_MULT + 1)$ blocks; obsolete in eMMC 5.1, see EXT_CSD) |
 | `WP_GRP_SIZE` | `0x0F` | Write protect group size (15 erase groups) |
 | `R2W_FACTOR` | `0x3` | Write timeout factor (8 times read timeout) |
 | `WRITE_BL_LEN` | `0x9` | 512 bytes max write block length ($2^9$) |
