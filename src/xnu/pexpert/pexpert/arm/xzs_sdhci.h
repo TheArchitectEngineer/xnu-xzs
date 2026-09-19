@@ -243,7 +243,48 @@ void xzs_sdhci_phase_d2m3_probe(void);
 void xzs_sdhci_phase_d2m4a_probe(void);
 void xzs_sdhci_phase_d2m4b_probe(void);
 void xzs_sdhci_phase_d2m4c_probe(void);
+/*
+ * eMMC R1 Response Bit Definitions & Error Reject Mask (JEDEC JESD84-B51)
+ */
+#define R1_OUT_OF_RANGE                 (1U << 31)
+#define R1_ADDRESS_ERROR                (1U << 30)
+#define R1_BLOCK_LEN_ERROR              (1U << 29)
+#define R1_ERASE_SEQ_ERROR              (1U << 28)
+#define R1_ERASE_PARAM                  (1U << 27)
+#define R1_WP_VIOLATION                 (1U << 26)
+#define R1_CARD_IS_LOCKED               (1U << 25)
+#define R1_LOCK_UNLOCK_FAILED           (1U << 24)
+#define R1_COM_CRC_ERROR                (1U << 23)
+#define R1_ILLEGAL_COMMAND              (1U << 22)
+#define R1_CARD_ECC_FAILED              (1U << 21)
+#define R1_CC_ERROR                     (1U << 20)
+#define R1_ERROR                        (1U << 19)
+#define R1_CID_CSD_OVERWRITE            (1U << 16)
+#define R1_SWITCH_ERROR                 (1U << 7)
+
+#define MMC_R1_REJECT_MASK ( \
+	R1_OUT_OF_RANGE       | \
+	R1_ADDRESS_ERROR      | \
+	R1_BLOCK_LEN_ERROR    | \
+	R1_ERASE_SEQ_ERROR    | \
+	R1_ERASE_PARAM        | \
+	R1_WP_VIOLATION       | \
+	R1_CARD_IS_LOCKED     | \
+	R1_LOCK_UNLOCK_FAILED | \
+	R1_COM_CRC_ERROR      | \
+	R1_ILLEGAL_COMMAND    | \
+	R1_CARD_ECC_FAILED    | \
+	R1_CC_ERROR           | \
+	R1_ERROR              | \
+	R1_CID_CSD_OVERWRITE  | \
+	R1_SWITCH_ERROR)
+
+#define MMC_R1_CURRENT_STATE_MASK       0x00001E00U
+#define MMC_R1_CURRENT_STATE_SHIFT      9
+#define MMC_STATE_STBY                  3
+
 void xzs_sdhci_phase_d2m4c1_probe(void);
 void xzs_sdhci_phase_d2m4da_probe(void);
+void xzs_sdhci_phase_d2m4db_probe(void);
 
 #endif /* _PEXPERT_ARM_XZS_SDHCI_H */

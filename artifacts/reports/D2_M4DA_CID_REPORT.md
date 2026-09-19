@@ -89,7 +89,7 @@ Every fresh run starts from cold/uninitialized state:
    - `SDCC1_HC_VENDOR_SPEC = 0x00000A1C` (POR value)
 4. **Host Reset**: `SDHCI_SOFTWARE_RESET = 0x01` (`SDHCI_RESET_ALL`), polled until cleared.
 5. **Host Power & Clocks**:
-   - `SDHCI_POWER_CONTROL = 0x0B` (3.3V, `POWER_ON`)
+   - `SDHCI_POWER_CONTROL = 0x0B` (1.8-V selector + SD_BUS_POWER ON)
    - `SDHCI_CLOCK_CONTROL = 0x0007` (`INTERNAL_EN` | `INTERNAL_STABLE` | `CARD_EN`)
    - `SDHCI_TIMEOUT_CONTROL = 0x0E`
    - `SDHCI_HOST_CONTROL = 0x00` (1-bit mode)
@@ -121,7 +121,7 @@ Every fresh run starts from cold/uninitialized state:
 
 ## Raw SDHCI R2 Registers
 
-Captured immediately upon `COMMAND_COMPLETE` before any translation:
+Captured immediately upon `COMMAND_COMPLETE` before any transformation:
 
 ```text
 RAW_RESP0 (HC+0x10): 0xC7C03814
@@ -134,7 +134,7 @@ RAW_RESP3 (HC+0x1C): 0x00150100
 
 ## Reconstructed CID Words
 
-Applying the ABOOT extraction algorithm:
+Applying the stock ABOOT extraction algorithm:
 
 ```text
 CID_WORD0 (MSB): 0x15010042
@@ -170,9 +170,9 @@ Decoded per JEDEC eMMC Standard (JESD84-B51, Section 7.2):
 | **CBX** (Device / BGA Type) | [119:114] | `0x01` | **BGA / Discrete Embedded Device** |
 | **OID** (OEM / Application ID) | [113:104] | `0x00` | OEM ID 0 |
 | **PNM** (Product Name) | [103:56] | `0x42 0x4A 0x4E 0x42 0x34 0x52` | **`"BJNB4R"`** |
-| **PRV** (Product Revision) | [55:48] | `0x0F` | **Revision 0.15** (v1.5) |
+| **PRV** (Product Revision) | [55:48] | `0x0F` | `CID_PRV_RAW = 0x0F` (unlabeled pending vendor evidence) |
 | **PSN** (Product Serial Number) | [47:16] | `0xDAC7C038` | Serial `3670524024` |
-| **MDT** (Manufacturing Date) | [15:8] | `0x14` | **Month: 4 (April), Year: 2014** |
+| **MDT** (Manufacturing Date) | [15:8] | `0x14` | `CID_MDT_RAW = 0x14`: `CID_MONTH = 1` (January). Production year depends on EXT_CSD revision: 2017 if EXT_CSD_REV >= 6 (2013+4), or 2001 if EXT_CSD_REV < 6 (1997+4). |
 | **CRC** (CRC7 Checksum) | [7:1] | `0x00` | (Stripped by SDHCI host controller) |
 
 ---
