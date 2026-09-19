@@ -216,6 +216,14 @@
 #define SDHCI_INT_ALL_MASK              0xFFFFFFFFU
 
 /*
+ * SDHCI Response Registers (relative to HC Base: 0x07464900)
+ */
+#define SDHCI_RESPONSE_0                0x10U
+#define SDHCI_RESPONSE_1                0x14U
+#define SDHCI_RESPONSE_2                0x18U
+#define SDHCI_RESPONSE_3                0x1CU
+
+/*
  * Function Prototypes
  */
 uint32_t xzs_sdhci_hc_read32(uint32_t offset);
@@ -233,5 +241,6 @@ void xzs_sdhci_phase_d2m1_probe(void);
 void xzs_sdhci_phase_d2m2_probe(void);
 void xzs_sdhci_phase_d2m3_probe(void);
 void xzs_sdhci_phase_d2m4a_probe(void);
+void xzs_sdhci_phase_d2m4b_probe(void);
 
 #endif /* _PEXPERT_ARM_XZS_SDHCI_H */
