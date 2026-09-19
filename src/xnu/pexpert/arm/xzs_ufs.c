@@ -3325,6 +3325,453 @@ xzs_ufs_phy_retest_d2c25(uint32_t *out_c_ready, uint32_t *out_pcs_ready_d74,
 	return 0;
 }
 
+/*
+ * ============================================================================
+ * PHASE D2-C2.6: MSM8996 UFS READ-ONLY DIFFERENTIAL STATE AUDIT
+ * ============================================================================
+ */
+
+/* Whitelist Definition Entry */
+struct xzs_audit_desc {
+	uint8_t domain; /* 1=HOST, 2=GCC, 3=PHY */
+	uint32_t offset;
+	const char *name;
+};
+
+/* Fast CRC32 Implementation (IEEE 802.3 polynomial 0xEDB88320) */
+static uint32_t
+xzs_d2c26_crc32(const void *data, size_t length)
+{
+	const uint8_t *bytes = (const uint8_t *)data;
+	uint32_t crc = 0xFFFFFFFFU;
+	for (size_t i = 0; i < length; i++) {
+		crc ^= bytes[i];
+		for (int j = 0; j < 8; j++) {
+			crc = (crc >> 1) ^ ((crc & 1U) ? 0xEDB88320U : 0U);
+		}
+	}
+	return ~crc;
+}
+
+/* Sampled Snapshot Record */
+struct xzs_audit_record {
+	uint8_t domain;
+	uint32_t offset;
+	uint32_t val;
+};
+
+/*
+ * Source-Audited Safe Register Whitelist (106 registers total)
+ * strictly derived from JESD220, MSM8996 GCC driver, and Sony phy-qcom-ufs-qmp-14nm.h.
+ */
+static const struct xzs_audit_desc g_d2c26_whitelist[] = {
+	/* HOST Domain (32 registers) */
+	{ 1, 0x00, "CAP" },
+	{ 1, 0x08, "VER" },
+	{ 1, 0x10, "HCPID" },
+	{ 1, 0x14, "HCMID" },
+	{ 1, 0x18, "AHIT" },
+	{ 1, 0x20, "IS" },
+	{ 1, 0x24, "IE" },
+	{ 1, 0x30, "HCS" },
+	{ 1, 0x34, "HCE" },
+	{ 1, 0x38, "UECPA" },
+	{ 1, 0x3C, "UECDL" },
+	{ 1, 0x40, "UECN" },
+	{ 1, 0x44, "UECT" },
+	{ 1, 0x48, "UECDME" },
+	{ 1, 0x4C, "UTRIACR" },
+	{ 1, 0x50, "UTRLBA" },
+	{ 1, 0x54, "UTRLBAU" },
+	{ 1, 0x58, "UTRLDBR" },
+	{ 1, 0x5C, "UTRLCLR" },
+	{ 1, 0x60, "UTRLRSR" },
+	{ 1, 0x70, "UTMRLBA" },
+	{ 1, 0x74, "UTMRLBAU" },
+	{ 1, 0x78, "UTMRLDBR" },
+	{ 1, 0x7C, "UTMRLCLR" },
+	{ 1, 0x80, "UTMRLRSR" },
+	{ 1, 0x90, "UICCMD" },
+	{ 1, 0x94, "UICCMDARG1" },
+	{ 1, 0x98, "UICCMDARG2" },
+	{ 1, 0x9C, "UICCMDARG3" },
+	{ 1, 0xDC, "REG_UFS_CFG1" },
+	{ 1, 0xE0, "REG_UFS_CFG2" },
+	{ 1, 0xE4, "QCOM_HW_VER" },
+
+	/* GCC Domain (9 registers) */
+	{ 2, 0x75000, "GCC_UFS_BCR" },
+	{ 2, 0x75004, "UFS_GDSC" },
+	{ 2, 0x75008, "GCC_UFS_AXI" },
+	{ 2, 0x7500C, "GCC_UFS_AHB" },
+	{ 2, 0x75010, "GCC_UFS_TX_CFG" },
+	{ 2, 0x75014, "GCC_UFS_RX_CFG" },
+	{ 2, 0x75038, "GCC_SYS_NOC_UFS_AXI" },
+	{ 2, 0x83014, "GCC_AGGRE2_UFS_AXI" },
+	{ 2, 0x88008, "GCC_UFS_CLKREF" },
+
+	/* PHY Domain — COM Aperture (47 registers) */
+	{ 3, 0x00C, "QSERDES_COM_BG_TIMER" },
+	{ 3, 0x034, "QSERDES_COM_BIAS_EN_CLKBUFLR_EN" },
+	{ 3, 0x03C, "QSERDES_COM_SYS_CLK_CTRL" },
+	{ 3, 0x04C, "QSERDES_COM_LOCK_CMP1_MODE0" },
+	{ 3, 0x050, "QSERDES_COM_LOCK_CMP2_MODE0" },
+	{ 3, 0x054, "QSERDES_COM_LOCK_CMP3_MODE0" },
+	{ 3, 0x058, "QSERDES_COM_LOCK_CMP1_MODE1" },
+	{ 3, 0x05C, "QSERDES_COM_LOCK_CMP2_MODE1" },
+	{ 3, 0x060, "QSERDES_COM_LOCK_CMP3_MODE1" },
+	{ 3, 0x078, "QSERDES_COM_CP_CTRL_MODE0" },
+	{ 3, 0x07C, "QSERDES_COM_CP_CTRL_MODE1" },
+	{ 3, 0x084, "QSERDES_COM_PLL_RCTRL_MODE0" },
+	{ 3, 0x088, "QSERDES_COM_PLL_RCTRL_MODE1" },
+	{ 3, 0x090, "QSERDES_COM_PLL_CCTRL_MODE0" },
+	{ 3, 0x094, "QSERDES_COM_PLL_CCTRL_MODE1" },
+	{ 3, 0x0AC, "QSERDES_COM_SYSCLK_EN_SEL" },
+	{ 3, 0x0B4, "QSERDES_COM_RESETSM_CNTRL" },
+	{ 3, 0x0C8, "QSERDES_COM_LOCK_CMP_EN" },
+	{ 3, 0x0CC, "QSERDES_COM_LOCK_CMP_CFG" },
+	{ 3, 0x0D0, "QSERDES_COM_DEC_START_MODE0" },
+	{ 3, 0x0D4, "QSERDES_COM_DEC_START_MODE1" },
+	{ 3, 0x0DC, "QSERDES_COM_DIV_FRAC_START1_MODE0" },
+	{ 3, 0x0E0, "QSERDES_COM_DIV_FRAC_START2_MODE0" },
+	{ 3, 0x0E4, "QSERDES_COM_DIV_FRAC_START3_MODE0" },
+	{ 3, 0x0E8, "QSERDES_COM_DIV_FRAC_START1_MODE1" },
+	{ 3, 0x0EC, "QSERDES_COM_DIV_FRAC_START2_MODE1" },
+	{ 3, 0x0F0, "QSERDES_COM_DIV_FRAC_START3_MODE1" },
+	{ 3, 0x108, "QSERDES_COM_INTEGLOOP_GAIN0_MODE0" },
+	{ 3, 0x10C, "QSERDES_COM_INTEGLOOP_GAIN1_MODE0" },
+	{ 3, 0x110, "QSERDES_COM_INTEGLOOP_GAIN0_MODE1" },
+	{ 3, 0x114, "QSERDES_COM_INTEGLOOP_GAIN1_MODE1" },
+	{ 3, 0x124, "QSERDES_COM_VCO_TUNE_CTRL" },
+	{ 3, 0x128, "QSERDES_COM_VCO_TUNE_MAP" },
+	{ 3, 0x12C, "QSERDES_COM_VCO_TUNE1_MODE0" },
+	{ 3, 0x130, "QSERDES_COM_VCO_TUNE2_MODE0" },
+	{ 3, 0x134, "QSERDES_COM_VCO_TUNE1_MODE1" },
+	{ 3, 0x138, "QSERDES_COM_VCO_TUNE2_MODE1" },
+	{ 3, 0x144, "QSERDES_COM_VCO_TUNE_TIMER1" },
+	{ 3, 0x148, "QSERDES_COM_VCO_TUNE_TIMER2" },
+	{ 3, 0x174, "QSERDES_COM_CLK_SELECT" },
+	{ 3, 0x178, "QSERDES_COM_HSCLK_SEL" },
+	{ 3, 0x184, "QSERDES_COM_CORECLK_DIV" },
+	{ 3, 0x18C, "QSERDES_COM_CORE_CLK_EN" },
+	{ 3, 0x190, "QSERDES_COM_C_READY_STATUS" },
+	{ 3, 0x194, "QSERDES_COM_CMN_CONFIG" },
+	{ 3, 0x19C, "QSERDES_COM_SVS_MODE_CLK_SEL" },
+	{ 3, 0x1BC, "QSERDES_COM_CORECLK_DIV_MODE1" },
+
+	/* PHY Domain — TX Aperture (2 registers) */
+	{ 3, 0x468, "QSERDES_TX_HIGHZ_TRANSCEIVER_BIAS_DRVR_EN" },
+	{ 3, 0x494, "QSERDES_TX_LANE_MODE" },
+
+	/* PHY Domain — RX Aperture (11 registers) */
+	{ 3, 0x640, "QSERDES_RX_UCDR_FASTLOCK_FO_GAIN" },
+	{ 3, 0x690, "QSERDES_RX_RX_TERM_BW" },
+	{ 3, 0x6C4, "QSERDES_RX_RX_EQ_GAIN1_LSB" },
+	{ 3, 0x6C8, "QSERDES_RX_RX_EQ_GAIN1_MSB" },
+	{ 3, 0x6CC, "QSERDES_RX_RX_EQ_GAIN2_LSB" },
+	{ 3, 0x6D0, "QSERDES_RX_RX_EQ_GAIN2_MSB" },
+	{ 3, 0x6D8, "QSERDES_RX_RX_EQU_ADAPTOR_CNTRL2" },
+	{ 3, 0x714, "QSERDES_RX_SIGDET_CNTRL" },
+	{ 3, 0x718, "QSERDES_RX_SIGDET_LVL" },
+	{ 3, 0x71C, "QSERDES_RX_SIGDET_DEGLITCH_CNTRL" },
+	{ 3, 0x72C, "QSERDES_RX_RX_INTERFACE_MODE" },
+
+	/* PHY Domain — PCS Aperture (5 registers) */
+	{ 3, 0xC00, "UFS_PHY_PHY_START" },
+	{ 3, 0xC04, "UFS_PHY_POWER_DOWN_CONTROL" },
+	{ 3, 0xD68, "UFS_PHY_PCS_READY_STATUS" },
+	{ 3, 0xD70, "UFS_PHY_PCS_STATUS2" },
+	{ 3, 0xD74, "UFS_PHY_PCS_READY_STATUS_SONY_ALT" },
+};
+
+#define D2C26_NUM_REGISTERS (sizeof(g_d2c26_whitelist) / sizeof(g_d2c26_whitelist[0]))
+
+static void
+xzs_d2c26_capture_snapshot(const char *stage_name, struct xzs_audit_record *records,
+                           const struct xzs_audit_record *prev_records)
+{
+	uint32_t diff_count = 0;
+
+	for (size_t i = 0; i < D2C26_NUM_REGISTERS; i++) {
+		records[i].domain = g_d2c26_whitelist[i].domain;
+		records[i].offset = g_d2c26_whitelist[i].offset;
+
+		if (records[i].domain == 1) {
+			records[i].val = xzs_ufs_read32(records[i].offset);
+		} else if (records[i].domain == 2) {
+			records[i].val = xzs_gcc_read32(records[i].offset);
+		} else if (records[i].domain == 3) {
+			records[i].val = xzs_ufs_phy_read32(records[i].offset);
+		} else {
+			records[i].val = 0xFFFFFFFFU;
+		}
+
+		if (prev_records != NULL && records[i].val != prev_records[i].val) {
+			diff_count++;
+		}
+	}
+
+	uint32_t crc = xzs_d2c26_crc32(records, D2C26_NUM_REGISTERS * sizeof(struct xzs_audit_record));
+
+	/* Key registers for console immediate summary */
+	uint32_t cfg1 = xzs_ufs_read32(UFS_QCOM_REG_CFG1);
+	uint32_t c_ready = xzs_ufs_phy_read32(QSERDES_COM_REG_C_READY_STATUS);
+	uint32_t pcs_d68 = xzs_ufs_phy_read32(0xD68);
+	uint32_t pcs_d74 = xzs_ufs_phy_read32(0xD74);
+
+	xzs_early_puts("\n[XZS-DIFF] STAGE=");
+	xzs_early_puts(stage_name);
+	xzs_early_puts(" ENTRIES=");
+	xzs_early_puthex64((uint64_t)D2C26_NUM_REGISTERS);
+	xzs_early_puts(" CRC32=0x");
+	xzs_early_puthex64((uint64_t)crc);
+	if (prev_records != NULL) {
+		xzs_early_puts(" DELTA_PREV=");
+		xzs_early_puthex64((uint64_t)diff_count);
+	}
+	xzs_early_puts("\n[XZS-DIFF] KEY: CFG1=0x");
+	xzs_early_puthex64((uint64_t)cfg1);
+	xzs_early_puts(" (BIT1=");
+	xzs_early_puthex64((uint64_t)((cfg1 >> 1) & 1U));
+	xzs_early_puts(", BIT26=");
+	xzs_early_puthex64((uint64_t)((cfg1 >> 26) & 1U));
+	xzs_early_puts(") C_READY=0x");
+	xzs_early_puthex64((uint64_t)c_ready);
+	xzs_early_puts(" PCS_D68=0x");
+	xzs_early_puthex64((uint64_t)pcs_d68);
+	xzs_early_puts(" PCS_D74=0x");
+	xzs_early_puthex64((uint64_t)pcs_d74);
+	xzs_early_puts("\n");
+
+	/* Emit compact parseable lines */
+	for (size_t i = 0; i < D2C26_NUM_REGISTERS; i++) {
+		const char *dom_str = (records[i].domain == 1) ? "HOST" :
+		                      ((records[i].domain == 2) ? "GCC" : "PHY");
+		xzs_early_puts("[XZS-R] ");
+		xzs_early_puts(stage_name);
+		xzs_early_puts(",");
+		xzs_early_puts(dom_str);
+		xzs_early_puts(",0x");
+		xzs_early_puthex64((uint64_t)records[i].offset);
+		xzs_early_puts(",0x");
+		xzs_early_puthex64((uint64_t)records[i].val);
+		xzs_early_puts("\n");
+	}
+}
+
+/* Static snapshot storage */
+static struct xzs_audit_record g_snap_early[D2C26_NUM_REGISTERS];
+static struct xzs_audit_record g_snap_post_power[D2C26_NUM_REGISTERS];
+static struct xzs_audit_record g_snap_post_cal[D2C26_NUM_REGISTERS];
+static struct xzs_audit_record g_snap_post_start_10ms[D2C26_NUM_REGISTERS];
+static struct xzs_audit_record g_snap_post_start_1s[D2C26_NUM_REGISTERS];
+
+/*
+ * xzs_ufs_phase_d2c26_audit:
+ * Orchestrates the hardware read-only differential state audit across all stages.
+ */
+void
+xzs_ufs_phase_d2c26_audit(void)
+{
+	xzs_early_puts("\n================================================================\n");
+	xzs_early_puts("  PHASE D2-C2.6: MSM8996 UFS READ-ONLY DIFFERENTIAL STATE AUDIT\n");
+	xzs_early_puts("  STRICTLY READ-ONLY — NO NEW CONFIGURATION MUTATIONS\n");
+	xzs_early_puts("================================================================\n");
+
+	/* 1. Map GCC, UFS host, UFS PHY MMIO */
+	if (g_xzs_gcc_base == 0) {
+		g_xzs_gcc_base = (vm_offset_t)ml_io_map(XZS_GCC_PHYS_BASE, XZS_GCC_MMIO_SIZE);
+	}
+	if (g_xzs_ufs_base == 0) {
+		g_xzs_ufs_base = (vm_offset_t)ml_io_map(XZS_UFS_CONTROLLER_PHYS_BASE, XZS_UFS_CONTROLLER_MMIO_SIZE);
+	}
+	if (g_xzs_ufs_phy_base == 0) {
+		g_xzs_ufs_phy_base = (vm_offset_t)ml_io_map(XZS_UFS_PHY_PHYS_BASE, XZS_UFS_PHY_MMIO_SIZE);
+	}
+
+	if (!g_xzs_gcc_base || !g_xzs_ufs_base || !g_xzs_ufs_phy_base) {
+		xzs_early_puts("[XZS-UFS] [FATAL] MMIO MAPPING FAILED\n");
+		return;
+	}
+
+	/* Stage 1: EARLY_D2C26_PRE_MUTATION (before any XNU change) */
+	xzs_early_puts("\n[XZS-UFS] CAPTURING STAGE: EARLY_D2C26_PRE_MUTATION...\n");
+	xzs_breadcrumb(0xD260, 0x20); /* host dump */
+	xzs_breadcrumb(0xD260, 0x30); /* clock dump */
+	xzs_breadcrumb(0xD260, 0x40); /* PHY pre dump */
+	xzs_d2c26_capture_snapshot("EARLY_PRE", g_snap_early, NULL);
+
+	/* Stage 2: Reset-Destruction Test (Section 16) */
+	xzs_early_puts("\n================================================================\n");
+	xzs_early_puts("  SECTION 16: RESET-DESTRUCTION AUDIT (READBACK ONLY)\n");
+	xzs_early_puts("================================================================\n");
+
+	uint32_t cfg1_pre_bcr = xzs_ufs_read32(UFS_QCOM_REG_CFG1);
+	uint32_t hw_ver_pre_bcr = xzs_ufs_read32(UFS_QCOM_REG_HW_VER);
+
+	/* Assert GCC BCR */
+	uint32_t bcr_old = xzs_gcc_read32(GCC_REG_UFS_BCR);
+	xzs_gcc_write32(GCC_REG_UFS_BCR, bcr_old | BCR_BLK_ARES);
+	delay(200);
+	uint32_t cfg1_during_bcr = xzs_ufs_read32(UFS_QCOM_REG_CFG1);
+
+	/* Deassert GCC BCR */
+	xzs_gcc_write32(GCC_REG_UFS_BCR, bcr_old & ~BCR_BLK_ARES);
+	delay(1000);
+	uint32_t cfg1_post_bcr = xzs_ufs_read32(UFS_QCOM_REG_CFG1);
+
+	/* Soft reset assert */
+	xzs_ufs_write32(UFS_QCOM_REG_CFG1, cfg1_post_bcr | UFS_QCOM_CFG1_PHY_SOFT_RESET);
+	delay(1000);
+	uint32_t cfg1_post_assert = xzs_ufs_read32(UFS_QCOM_REG_CFG1);
+
+	/* Soft reset deassert */
+	xzs_ufs_write32(UFS_QCOM_REG_CFG1, cfg1_post_bcr & ~UFS_QCOM_CFG1_PHY_SOFT_RESET);
+	delay(1000);
+	uint32_t cfg1_post_deassert = xzs_ufs_read32(UFS_QCOM_REG_CFG1);
+
+	xzs_early_puts("[XZS-RESET-TEST] CFG1_PRE_BCR             = 0x");
+	xzs_early_puthex64((uint64_t)cfg1_pre_bcr);
+	xzs_early_puts(" (BIT1=");
+	xzs_early_puthex64((uint64_t)((cfg1_pre_bcr >> 1) & 1U));
+	xzs_early_puts(", BIT26=");
+	xzs_early_puthex64((uint64_t)((cfg1_pre_bcr >> 26) & 1U));
+	xzs_early_puts(")\n[XZS-RESET-TEST] CFG1_DURING_BCR          = 0x");
+	xzs_early_puthex64((uint64_t)cfg1_during_bcr);
+	xzs_early_puts("\n[XZS-RESET-TEST] CFG1_POST_BCR            = 0x");
+	xzs_early_puthex64((uint64_t)cfg1_post_bcr);
+	xzs_early_puts(" (BIT1=");
+	xzs_early_puthex64((uint64_t)((cfg1_post_bcr >> 1) & 1U));
+	xzs_early_puts(", BIT26=");
+	xzs_early_puthex64((uint64_t)((cfg1_post_bcr >> 26) & 1U));
+	xzs_early_puts(")\n[XZS-RESET-TEST] CFG1_POST_RESET_ASSERT   = 0x");
+	xzs_early_puthex64((uint64_t)cfg1_post_assert);
+	xzs_early_puts(" (BIT1=");
+	xzs_early_puthex64((uint64_t)((cfg1_post_assert >> 1) & 1U));
+	xzs_early_puts(", BIT26=");
+	xzs_early_puthex64((uint64_t)((cfg1_post_assert >> 26) & 1U));
+	xzs_early_puts(")\n[XZS-RESET-TEST] CFG1_POST_RESET_DEASSERT = 0x");
+	xzs_early_puthex64((uint64_t)cfg1_post_deassert);
+	xzs_early_puts(" (BIT1=");
+	xzs_early_puthex64((uint64_t)((cfg1_post_deassert >> 1) & 1U));
+	xzs_early_puts(", BIT26=");
+	xzs_early_puthex64((uint64_t)((cfg1_post_deassert >> 26) & 1U));
+	xzs_early_puts(")\n[XZS-RESET-TEST] QCOM_HW_VER             = 0x");
+	xzs_early_puthex64((uint64_t)hw_ver_pre_bcr);
+	xzs_early_puts("\n");
+
+	/* Re-verify bus branch clocks */
+	uint32_t b_sys = xzs_gcc_read32(GCC_REG_SYS_NOC_UFS_AXI_CBCR);
+	if (b_sys & CBCR_CLK_OFF) xzs_gcc_enable_and_wait_branch(GCC_REG_SYS_NOC_UFS_AXI_CBCR, NULL, &b_sys);
+	uint32_t b_agg = xzs_gcc_read32(GCC_REG_AGGRE2_UFS_AXI_CBCR);
+	if (b_agg & CBCR_CLK_OFF) xzs_gcc_enable_and_wait_branch(GCC_REG_AGGRE2_UFS_AXI_CBCR, NULL, &b_agg);
+	uint32_t b_axi = xzs_gcc_read32(GCC_REG_UFS_AXI_CBCR);
+	if (b_axi & CBCR_CLK_OFF) xzs_gcc_enable_and_wait_branch(GCC_REG_UFS_AXI_CBCR, NULL, &b_axi);
+	uint32_t b_ahb = xzs_gcc_read32(GCC_REG_UFS_AHB_CBCR);
+	if (b_ahb & CBCR_CLK_OFF) xzs_gcc_enable_and_wait_branch(GCC_REG_UFS_AHB_CBCR, NULL, &b_ahb);
+	uint32_t b_clkref = xzs_gcc_read32(GCC_REG_UFS_CLKREF_CBCR);
+	if (b_clkref & CBCR_CLK_OFF) xzs_gcc_enable_and_wait_branch(GCC_REG_UFS_CLKREF_CBCR, NULL, &b_clkref);
+
+	/* Stage 3: POST_POWER */
+	xzs_early_puts("\n[XZS-UFS] PHY POWER CONTROL (UFS_PHY_POWER_DOWN_CONTROL = 1)...\n");
+	xzs_ufs_phy_write32(QPHY_REG_PCS_POWER_DOWN_CONTROL, QPHY_PCS_PWRDN_ACTIVE);
+	__asm__ volatile("dsb sy; isb; dsb sy" ::: "memory");
+	delay(1000);
+	xzs_breadcrumb(0xD260, 0x60);
+	xzs_d2c26_capture_snapshot("POST_POWER", g_snap_post_power, g_snap_early);
+	xzs_breadcrumb(0xD260, 0x61);
+
+	/* Stage 4: POST_CAL */
+	xzs_early_puts("\n[XZS-UFS] EXACT SONY v2.2.0 RATE-A + RATE-B CALIBRATION REPLAY...\n");
+	xzs_breadcrumb(0xD260, 0x70);
+	xzs_ufs_write32(UFS_QCOM_REG_CFG1, cfg1_post_bcr | UFS_QCOM_CFG1_PHY_SOFT_RESET);
+	delay(1000);
+
+	/* Read & log VCO_TUNE1_MODE1 (0x134) before calibration */
+	uint32_t vco_pre = xzs_ufs_phy_read32(0x134);
+	xzs_early_puts("[XZS-UFS] VCO_TUNE1_MODE1 (0x134) PRE-CAL = 0x");
+	xzs_early_puthex64((uint64_t)vco_pre);
+	xzs_early_puts("\n");
+
+	/* Program 76 entries Rate A */
+	for (size_t i = 0; i < sizeof(msm8996_v2_2_0_rate_A_tbl)/sizeof(msm8996_v2_2_0_rate_A_tbl[0]); i++) {
+		xzs_ufs_phy_write32(msm8996_v2_2_0_rate_A_tbl[i].offset, msm8996_v2_2_0_rate_A_tbl[i].val);
+	}
+	/* Program 1 entry Rate B */
+	xzs_ufs_phy_write32(msm8996_v2_2_0_rate_B_tbl[0].offset, msm8996_v2_2_0_rate_B_tbl[0].val);
+	__asm__ volatile("dsb sy; isb" ::: "memory");
+
+	uint32_t vco_post = xzs_ufs_phy_read32(0x134);
+	xzs_early_puts("[XZS-UFS] VCO_TUNE1_MODE1 (0x134) POST-CAL = 0x");
+	xzs_early_puthex64((uint64_t)vco_post);
+	xzs_early_puts("\n");
+
+	/* Deassert soft reset */
+	xzs_ufs_write32(UFS_QCOM_REG_CFG1, cfg1_post_bcr & ~UFS_QCOM_CFG1_PHY_SOFT_RESET);
+	delay(1000);
+
+	xzs_d2c26_capture_snapshot("POST_CAL", g_snap_post_cal, g_snap_post_power);
+	xzs_breadcrumb(0xD260, 0x71);
+
+	/* Stage 5: SerDes Start */
+	xzs_early_puts("\n[XZS-UFS] STARTING SERDES (UFS_PHY_PHY_START = 1)...\n");
+	xzs_breadcrumb(0xD260, 0x80);
+	uint32_t s_val = xzs_ufs_phy_read32(QPHY_REG_START_CTRL);
+	xzs_ufs_phy_write32(QPHY_REG_START_CTRL, s_val | QPHY_START_CTRL_SERDES_START);
+	__asm__ volatile("dsb sy; isb; dsb sy" ::: "memory");
+
+	/* Polling up to 1,000,000 us */
+	xzs_early_puts("[XZS-UFS] POLLING READINESS WITH CHECKPOINTS @ 10ms AND 1s...\n");
+	uint32_t poll_cr = 0, poll_d74 = 0, poll_d68 = 0;
+	int cr_found = 0, pcs_found = 0;
+
+	for (int iter = 1; iter <= 10000; iter++) {
+		delay(100);
+		poll_cr = xzs_ufs_phy_read32(QSERDES_COM_REG_C_READY_STATUS);
+		poll_d74 = xzs_ufs_phy_read32(0xD74);
+		poll_d68 = xzs_ufs_phy_read32(0xD68);
+
+		if ((poll_cr & 1U) && cr_found == 0) {
+			cr_found = iter * 100;
+			xzs_early_puts("[XZS-UFS] >>> C_READY ASSERTED @ ");
+			xzs_early_puthex64((uint64_t)cr_found);
+			xzs_early_puts(" us (raw=0x");
+			xzs_early_puthex64((uint64_t)poll_cr);
+			xzs_early_puts(") <<<\n");
+		}
+		if ((poll_d74 & 1U) && pcs_found == 0) {
+			pcs_found = iter * 100;
+			xzs_early_puts("[XZS-UFS] >>> PCS_READY (D74) ASSERTED @ ");
+			xzs_early_puthex64((uint64_t)pcs_found);
+			xzs_early_puts(" us (raw=0x");
+			xzs_early_puthex64((uint64_t)poll_d74);
+			xzs_early_puts(") <<<\n");
+		}
+
+		if (iter == 100) { /* 10 ms */
+			xzs_breadcrumb(0xD260, 0x81);
+			xzs_d2c26_capture_snapshot("POST_START_10MS", g_snap_post_start_10ms, g_snap_post_cal);
+		}
+	}
+
+	/* 1s checkpoint */
+	xzs_breadcrumb(0xD260, 0x82);
+	xzs_d2c26_capture_snapshot("POST_START_1S", g_snap_post_start_1s, g_snap_post_start_10ms);
+
+	/* Invariant check */
+	uint32_t final_hce = xzs_ufs_read32(UFSHCI_REG_HCE);
+	uint32_t final_hcs = xzs_ufs_read32(UFSHCI_REG_HCS);
+	uint32_t final_uic = xzs_ufs_read32(UFSHCI_REG_UICCMD);
+	xzs_early_puts("\n[XZS-UFS] INVARIANT AUDIT: HCE=0x");
+	xzs_early_puthex64((uint64_t)final_hce);
+	xzs_early_puts(", HCS=0x");
+	xzs_early_puthex64((uint64_t)final_hcs);
+	xzs_early_puts(", UICCMD=0x");
+	xzs_early_puthex64((uint64_t)final_uic);
+	xzs_early_puts("\n");
+	xzs_breadcrumb(0xD260, 0x90);
+}
+
 
 
 

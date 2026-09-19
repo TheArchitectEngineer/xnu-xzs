@@ -36,5 +36,6 @@ void xzs_rpm_phase_d2c24d_probe(void);
 void xzs_rpm_phase_d2c24e_probe(void);
 void xzs_rpm_phase_d2c24f_probe(void);
 void xzs_rpm_phase_d2c25_probe(void);
+void xzs_rpm_phase_d2c26_probe(void);
 
 #endif /* _PEXPERT_ARM_XZS_RPM_H_ */
