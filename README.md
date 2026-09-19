@@ -1,8 +1,8 @@
 # XNU on Sony Xperia XZs
 
-> **Apple XNU has been brought up natively on Sony Xperia XZs / Qualcomm MSM8996 through Mach SMP, BSD initialization, and physical eMMC storage bring-up (CMD17 single-block read verified byte-for-byte against independent TWRP oracle).**
+> **Apple XNU has been brought up natively on Sony Xperia XZs / Qualcomm MSM8996 through Mach SMP, BSD initialization, physical eMMC storage bring-up, and full GUID Partition Table (GPT) discovery & cross-validation.**
 >
-> **Phase D2 Physical Storage is COMPLETE. Phase D3 (GPT Partition Discovery) is NEXT.**
+> **Phase D3 GUID Partition Discovery is COMPLETE. Phase D4 (IOKit Block Storage Integration) is NEXT.**
 
 ---
 
@@ -12,7 +12,7 @@ This repository hosts an experimental port of Apple's **XNU kernel** (the core o
 
 The kernel runs **bare-metal at Exception Level 1 (EL1)**, loaded natively via the Sony S1 ABOOT fastboot bootloader. A custom early bootshim bridges Qualcomm device trees into an Apple Device Tree (ADT), configures ARM64 page tables with a 16KB granule, activates Qualcomm BLSP2 UARTDM console logging, drives ARM GICv3 interrupts, and brings all 4 Kryo CPU cores online into the Mach SMP scheduler via standard ARM PSCI.
 
-From Mach SMP, the kernel bootstraps the BSD kernel subsystem, populates VFS structures, executes IOKit autoconfiguration, and drives physical eMMC storage communication over Qualcomm SDCC1/SDHCI, verifying single-block physical sector reads (`CMD17`, LBA 1) with 100% byte-for-byte equality against an independent TWRP Linux oracle.
+From Mach SMP, the kernel bootstraps the BSD kernel subsystem, populates VFS structures, executes IOKit autoconfiguration, and drives physical eMMC storage communication over Qualcomm SDCC1/SDHCI, reading and validating both Primary and Backup GPT headers and 16-KiB entry arrays, achieving 100% byte-for-byte and map-for-map cross-validation across all 55 partitions against independent TWRP Linux oracles.
 
 > [!WARNING]
 > **Research & Bring-up Notice**:
@@ -23,9 +23,10 @@ From Mach SMP, the kernel bootstraps the BSD kernel subsystem, populates VFS str
 ## Current Status
 
 ```text
-Phase D2 Physical Storage Bring-up: COMPLETE
-Physical eMMC sector read (CMD17, LBA 1) verified byte-for-byte on hardware.
-Phase D3 GPT Partition Discovery: NEXT
+Phase D3 GUID Partition Discovery: COMPLETE
+Primary & Backup GPT Headers, Entry Arrays, and 55 Partition Extents Verified.
+AUTHORITATIVE_GPT_PARTITION_MAP_VERIFIED = yes.
+Phase D4 IOKit Block Storage Integration: NEXT
 ```
 
 * **Target Hardware**: Sony Xperia XZs (`G8231` / `tone` / `keyaki`)
@@ -33,8 +34,8 @@ Phase D3 GPT Partition Discovery: NEXT
 * **Architecture**: Quad-core Qualcomm Kryo ARMv8.0-A (64-bit)
 * **Storage Device**: Samsung BJNB4R 32GB eMMC 5.1 (`CID: 150100424a4e4234520fdac7c0381400`)
 * **Kernel Baseline**: Apple XNU `xnu-12377.1.9` (macOS 15.0 Sequoia / Darwin 24.0.0)
-* **Active Bring-up Branch**: `xzs-bringup`
-* **Milestone Tag**: `xzs-d2-storage-complete`
+* **Active Branches**: `main` (integrated), `xzs-port` (synchronized), `xzs-d3-gpt` (development)
+* **Milestone Tag**: `xzs-d3-gpt-complete`
 
 ---
 
@@ -75,22 +76,35 @@ Phase D3 GPT Partition Discovery: NEXT
 | **EXT_CSD Data Transfer** | CMD8 (512 bytes captured via PIO, `SEC_COUNT=61071360`) | ✅ |
 | **Physical Block Read** | CMD17 (`LBA=1`, 512 bytes read via SDHCI_BUFFER) | ✅ |
 | **Oracle Equality** | Byte-for-byte SHA-256 match against TWRP disk oracle | ✅ |
+| **Primary GPT Discovery** | CMD17 LBA 1 (Header CRC32 0xBFDF741D) & LBA 2..33 (Array CRC32 0x64EDE0F4) | ✅ |
+| **Primary Partition Map** | 55 used / 73 unused entries, GUID decoding, bounds validated | ✅ |
+| **Backup GPT Verification** | CMD17 LBA 61071359 & LBA 61071327..61071358, 100% reciprocal cross-validation | ✅ |
+| **Authoritative GPT Map** | Primary/Backup byte & map equality, verified against TWRP oracles | ✅ |
 
 ```text
-D2 Physical Storage:   COMPLETE
-D3 GPT Partition Map:  NEXT
+D3 GUID Partition Discovery:     COMPLETE
+D4 IOKit Block Storage:          NEXT
+
+AUTHORITATIVE_GPT_PARTITION_MAP_VERIFIED = yes
+GPT_NAME_PAIRED_A_B_ENTRIES_OBSERVED     = yes
+A_B_BOOT_SLOT_SEMANTICS                  = NOT_ESTABLISHED
+FILESYSTEMS                              = NOT_PROBED
+ROOTFS                                   = NOT_SELECTED
 ```
 
-### D2 Physical Sector Acceptance Evidence (LBA 1)
+### D3 GUID Partition Table Acceptance Evidence
 
 ```text
-D2 Acceptance Sector:    LBA 1 (Primary GPT Header)
-Byte Count:              512 bytes
-
-TWRP Oracle SHA-256:     e4b891b42fd57eb352ffbe0aa9098d04fe85f88e3425dcba529064cce72f862a
-XNU Hardware SHA-256:    e4b891b42fd57eb352ffbe0aa9098d04fe85f88e3425dcba529064cce72f862a
-
-BYTE_FOR_BYTE_MATCH=yes  (cmp -l exit 0, 100% exact 512/512 byte equality)
+Acceptance Sectors:      LBA 1 (Primary Header), LBA 2..33 (Primary Array)
+                         LBA 61071327..61071358 (Backup Array), LBA 61071359 (Backup Header)
+Primary Header CRC32:    0xBFDF741D (exact match)
+Backup Header CRC32:     0x03F02415 (exact match)
+Partition Array CRC32:   0x64EDE0F4 (16,384 bytes, 128 slots, exact match)
+Primary/Backup Array:    XNU_PRIMARY_BACKUP_ARRAY_BYTE_MATCH = yes (100% byte-for-byte)
+Partitions Discovered:   55 used / 73 unused (all 55 verified against TWRP oracles)
+Reciprocal Relationship: PRIMARY.MyLBA == BACKUP.AlternateLBA == 1
+                         PRIMARY.AlternateLBA == BACKUP.MyLBA == 61071359
+Host/Silicon Oracles:    100% byte-for-byte & map-for-map match (cmp exit 0)
 ```
 
 ---
@@ -292,8 +306,8 @@ Phase B:   Platform bring-up (UART, GIC, Timer)    [COMPLETE]
 Phase C:   Mach SMP Scheduler (4 Cores, IPI, AST)  [COMPLETE]
 Phase D1:  BSD/VFS to Root Storage Boundary        [COMPLETE]
 Phase D2:  Physical eMMC Storage Bring-up (CMD17)  [COMPLETE]
-Phase D3:  GUID Partition Table (GPT) Discovery    [NEXT]
-Phase D4:  IOKit Block Storage Integration (disk0) [NOT STARTED]
+Phase D3:  GUID Partition Table (GPT) Discovery    [COMPLETE]
+Phase D4:  IOKit Block Storage Integration (disk0) [NEXT]
 Phase D5:  Real Root Filesystem Mount (HFS+/APFS)  [NOT STARTED]
 Phase E:   PID 1 Userspace Bootstrap (launchd)     [NOT STARTED]
 Phase F:   Interactive Serial Console Shell        [NOT STARTED]

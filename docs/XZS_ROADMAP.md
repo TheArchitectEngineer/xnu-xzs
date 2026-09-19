@@ -15,8 +15,8 @@ Progress is strictly gated by physical hardware verification. Speculative percen
 | **Phase C** | SMP / Mach scheduler (PSCI, 4 Kryo cores, IPI, AST, Preemption) | **COMPLETE** |
 | **Phase D1** | BSD / VFS bootstrap to root-storage boundary | **COMPLETE** |
 | **Phase D2** | Physical eMMC storage bring-up (SDCC1, CMD0..CMD17, PIO) | **COMPLETE** |
-| **Phase D3** | GUID Partition Table (GPT) discovery & partition enumeration | **NEXT** |
-| **Phase D4** | IOKit block-storage driver integration (`IOBlockStorageDevice` / `disk0`) | **NOT STARTED** |
+| **Phase D3** | GUID Partition Table (GPT) discovery & partition enumeration | **COMPLETE** |
+| **Phase D4** | IOKit block-storage driver integration (`IOBlockStorageDevice` / `disk0`) | **NEXT** |
 | **Phase D5** | Real root filesystem mount (HFS+ / APFS / ramdisk) | **NOT STARTED** |
 | **Phase E** | PID 1 bootstrap (`initproc` / launchd exec) | **NOT STARTED** |
 | **Phase F** | Interactive serial shell (`/bin/sh` or micro-shell) | **NOT STARTED** |
@@ -120,24 +120,29 @@ Progress is strictly gated by physical hardware verification. Speculative percen
 
 ### Phase D3 — GUID Partition Table (GPT) Discovery
 * **Goal**: Parse primary and backup GUID Partition Tables (GPT) from the physical eMMC user area and enumerate partitions.
-* **Status**: **NEXT (Planned)**
-* **Detailed Milestone Plan**:
+* **Status**: **COMPLETE**
+* **Detailed Milestone Execution & Verification**:
   - **D3-M1 (Primary GPT Header)**:
-    - Read LBA 1 into dedicated buffer.
-    - Verify `"EFI PART"` signature (`45 46 49 20 50 41 52 54`).
-    - Parse structural header fields (revision, header size, CRC32, current LBA, backup LBA, first/last usable LBA, partition entry LBA, entry count, entry size).
-    - Validate Header CRC32 checksum (zeroing CRC field during calculation).
-  - **D3-M2 (Primary Partition Entry Array)**:
-    - Read partition array sectors (LBA 2..33, 128 entries $\times$ 128 bytes = 16,384 bytes).
-    - Validate Partition Entry Array CRC32 checksum against header.
-    - Enumerate valid partition entries (partition name, type GUID, unique GUID, starting LBA, ending LBA, attribute flags).
-  - **D3-M3 (Backup GPT & Map Freeze)**:
-    - Read and validate backup GPT header and partition array at the end of the disk (`SEC_COUNT - 1`).
-    - Cross-check primary vs backup tables.
-    - Freeze verified partition table map in kernel memory.
-  - **D3 Final Gate**: `D3_GPT_COMPLETE = yes`.
-* **Hardware Acceptance Criteria**: Primary and backup GPT headers parsed; CRC32 checksums match; all eMMC partitions (`boot`, `system`, `userdata`, etc.) identified with exact sector ranges.
-* **Remaining Items**: Implementation of D3-M1, D3-M2, D3-M3.
+    - Fresh physical LBA 1 read & parse; verified `"EFI PART"` signature, revision `0x00010000`, size 92, and calculated CRC32 `0xBFDF741D` matching stored header field.
+  - **D3-M2A (Primary Partition Entry Array)**:
+    - Sequential 32 single-block PIO `CMD17` reads of LBA 2..33 (16,384 bytes); calculated CRC32 `0x64EDE0F4` matching header; 100% byte-for-byte match against independent TWRP oracle.
+  - **D3-M2B (Primary Partition Map)**:
+    - Decoded all 128 slots into static kernel storage; validated 55 used entries (`PartitionTypeGUID != 0`) and 73 unused entries; validated extents within usable bounds `[34, 61071326]`, arithmetic overflow safety, pairwise non-overlap across all 55 used partitions, unique GUID validity, and deterministic canonical name decoding.
+  - **D3-M3 (Backup GPT & Authoritative Seal)**:
+    - Dynamically read and verified Backup GPT Header at sector 61071359 (CRC32 `0x03F02415`); confirmed reciprocal links (`PRIMARY.MyLBA == BACKUP.AlternateLBA`, `PRIMARY.AlternateLBA == BACKUP.MyLBA`); derived Backup Array geometry (LBAs 61071327..61071358); verified Backup Array CRC32 (`0x64EDE0F4`); confirmed 100% byte-for-byte and map-for-map cross-validation with Primary GPT.
+    - Verified `AUTHORITATIVE_GPT_PARTITION_MAP_VERIFIED = yes` and `PRIMARY_BACKUP_GPT_CONSISTENT = yes`.
+* **Hardware Acceptance Criteria**:
+  - Primary and backup GPT headers verified on silicon with dynamic CRCs.
+  - Reciprocal links between primary and backup verified.
+  - Exact 16,384-byte array equality between primary and backup.
+  - 55 valid, non-overlapping partitions identified with exact sector ranges.
+  - Zero partition content reads, zero filesystem probes, zero rootfs selection, zero storage writes.
+* **Explicit Invariants & Preserved Semantics**:
+  - `GPT_NAME_PAIRED_A_B_ENTRIES_OBSERVED = yes`
+  - `A_B_BOOT_SLOT_SEMANTICS = NOT_ESTABLISHED`
+  - `FILESYSTEMS = NOT_PROBED`
+  - `ROOTFS = NOT_SELECTED`
+* **Remaining Items**: None. Phase D3 is COMPLETE and SEALED. Phase D4 is NEXT.
 * **Dependencies**: Phase D2.
 
 ---

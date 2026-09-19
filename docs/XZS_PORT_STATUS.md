@@ -7,34 +7,41 @@ This summary provides an executive overview of the project's technical status. I
 ## Current Milestone
 
 ```text
-Phase D2 acceptance gate completed:
-Physical eMMC storage bring-up verified on hardware.
-Exactly one 512-byte sector read from LBA 1 matches independent TWRP oracle byte-for-byte.
-Phase D3 (GPT Partition Discovery) is NEXT.
+Phase D3 acceptance gate completed:
+GUID Partition Table (GPT) discovery & cross-validation verified on hardware.
+Primary and Backup GPT headers, entry arrays, and partition maps match 100%.
+AUTHORITATIVE_GPT_PARTITION_MAP_VERIFIED = yes.
+Phase D4 (IOKit Block Storage Driver Integration) is NEXT.
 ```
 
 * **Target Device**: Sony Xperia XZs (Model G8231 / Platform Tone / Board Keyaki)
 * **SoC**: Qualcomm Snapdragon 820 (MSM8996 Pro)
 * **CPU Architecture**: Quad-core Qualcomm Kryo ARMv8.0-A (2x Silver + 2x Gold)
 * **Storage Device**: Samsung BJNB4R 32GB eMMC 5.1 (`CID: 150100424a4e4234520fdac7c0381400`)
-* **Active Development Branch**: `xzs-bringup`
-* **Milestone Tag**: `xzs-d2-storage-complete`
+* **Active Branches**: `main` (integrated), `xzs-port` (synchronized), `xzs-d3-gpt` (development)
+* **Milestone Tag**: `xzs-d3-gpt-complete`
 
 ---
 
 ## Highest Hardware-Verified Checkpoint
 
 ```text
-[BREADCRUMB] CP=0x000000000000d3b0 ERR=0x0000000000000041 (CMD17 Issued: 0x113A, ARG: 0x00000001)
-[BREADCRUMB] CP=0x000000000000d3b0 ERR=0x0000000000000042 (COMMAND_COMPLETE Latched, R1=0x00000900)
-[BREADCRUMB] CP=0x000000000000d3b0 ERR=0x0000000000000050 (BUFFER_READ_READY Latched)
-[BREADCRUMB] CP=0x000000000000d3b0 ERR=0x0000000000000052 (512 Bytes Captured from SDHCI_BUFFER)
-[BREADCRUMB] CP=0x000000000000d3b0 ERR=0x0000000000000053 (TRANSFER_COMPLETE Latched)
-[BREADCRUMB] CP=0x000000000000d3b0 ERR=0x0000000000000071 (BYTE_FOR_BYTE_MATCH: yes)
-[BREADCRUMB] CP=0x000000000000d3b0 ERR=0x0000000000000080 (D2_STORAGE_COMPLETE: yes)
+[BREADCRUMB] CP=0x000000000000d3f0 ERR=0x0000000000000040 (Fresh Primary Header Verified)
+[BREADCRUMB] CP=0x000000000000d3f0 ERR=0x0000000000000041 (Fresh Primary Array CRC32 Verified: 0x64EDE0F4)
+[BREADCRUMB] CP=0x000000000000d3f0 ERR=0x0000000000000042 (Fresh Primary Map Verified: 55 Used / 73 Unused)
+[BREADCRUMB] CP=0x000000000000d3f0 ERR=0x0000000000000050 (Backup Header Read: LBA 61071359)
+[BREADCRUMB] CP=0x000000000000d3f0 ERR=0x0000000000000051 (Backup Header CRC32 Verified: 0x03F02415)
+[BREADCRUMB] CP=0x000000000000d3f0 ERR=0x0000000000000052 (Reciprocal Links Verified: 1 <-> 61071359)
+[BREADCRUMB] CP=0x000000000000d3f0 ERR=0x0000000000000060 (Backup Array Geometry Derived: LBA 61071327..61071358)
+[BREADCRUMB] CP=0x000000000000d3f0 ERR=0x0000000000000061 (Backup Array 32 Sectors Read via PIO)
+[BREADCRUMB] CP=0x000000000000d3f0 ERR=0x0000000000000062 (Backup Array CRC32 Verified: 0x64EDE0F4)
+[BREADCRUMB] CP=0x000000000000d3f0 ERR=0x0000000000000070 (Primary/Backup Raw Array Byte Match: 16384/16384)
+[BREADCRUMB] CP=0x000000000000d3f0 ERR=0x0000000000000071 (Backup Map Parsed)
+[BREADCRUMB] CP=0x000000000000d3f0 ERR=0x0000000000000072 (Primary/Backup Partition Map Match: 55/55 Partitions)
+[BREADCRUMB] CP=0x000000000000d3f0 ERR=0x0000000000000080 (AUTHORITATIVE_GPT_PARTITION_MAP_VERIFIED: yes)
 ```
 
-The kernel confirms that Mach SMP, BSD initialization, IOKit autoconfiguration, and Qualcomm SDCC1/SDHCI eMMC physical block read operate genuinely on physical silicon. The single-block physical sector payload (LBA 1, 512 bytes) was compared byte-for-byte against an independent TWRP Linux oracle (`/dev/block/mmcblk0`), confirming identical SHA-256 hash `e4b891b42fd57eb352ffbe0aa9098d04fe85f88e3425dcba529064cce72f862a` with zero byte differences.
+The kernel confirms that Mach SMP, BSD initialization, IOKit autoconfiguration, physical eMMC block transfers, and full GUID Partition Table (GPT) discovery operate genuinely on physical silicon. Both Primary and Backup GPT headers, entry arrays, and partition maps match each other and independent host TWRP oracles 100% byte-for-byte and field-for-field. Exactly 55 partitions are identified spanning LBA 34 to 61067263 with zero overlapping extents and valid unique partition GUIDs.
 
 ---
 
@@ -54,6 +61,7 @@ The kernel confirms that Mach SMP, BSD initialization, IOKit autoconfiguration, 
 - [x] **VFS Core Framework**: Mount lists, vnode pools (`vnodes=263168`), devfs bootstrap.
 - [x] **IOKit Autoconfiguration**: `IOKitBSDInit` publishing `IOBSD` plane to BSD.
 - [x] **Physical eMMC Storage Bring-up (D2)**: SDCC1 clock (400 kHz), controlled reset, power-up, CMD0..CMD17, 512-byte PIO sector read, TWRP oracle byte-for-byte match.
+- [x] **GUID Partition Table Discovery & Seal (D3)**: Primary & Backup GPT Header CRC32 verified, 16-KiB entry array verified, 55 partitions enumerated, reciprocal links confirmed, 100% byte-for-byte and map-for-map match. `AUTHORITATIVE_GPT_PARTITION_MAP_VERIFIED = yes`.
 - [x] **Automated Recovery**: Warm reboot back to Fastboot within +6 seconds via Qualcomm APCS watchdog bite upon reaching diagnostic terminal state.
 
 ---
@@ -74,7 +82,6 @@ The following non-essential subsystems are temporarily deferred to eliminate all
 
 ## What Does Not Exist Yet
 
-- [ ] **GPT Partition Parser (D3)**: Primary and backup GUID Partition Table discovery and partition enumeration.
 - [ ] **Block Storage Devices (D4)**: Physical `IOMedia` or `disk0` published in IOKit registry.
 - [ ] **Root Filesystem (D5)**: No APFS, HFS+, or ramdisk mounted at `/`.
 - [ ] **Userspace Process (Phase E)**: No PID 1 (`launchd`), shell, or `/dev/console` interactive session.

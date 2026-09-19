@@ -133,8 +133,8 @@ This document details the complete architectural execution flow of Apple XNU run
                                      ▼  [FUTURE PHASES]
 +-------------------------------------------------------------------------+
 |  Phase D2: Physical eMMC Storage Bring-up (SDCC1 / CMD17 LBA 1) [DONE]   |
-|  Phase D3: GUID Partition Table (GPT) Discovery & Enumeration  [NEXT]   |
-|  Phase D4: IOKit Block Storage Integration (disk0 / IOMedia)             |
+|  Phase D3: GUID Partition Table (GPT) Discovery & Enumeration  [DONE]   |
+|  Phase D4: IOKit Block Storage Integration (disk0 / IOMedia)   [NEXT]   |
 |  Phase D5: Real Root Filesystem Mount (HFS+ / APFS / ramdisk)            |
 |  Phase E:  PID 1 Userspace Exec (/sbin/launchd)                         |
 |  Phase F:  Interactive Serial Console Shell (/bin/sh)                   |
