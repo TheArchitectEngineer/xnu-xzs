@@ -1879,3 +1879,7 @@ IOVnodeGetEntitlement(vnode_t vnode, int64_t off, const char *entitlement)
 	}
 	return value;
 }
+
+#if CONFIG_XZS_BRINGUP
+#include "xzs_storage_nub.cpp"
+#endif

@@ -1132,3 +1132,226 @@ d5e6f9b5f517fd73e6d10ad6065518b140b4cf1c
 D3 tag:
 xzs-d3-gpt-complete
 ```
+
+---
+
+## 6. Phase D4-M1: Persistent eMMC Runtime Context & Multi-Sector Read Pipeline
+
+### Objectives & Accomplishments
+1. **Persistent Runtime Context (`xzs_emmc_context_t`)**:
+   - Dynamic hardware geometry: `sector_size=512`, `sector_count=61071360`, `last_physical_lba=61071359`, `ext_csd_rev=0x08`, `rca=2`.
+   - Fails-closed lifecycle: `initialized` flag set strictly upon verified EXT_CSD derivation.
+2. **Idempotent Initialization (`xzs_emmc_init_persistent`)**:
+   - Subsequent calls detect initialization, increment `initialization_reuse_count = 1`, and return `0` with zero controller resets (`INITIALIZATION_COUNT=1`).
+3. **Multi-Sector Synchronous Read API (`xzs_emmc_read_blocks_sync`)**:
+   - Validated against 4 target sectors on silicon: LBA1, LBA2, LBA33, and Backup GPT Header.
+   - 100% byte-for-byte match against independent frozen host TWRP oracles.
+4. **Safety Boundaries**:
+   - Zero storage writes (`CMD24=0`, `CMD25=0`, `CMD18=0`).
+   - No `bdevsw`, no devfs, no IOKit nub, no rootfs probing.
+
+---
+
+## 7. Phase D4-M2: BSD `bdevsw` Read-Only Block Device Integration
+
+### Objectives & Accomplishments
+1. **Audited Local `struct bdevsw` Layout**:
+   - Audited exact layout from `src/xnu/bsd/sys/conf.h` and reference implementation `src/xnu/bsd/dev/memdev.c`.
+2. **Dynamic Major Registration (`bdevsw_add`)**:
+   - Registered dynamically via `bdevsw_add(-1, &g_xzs_bdevsw)` at `BSD_POST_VFSINIT` (`bsd_init.c:733`).
+   - Allocated major number: `1` (`BDEV_MAJOR_DYNAMIC=yes`, `BDEVSW_REGISTER_COUNT=1`).
+3. **Persistent Hardware Ownership & Read-Only `d_open` / `d_close`**:
+   - `xzs_bdev_open()` ensures persistent runtime is initialized on first open.
+   - Strictly permits `FREAD`, rejects `FWRITE` with `EROFS`.
+   - `xzs_bdev_close()` safely closes without touching hardware state (`CLOSE_RESETS_STORAGE=no`).
+4. **Controller Serialization Mutex**:
+   - Dedicated `lck_mtx_t g_xzs_emmc_mtx` initialized at bring-up.
+   - Synchronously locks controller strictly across physical sector transfers. Released before `buf_biodone()`.
+5. **Legitimate `buf_t` Integration & Strategy Driver (`xzs_bdev_strategy`)**:
+   - Driven via genuine in-tree `buf_alloc(NULL)`, `buf_reset()`, `buf_map()`, `buf_biowait()`, and `buf_free()`.
+   - Maps minor 0 directly to physical eMMC LBA: `start_lba = (uint64_t)buf_blkno(bp)`.
+   - Enforces read-only policy: reject non-`B_READ` with `EROFS`.
+   - Bounds-checks against live geometry: reject out-of-range or misaligned requests with `EINVAL`.
+6. **Physical Strategy Acceptance & Oracle Parity**:
+   - Single-sector read (LBA 1, 512 B): CRC32 `0xD3A34BC1`, SHA256 `e4b891b42fd57eb352ffbe0aa9098d04fe85f88e3425dcba529064cce72f862a` (100% byte match).
+   - Multi-sector read (LBA 1..2, 1024 B): CRC32 `0xA21C1724`, SHA256 `4a161d7ec294bc215b8dd22989a4f87f1c501fac3250acf66e5e2a4085ece8d0` (100% byte match).
+7. **Synthetic Failure Injection**:
+   - Out-of-range request rejected with `EINVAL` (0 CMD17s).
+   - Misaligned 513-byte request rejected with `EINVAL` (0 CMD17s).
+   - Write request rejected with `EROFS` (0 CMD24s/CMD25s).
+8. **Live Geometry Validation**:
+   - `d_ioctl` (`DKIOCGETBLOCKSIZE`=512, `DKIOCGETBLOCKCOUNT`=61071360, `DKIOCISWRITABLE`=0).
+   - `d_psize` returns 61071360 (512-byte block units, 31,268,536,320 bytes total).
+9. **Final D4-M2 Certified Status**:
+   - `D4-M1_COMPLETE=yes`
+   - `D4-M2_COMPLETE=yes`
+   - `PERSISTENT_EMMC_RUNTIME_VERIFIED=yes`
+   - `BSD_BLOCK_STRATEGY_VERIFIED=yes`
+   - `BDEVSW_IMPLEMENTED=yes`
+   - `CONTROLLER_SERIALIZATION_ENABLED=yes`
+   - `DEVFS_DISK0_PUBLISHED=no`
+   - `PARTITION_SLICES_PUBLISHED=no`
+   - `IOKIT_STORAGE_NUB_PUBLISHED=no`
+   - `ZERO_STORAGE_WRITES=yes`
+   - `D4_COMPLETE=no`
+
+---
+
+## 8. Phase D4-M3: Whole-Disk BSD Device Publication (`/dev/disk0`)
+
+### Objectives & Accomplishments
+1. **Devfs Whole-Disk Node Registration**:
+   - Created `/dev/disk0` via `devfs_make_node(makedev(g_xzs_bdev_major, 0), DEVFS_BLOCK, UID_ROOT, GID_OPERATOR, 0600, "disk0")`.
+   - Preserved devfs node handle: `g_xzs_disk0_devfs_handle`.
+   - Explicitly confirmed `DEVFS_RDISK0_PUBLISHED=no` (no fake raw character node without verified `cdevsw`).
+2. **Whole-Disk Identity & Read-Only Protection**:
+   - `WHOLE_DISK_DEVFS_IDENTITY_VERIFIED=yes`.
+   - Whole-disk geometry: `DISK0_BLOCK_SIZE=512`, `DISK0_BLOCK_COUNT=61071360`.
+   - Write open rejected with `EROFS` (`DISK0_WRITE_OPEN_REJECTED=yes`).
+   - Slices remain unpopulated at this stage: `PARTITION_SLICES_PUBLISHED=no`.
+3. **Certified Status**:
+   - `D4-M3_COMPLETE=yes`
+
+---
+
+## 9. Phase D4-M4: Runtime GPT & Partition Slice Publication (`/dev/disk0s1`..`disk0s55`)
+
+### Objectives & Accomplishments
+1. **D4 Runtime GPT Initialization via Block Layer**:
+   - D4 loads and validates its own runtime GPT map traversing the BSD block layer (`d_strategy`):
+     - Primary GPT Header read at LBA 1: CRC32 `0xBFDF741D` verified (`D4_RUNTIME_GPT_HEADER_CRC_VERIFIED=yes`).
+     - Primary GPT Entry Array read at LBA 2..33 (16,384 bytes): CRC32 `0x64EDE0F4` verified (`D4_RUNTIME_GPT_ARRAY_CRC_VERIFIED=yes`).
+     - Decoded all 128 slots into `g_xzs_d4_gpt_entries`: 55 used entries, 73 unused entries (`D4_RUNTIME_GPT_USED_COUNT=55`).
+     - Dynamic verification against D3 canonical evidence: `D4_RUNTIME_GPT_MAP_MATCHES_D3_AUTHORITATIVE_MAP=yes`.
+     - `D4_GPT_LOADED_VIA_BLOCK_LAYER=yes`.
+2. **Derived Minor Number Mapping**:
+   - Applied used-entry ordering: `minor 0 = whole disk (/dev/disk0)`, `minor N = Nth USED GPT entry` in authoritative GPT slot order.
+   - Initialized bidirectional maps `g_xzs_minor_to_gpt_slot[56]` and `g_xzs_gpt_slot_to_minor[128]`.
+   - Verified uniqueness: `MINOR_TO_GPT_SLOT_UNIQUE=yes`, `GPT_SLOT_TO_MINOR_UNIQUE=yes`.
+   - `PARTITION_MINOR_MAPPING_DERIVED=yes`, `PARTITION_MINOR_MAPPING_HARDCODED=no`.
+3. **Devfs Slice Publication**:
+   - Published all 55 partitions as `/dev/disk0s1` .. `/dev/disk0s55`.
+   - Stored devfs handles: `g_xzs_slice_devfs_handles[55]` (`DEVFS_NODE_LIFETIME_AUDITED=yes`).
+   - Partition slice map frozen immediately upon publication (`SLICE_MAP_FROZEN_AFTER_PUBLICATION=yes`).
+   - `PARTITION_SLICES_PUBLISHED=yes`, `PUBLISHED_SLICE_COUNT=55`.
+4. **Independent TWRP Oracle Slice Verification on Literal `"boot"` Entry**:
+   - Derived `"boot"` partition metadata dynamically from D3 authoritative GPT oracle:
+     - `SLICE_TEST_NAME=boot`
+     - `SLICE_TEST_GPT_SLOT=29`
+     - `SLICE_TEST_MINOR=30`
+     - `SLICE_TEST_FIRST_LBA=208896`
+     - `SLICE_TEST_LAST_LBA=339967`
+     - `SLICE_TEST_SECTOR_COUNT=131072`
+     - `SLICE_TEST_GEOMETRY_DERIVED_FROM_D3_ORACLE=yes`
+     - `SLICE_TEST_GEOMETRY_HARDCODED=no`
+   - Verified both first and last sectors against independent host oracles:
+     - Slice block 0 (physical LBA 208896): CRC32 `0x7756D106` matching `artifacts/oracles/slice_test_first.bin` (`SLICE_FIRST_SECTOR_BYTE_MATCH=yes`).
+     - Slice block 131071 (physical LBA 339967): CRC32 `0xB2AA7578` matching `artifacts/oracles/slice_test_last.bin` (`SLICE_LAST_SECTOR_BYTE_MATCH=yes`).
+     - Host physical FirstLBA confirmed identical to `/dev/block/bootdevice/by-name/boot`: `HOST_BYNAME_FIRST_SECTOR_MATCHES_PHYSICAL_LBA=yes`.
+5. **One-Past-End Rejection with Zero Physical Commands**:
+   - Attempted read at relative LBA 131072 (`sector_count`):
+     - Rejected with `EINVAL`, `resid=512`.
+     - `SLICE_OUT_OF_RANGE_REJECTED=yes`, `SLICE_OUT_OF_RANGE_ERRNO=EINVAL`.
+     - `SLICE_OUT_OF_RANGE_CMD17_DELTA=0`.
+6. **Strict Safety & Scope Boundaries**:
+   - `PARTITION_CONTENT_READS_AUTHORIZED_FOR_SLICE_TEST=yes`.
+   - `FILESYSTEM_PROBES=0`, `FILESYSTEM_TYPE_INFERENCE_PERFORMED=no`, `ROOTFS_SELECTION_PERFORMED=no`.
+7. **Certified Status**:
+   - `D4-M4_COMPLETE=yes`
+
+---
+
+## 10. Phase D4-M5: IOKit BSD Root Discovery Bridge
+
+### Objectives & Accomplishments
+1. **C++ IOKit Storage Nub Implementation**:
+   - Created `src/xnu/iokit/bsddev/xzs_storage_nub.cpp` implementing `XZSeMMCStorageNub : public IOService`.
+   - Registered under `#if CONFIG_XZS_BRINGUP` in `IOKitBSDInit.cpp`.
+   - Provided C-callable bridge: `int xzs_storage_nub_publish(int bsd_major, int bsd_minor)`.
+   - Low-level SDHCI/eMMC transport remains 100% pure C: `SDHCI_TRANSPORT_REMAINS_C=yes`.
+   - `IOKIT_NUB_IMPLEMENTATION_LANGUAGE=C++`.
+2. **Canonical BSD Property Publication**:
+   - Published canonical symbols: `kIOBSDNameKey = "disk0"`, `kIOBSDMajorKey = g_xzs_bdev_major`, `kIOBSDMinorKey = 0`.
+   - `BSD_PROPERTY_KEYS_AUDITED=yes`, `IOKIT_STORAGE_NUB_PUBLISHED=yes`.
+3. **Registry Discovery Verification**:
+   - Verified matching via `IOBSDNameMatching("disk0")`.
+   - Discovered service: `DISCOVERED_BSD_NAME=disk0`, `DISCOVERED_BSD_MAJOR=1`, `DISCOVERED_BSD_MINOR=0`.
+   - Dynamic major verified: `DISCOVERED_BSD_MAJOR == g_xzs_bdev_major`.
+   - `IOKIT_BSD_IDENTITY_DISCOVERABLE=yes`, `IOKIT_BSD_ROOT_DISCOVERY_COMPATIBLE=yes`.
+4. **Boot Boundary Isolation**:
+   - Production `rootdev` was NOT mutated: `GLOBAL_ROOTDEV_MUTATED=no`.
+   - `ROOTFS_SELECTION_PERFORMED=no`.
+5. **Certified Status**:
+   - `D4-M5_COMPLETE=yes`
+
+---
+
+## 11. Phase D4-M6: Real Block Vnode Acquisition (`bdevvp`) & D4 Seal
+
+### Objectives & Accomplishments
+1. **Vnode Ownership & Reference Contract Audit**:
+   - Audited local `bdevvp()`, `VNOP_OPEN()`, `VNOP_CLOSE()`, `vnode_close()` lifecycle.
+   - `bdevvp()` creates vnode (`iocount=1`), adds `vnode_ref` (`usecount=1`), and calls `VNOP_OPEN` (`opencount=1`).
+   - Audited release path: `vnode_close(vp, FREAD, vfs_context_kernel())` calls `vn_close` (drops `usecount` and `opencount`) and `vnode_put` (drops `iocount`).
+   - `BDEVVP_REFERENCE_OWNERSHIP_AUDITED=yes`, `BDEVVP_RELEASE_API=vnode_close`.
+   - `VNODE_IO_CONTEXT_SOURCE=vfs_context_kernel()`.
+2. **`buf_bread` Block Semantics Audit**:
+   - Audited `vfs_bio.c`: for `VBLK` vnodes, `buf_bread(vp, blkno, size, ...)` constructs `bp` with `b_blkno = blkno` and `b_bcount = size`.
+   - Maps directly to `buf_blkno(bp)` and `buf_count(bp)` in `xzs_bdev_strategy`.
+   - `BUF_BREAD_BLOCK_NUMBER_SEMANTICS_AUDITED=yes`.
+3. **Real Block Vnode Acquisition & Read Parity**:
+   - `bdevvp(makedev(g_xzs_bdev_major, 0), &vp)` executed successfully (`BDEVVP_ACQUISITION_VERIFIED=yes`).
+   - `VNOP_OPEN_READ_SUCCESS=yes`.
+   - Read LBA 1 via `buf_bread(vp, 1, 512, NOCRED, &bp)`: CRC32 `0xD3A34BC1` (100% byte match, `BDEVVP_LBA1_BYTE_MATCH=yes`, `BDEVVP_LBA1_RESID=0`, `BDEVVP_LBA1_ERROR=0`).
+   - Buffer released via `buf_brelse(bp)`.
+   - Vnode cleanly closed via `vnode_close(vp, FREAD, vfs_context_kernel())`.
+4. **Certified Status**:
+   - `D4-M6_COMPLETE=yes`
+
+---
+
+## 12. Phase D4 Final Milestone Seal
+
+All hardware acceptance gates for Phase D4 have been certified on physical silicon:
+
+```text
+D4-M1_COMPLETE=yes
+D4-M2_COMPLETE=yes
+D4-M3_COMPLETE=yes
+D4-M4_COMPLETE=yes
+D4-M5_COMPLETE=yes
+D4-M6_COMPLETE=yes
+
+PERSISTENT_EMMC_RUNTIME_VERIFIED=yes
+BSD_BLOCK_STRATEGY_VERIFIED=yes
+
+DEVFS_DISK0_PUBLISHED=yes
+PARTITION_SLICES_PUBLISHED=yes
+
+D4_RUNTIME_GPT_MAP_INITIALIZED=yes
+D4_RUNTIME_GPT_MAP_MATCHES_D3_AUTHORITATIVE_MAP=yes
+
+IOKIT_STORAGE_NUB_PUBLISHED=yes
+IOKIT_BSD_IDENTITY_DISCOVERABLE=yes
+
+GLOBAL_ROOTDEV_MUTATED=no
+
+BDEVVP_ACQUISITION_VERIFIED=yes
+BDEVVP_LBA1_BYTE_MATCH=yes
+
+FILESYSTEM_PROBES=0
+FILESYSTEM_TYPE_INFERENCE_PERFORMED=no
+
+ROOTFS_SELECTION_PERFORMED=no
+
+CMD24_COUNT=0
+CMD25_COUNT=0
+ERASE_COUNT=0
+DISCARD_COUNT=0
+
+ZERO_STORAGE_WRITES=yes
+
+D4_COMPLETE=yes
+D5_IMPLEMENTATION_STARTED=no
+```
+

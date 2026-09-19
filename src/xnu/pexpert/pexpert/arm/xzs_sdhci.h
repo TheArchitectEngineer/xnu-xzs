@@ -341,4 +341,46 @@ void xzs_sdhci_phase_d3m2b_probe(void);
  */
 void xzs_sdhci_phase_d3m3_probe(void);
 
+/*
+ * Phase D4-M1: Persistent eMMC Runtime Context & Multi-Sector Read Pipeline
+ */
+typedef struct xzs_emmc_context {
+	bool      initialized;
+
+	uint16_t  rca;
+
+	uint64_t  sector_count;
+	uint64_t  last_physical_lba;
+
+	uint32_t  sector_size;
+
+	uint8_t   ext_csd_rev;
+
+	uint32_t  initialization_count;
+	uint32_t  initialization_reuse_count;
+	uint32_t  controller_reset_count;
+
+	uint64_t  successful_sector_reads;
+	uint64_t  failed_sector_reads;
+} xzs_emmc_context_t;
+
+int  xzs_emmc_init_persistent(void);
+int  xzs_emmc_read_sector_sync(uint64_t lba, void *out512);
+int  xzs_emmc_read_blocks_sync(uint64_t start_lba, uint32_t count, void *buffer);
+void xzs_sdhci_phase_d4m1_probe(void);
+
+/*
+ * Phase D4-M2: BSD bdevsw Read-Only Block Device Integration
+ */
+struct buf;
+void xzs_sdhci_phase_d4m2_probe(void);
+void xzs_buf_set_dev(struct buf *bp, uint32_t dev);
+
+/*
+ * Phase D4: Read-Only BSD Block Storage & Integration
+ */
+void xzs_sdhci_phase_d4_probe(void);
+int  xzs_storage_nub_publish(int bsd_major, int bsd_minor);
+int  xzs_storage_nub_find_bsd_name(const char *name, char *out_name, size_t out_name_size, int *out_major, int *out_minor);
+
 #endif /* _PEXPERT_ARM_XZS_SDHCI_H */

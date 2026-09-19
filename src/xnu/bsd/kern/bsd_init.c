@@ -482,17 +482,21 @@ bsd_rooted_ramdisk(void)
  * used like any other.
  */
 extern void xzs_early_puts(const char *s);
+void xzs_buf_set_dev(struct buf *bp, uint32_t dev);
+
+void
+xzs_buf_set_dev(struct buf *bp, uint32_t dev)
+{
+	if (bp != NULL) {
+		bp->b_dev = (dev_t)dev;
+	}
+}
 
 void
 bsd_init(void)
 {
 	xzs_early_puts("[XZS-BOOT] [D30] bsd_init ENTERED\n");
 
-#if CONFIG_XZS_BRINGUP
-	/* Phase D3-M3: Backup GPT Header & Partition Array Verification */
-	extern void xzs_sdhci_phase_d3m3_probe(void);
-	xzs_sdhci_phase_d3m3_probe();
-#endif
 	struct uthread *ut;
 	vnode_t init_rootvnode = NULLVP;
 	struct proc_ro_data kernproc_ro_data = {
@@ -724,6 +728,12 @@ bsd_init(void)
 	vfsinit();
 	xzs_early_puts("[XZS-BOOT] [D41] VFS INIT COMPLETE\n");
 	xzs_breadcrumb(0xD41, 0);
+
+#if CONFIG_XZS_BRINGUP
+	/* Phase D4: Read-Only BSD Block Storage & Integration */
+	extern void xzs_sdhci_phase_d4_probe(void);
+	xzs_sdhci_phase_d4_probe();
+#endif
 
 
 #if CONFIG_PROC_UUID_POLICY
