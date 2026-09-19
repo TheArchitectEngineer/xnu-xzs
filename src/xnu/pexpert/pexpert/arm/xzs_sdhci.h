@@ -136,6 +136,41 @@
 #define SDHCI_RESET_DATA                0x04U
 
 /*
+ * SDHCI Power Control Bits (relative to HC offset 0x29)
+ */
+#define SDHCI_POWER_ON                  0x01U
+#define SDHCI_POWER_180                 0x0AU
+#define SDHCI_POWER_300                 0x0CU
+#define SDHCI_POWER_330                 0x0EU
+#define ABOOT_POWER_FIRST_WRITE         SDHCI_POWER_180
+#define ABOOT_POWER_SECOND_WRITE        (SDHCI_POWER_180 | SDHCI_POWER_ON)
+#define ABOOT_POWER_FINAL_VAL           0x0BU
+
+/*
+ * SDHCI Clock Control Bits (relative to HC offset 0x2C)
+ */
+#define SDHCI_CLOCK_INT_EN              0x0001U
+#define SDHCI_CLOCK_INT_STABLE          0x0002U
+#define SDHCI_CLOCK_CARD_EN             0x0004U
+#define ABOOT_CLOCK_FIRST_WRITE         SDHCI_CLOCK_INT_EN
+#define ABOOT_CLOCK_FINAL_VAL           (SDHCI_CLOCK_INT_EN | SDHCI_CLOCK_INT_STABLE | SDHCI_CLOCK_CARD_EN)
+
+/*
+ * SDHCI Timeout & Host Control Constants
+ */
+#define ABOOT_TIMEOUT_VAL               0x0FU
+#define SDHCI_CTRL_4BITBUS              0x02U
+#define SDHCI_CTRL_ADMA32               0x10U
+#define SDHCI_CTRL_8BITBUS              0x20U
+#define SDHCI_CTRL_1BIT_INIT            0x00U
+
+/*
+ * SDHCI Present State Bits
+ */
+#define SDHCI_CMD_INHIBIT               (1U << 0)
+#define SDHCI_DATA_INHIBIT              (1U << 1)
+
+/*
  * Source-Proven 400 KHz RCG2 Values (XO-derived, P_XO = 19.2 MHz)
  * Math: (19.2 MHz / 12) * (1 / 4) = 400 KHz
  * CFG_RCGR: SRC_DIV = 23 (div 12), SRC_SEL = 0 (XO), MODE = 2 (dual-edge fraction)
@@ -156,5 +191,6 @@ uint32_t xzs_sdhci_core_read32(uint32_t offset);
 
 void xzs_sdhci_phase_d2m1_probe(void);
 void xzs_sdhci_phase_d2m2_probe(void);
+void xzs_sdhci_phase_d2m3_probe(void);
 
 #endif /* _PEXPERT_ARM_XZS_SDHCI_H */
