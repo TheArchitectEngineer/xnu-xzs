@@ -243,5 +243,6 @@ void xzs_sdhci_phase_d2m3_probe(void);
 void xzs_sdhci_phase_d2m4a_probe(void);
 void xzs_sdhci_phase_d2m4b_probe(void);
 void xzs_sdhci_phase_d2m4c_probe(void);
+void xzs_sdhci_phase_d2m4c1_probe(void);
 
 #endif /* _PEXPERT_ARM_XZS_SDHCI_H */
