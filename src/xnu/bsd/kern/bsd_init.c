@@ -489,9 +489,9 @@ bsd_init(void)
 	xzs_early_puts("[XZS-BOOT] [D30] bsd_init ENTERED\n");
 
 #if CONFIG_XZS_BRINGUP
-	/* Phase D3-M3: Backup GPT Header & Partition Array Verification */
-	extern void xzs_sdhci_phase_d3m3_probe(void);
-	xzs_sdhci_phase_d3m3_probe();
+	/* Phase D4-M1: Persistent eMMC Runtime Context & Multi-Sector Read Pipeline */
+	extern void xzs_sdhci_phase_d4m1_probe(void);
+	xzs_sdhci_phase_d4m1_probe();
 #endif
 	struct uthread *ut;
 	vnode_t init_rootvnode = NULLVP;

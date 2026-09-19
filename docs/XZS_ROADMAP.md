@@ -16,7 +16,7 @@ Progress is strictly gated by physical hardware verification. Speculative percen
 | **Phase D1** | BSD / VFS bootstrap to root-storage boundary | **COMPLETE** |
 | **Phase D2** | Physical eMMC storage bring-up (SDCC1, CMD0..CMD17, PIO) | **COMPLETE** |
 | **Phase D3** | GUID Partition Table (GPT) discovery & partition enumeration | **COMPLETE** |
-| **Phase D4** | IOKit block-storage driver integration (`IOBlockStorageDevice` / `disk0`) | **NEXT** |
+| **Phase D4** | Block-storage driver integration (`bdevsw` / `disk0`) | **IN PROGRESS (D4-M1 Complete)** |
 | **Phase D5** | Real root filesystem mount (HFS+ / APFS / ramdisk) | **NOT STARTED** |
 | **Phase E** | PID 1 bootstrap (`initproc` / launchd exec) | **NOT STARTED** |
 | **Phase F** | Interactive serial shell (`/bin/sh` or micro-shell) | **NOT STARTED** |
@@ -147,11 +147,28 @@ Progress is strictly gated by physical hardware verification. Speculative percen
 
 ---
 
-### Phase D4 — IOKit Block Storage Driver Integration
-* **Goal**: Implement `IOBlockStorageDevice` / `IOBlockStorageDriver` attaching to Qualcomm SDCC1, publishing `disk0` and partition nubs (`disk0s1`, etc.) to the IOKit registry and BSD subsystem.
-* **Status**: **NOT STARTED**
-* **Hardware Acceptance Criteria**: `IOMedia` objects published; BSD block device switch table (`bdevsw`) attaches `disk0`; `IOFindBSDRoot()` matches root media nub.
-* **Remaining Items**: Implement IOKit block storage driver classes; publish disk nubs; remove synthetic `sd0a` fallback.
+### Phase D4 — Block Storage Driver & BSD Integration
+* **Goal**: Transition eMMC hardware operations from diagnostic probes into a persistent, reusable block storage runtime, implement BSD block device switch (`bdevsw`) and raw/block device nodes (`/dev/disk0`, `/dev/rdisk0`), and publish partition slice devices (`disk0s1`..`disk0s55`) backed by the authoritative GPT map.
+* **Architecture**: `XZS_HYBRID_IOKIT_BDEVSW_STORAGE` (BSD `bdevsw` switch table backed by persistent eMMC runtime with lightweight IOKit media nub discovery).
+* **Status**: **IN PROGRESS (D4-M1 Complete)**
+* **Detailed Milestone Execution & Verification**:
+  - **D4-M1 (Persistent eMMC Runtime Context & Multi-Sector Pipeline)**: ✅ **COMPLETE**
+    - Established static persistent runtime context (`xzs_emmc_context_t`, `g_xzs_emmc_ctx`) with fail-closed semantics.
+    - Implemented idempotent persistent initialization (`xzs_emmc_init_persistent()`): `INIT_CALL_COUNT=2`, `INITIALIZATION_COUNT=1`, `INITIALIZATION_REUSE_COUNT=1`, `CONTROLLER_RESET_COUNT=1`.
+    - Implemented 64-bit checked single-sector primitive (`xzs_emmc_read_sector_sync()`) with checked narrowing.
+    - Implemented multi-sector synchronous software pipeline (`xzs_emmc_read_blocks_sync()`) with 7-point overflow and range bounds validation.
+    - Verified on physical hardware: 4 non-contiguous reads (`LBA 1`, `LBA 2`, `LBA 33`, Backup Header `LBA 61071359`) across a single persistent session with zero intermediate controller resets.
+    - 100% byte-for-byte exact identity against independent frozen TWRP oracles. Both primary and backup GPT header CRCs dynamically verified on read buffers.
+    - `PERSISTENT_EMMC_RUNTIME_VERIFIED = yes`, `MULTI_SECTOR_PIPELINE_VERIFIED = yes`.
+  - **D4-M2 (BSD Block Device Switch Layer)**: ⏳ **NEXT**
+    - Implement controller serialization lock (`lck_mtx_t`).
+    - Implement BSD `bdevsw` switch table (`d_open`, `d_close`, `d_strategy`, `d_psize`, `d_ioctl`).
+    - Integrate buffer cache strategy I/O into `xzs_emmc_read_blocks_sync()`.
+    - Register major block device number via `bdevsw_add()`.
+    - Create `/dev/disk0` and `/dev/rdisk0` nodes via `devfs_make_node()`.
+  - **D4-M3 (Partition Slice Device Layer)**: 📋 **PLANNED**
+    - Expose authoritative GPT partition entries as devfs slice devices (`disk0s1`..`disk0s55`).
+    - Checked sector offset and length translation in `d_strategy`.
 * **Dependencies**: Phase D3.
 
 ---
