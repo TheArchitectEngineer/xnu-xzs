@@ -11,12 +11,13 @@ Progress is strictly gated by physical hardware verification. Speculative percen
 | Phase | Description | Current Status |
 | :--- | :--- | :---: |
 | **Phase A** | Native kernel entry (Bootshim, ADT, MMU, High KVA) | **COMPLETE** |
-| **Phase B** | Platform bring-up (UARTDM, GICv3, Timer, Pmap, VM) | **COMPLETE for current bring-up scope** |
-| **Phase C** | SMP / Mach scheduler (PSCI, 4 Kryo cores, IPI, AST, Preemption) | **COMPLETE for current bring-up scope** |
+| **Phase B** | Platform bring-up (UARTDM, GICv3, Timer, Pmap, VM) | **COMPLETE** |
+| **Phase C** | SMP / Mach scheduler (PSCI, 4 Kryo cores, IPI, AST, Preemption) | **COMPLETE** |
 | **Phase D1** | BSD / VFS bootstrap to root-storage boundary | **COMPLETE** |
-| **Phase D2** | Qualcomm MSM8996 UFS controller driver | **NOT STARTED** |
-| **Phase D3** | Block device nub / GUID Partition Table (GPT) | **NOT STARTED** |
-| **Phase D4** | Real root filesystem mount (APFS / HFS+) | **NOT STARTED** |
+| **Phase D2** | Physical eMMC storage bring-up (SDCC1, CMD0..CMD17, PIO) | **COMPLETE** |
+| **Phase D3** | GUID Partition Table (GPT) discovery & partition enumeration | **NEXT** |
+| **Phase D4** | IOKit block-storage driver integration (`IOBlockStorageDevice` / `disk0`) | **NOT STARTED** |
+| **Phase D5** | Real root filesystem mount (HFS+ / APFS / ramdisk) | **NOT STARTED** |
 | **Phase E** | PID 1 bootstrap (`initproc` / launchd exec) | **NOT STARTED** |
 | **Phase F** | Interactive serial shell (`/bin/sh` or micro-shell) | **NOT STARTED** |
 | **Phase G** | Restore deferred subsystems (Skywalk, DTrace, jetsam buffer) | **NOT STARTED** |
@@ -45,7 +46,7 @@ Progress is strictly gated by physical hardware verification. Speculative percen
 
 ### Phase B — Platform Bring-up
 * **Goal**: Initialize fundamental platform peripherals (UART console, interrupt distributor, hardware timers, and memory allocators).
-* **Status**: **COMPLETE for current bring-up scope**
+* **Status**: **COMPLETE**
 * **Hardware Acceptance Criteria**: Qualcomm BLSP2 UARTDM transmitting serial logs at 115200 8N1; ARM GICv3 distributor (`GICD`) and redistributor (`GICR`) active; ARM generic timer PPI firing at 19.2 MHz; kernel VM zones and page allocators active.
 * **Completed Items**:
   - Qualcomm BLSP2 UARTDM driver in `pexpert/arm/pe_serial.c`.
@@ -61,7 +62,7 @@ Progress is strictly gated by physical hardware verification. Speculative percen
 
 ### Phase C — SMP / Mach Scheduler Integration
 * **Goal**: Bring all 4 Qualcomm Kryo cores online into Mach processor set `pset0` and achieve preemption and thread migration.
-* **Status**: **COMPLETE for current bring-up scope**
+* **Status**: **COMPLETE**
 * **Hardware Acceptance Criteria**: CPU0-CPU3 online; secondary cores booted via standard PSCI `CPU_ON` (`0xC4000003`); Mach `idle_thread` running on all 4 cores; cross-cluster reschedule IPIs delivered via GICv3 SGI 1; 40,000 concurrent atomic lock operations completed without data corruption.
 * **Completed Items**:
   - PSCI `CPU_ON` multi-core bootstrap in `osfmk/kern/startup.c`.
@@ -95,44 +96,66 @@ Progress is strictly gated by physical hardware verification. Speculative percen
 
 ---
 
-### Phase D2 — Qualcomm MSM8996 UFS Controller Driver
-* **Goal**: Implement a native IOKit controller driver for the Qualcomm Universal Flash Storage (UFS 2.0) host controller on MSM8996 (`0x00624000`).
-* **Status**: **NOT STARTED**
-* **Hardware Acceptance Criteria**: UFS host controller initialized, link startup completed, UFS PHY initialized, hardware interrupts routed via GICv3 (SPI 265), and SCSI/UFS NOP IN / REPORT LUNS command successfully executed on physical UFS storage.
-* **Completed Items**: Hardware register addresses audited (`0x00624000`, size `0x2500`, PHY `0x00627000`, size `0x1000`).
-* **Remaining Items**:
-  - Implement `QualcommUFSController` IOKit driver class.
-  - Configure Qualcomm MSM8996 UFS PHY and clock gating.
-  - Map UFS MMIO aperture in ADT and kernel pmap.
-  - Implement basic SCSI command execution engine.
-  - Query LUN 0 / LUN 1 device geometry and serial number.
-* **Known Blockers**: SMMU / IOMMU stage 1 translation bypass for DMA.
+### Phase D2 — Physical eMMC Storage Bring-up
+* **Goal**: Drive Qualcomm MSM8996 SDCC1 / SDHCI v5 host controller (`0x07464900`) and establish physical data transfers with the Samsung BJNB4R 32GB eMMC 5.1 device.
+* **Status**: **COMPLETE**
+* **Hardware Acceptance Criteria**: SDC1 clock configured at 400 kHz; host controller reset; MMC full bus initialization sequence completed (CMD0 -> CMD1 -> CMD2 -> CMD3 -> CMD9 -> CMD7 -> CMD8 -> CMD17); single-block physical sector read (LBA 1) matches independent TWRP oracle byte-for-byte (`e4b891b42fd57eb352ffbe0aa9098d04fe85f88e3425dcba529064cce72f862a`).
+* **Completed Milestones**:
+  - **D2-M1 (SDC1 Audit & Identity Oracle)**: ✅ Probed host version (`0x4902`), capabilities (`0x742dc8b2`), HC mode (`0x00000001`).
+  - **D2-M2 (Clock & Reset Replay)**: ✅ 400-kHz RCG configuration (`F(400000, P_XO, 12, 1, 4)`), `SDHCI_RESET_ALL` cleared in 10 µs.
+  - **D2-M3 (Host Power & Card Clock)**: ✅ 1.8V bus power (`0x0B`), internal/card clock active (`0x0007`), timeout `0x0F`.
+  - **D2-M4A (CMD0 Go Idle)**: ✅ Issued `CMD0` (`0x0000`), hardware execution verified.
+  - **D2-M4B/C (CMD1 Card Power-Up)**: ✅ Polled `CMD1` until `CARD_READY=yes`, `FINAL_OCR=0xC0FF8080` (Sector Mode).
+  - **D2-M4D-A (CMD2 CID Identification)**: ✅ `CID_MATCH=yes` (`150100424a4e4234520fdac7c0381400`, Samsung BJNB4R).
+  - **D2-M4D-B (CMD3 RCA Assignment)**: ✅ Assigned `RCA = 2`, verified transition to STBY state (`R1 = 0x00000500`).
+  - **D2-M4D-C (CMD9 CSD Capture)**: ✅ `CSD_MATCH=yes` (`d02701320f5903fff6dbffef8e404000`).
+  - **D2-M4D-D (CMD7 Card Selection)**: ✅ Issued `CMD7` addressed to RCA 2, card selected (`CARD_SELECTION_CONFIRMED=yes`).
+  - **D2-M4E (CMD8 EXT_CSD Read)**: ✅ First physical 512-byte data transfer via PIO, `EXT_CSD_REV=0x08`, `SEC_COUNT=61071360`, `TRAN` directly observed (`R1 = 0x00000900`).
+  - **D2-M5 (CMD17 Physical LBA 1 Read)**: ✅ Single sector read at `LBA = 1`, 512 bytes captured from `SDHCI_BUFFER`, 100% byte-for-byte match with TWRP disk oracle (`cmp -l` exit 0).
+  - **D2 Final Gate**: `D2_STORAGE_COMPLETE = yes`.
+* **Remaining Items**: None. Phase D2 sealed.
 * **Dependencies**: Phase D1.
 
 ---
 
-### Phase D3 — Block Device / GUID Partition Table (GPT)
-* **Goal**: Publish physical `IOMedia` storage nubs in the IOKit registry and parse the disk GUID Partition Table (GPT).
-* **Status**: **NOT STARTED**
-* **Hardware Acceptance Criteria**: `IOBlockStorageDevice` publishes `disk0`; `IOMedia` represents physical disk partitions; GPT header and partition entries read from UFS sector 1–33.
-* **Completed Items**: None.
-* **Remaining Items**:
-  - Implement `IOBlockStorageDriver` layer on top of `QualcommUFSController`.
-  - Integrate Apple GPT / ApplePartitionScheme matching.
-  - Expose partitions as `disk0s1`, `disk0s2`, etc.
-  - Remove `sd0a` synthetic rootdev workaround and bounded wait loop.
-* **Known Blockers**: None (standard IOKit storage architecture).
+### Phase D3 — GUID Partition Table (GPT) Discovery
+* **Goal**: Parse primary and backup GUID Partition Tables (GPT) from the physical eMMC user area and enumerate partitions.
+* **Status**: **NEXT (Planned)**
+* **Detailed Milestone Plan**:
+  - **D3-M1 (Primary GPT Header)**:
+    - Read LBA 1 into dedicated buffer.
+    - Verify `"EFI PART"` signature (`45 46 49 20 50 41 52 54`).
+    - Parse structural header fields (revision, header size, CRC32, current LBA, backup LBA, first/last usable LBA, partition entry LBA, entry count, entry size).
+    - Validate Header CRC32 checksum (zeroing CRC field during calculation).
+  - **D3-M2 (Primary Partition Entry Array)**:
+    - Read partition array sectors (LBA 2..33, 128 entries $\times$ 128 bytes = 16,384 bytes).
+    - Validate Partition Entry Array CRC32 checksum against header.
+    - Enumerate valid partition entries (partition name, type GUID, unique GUID, starting LBA, ending LBA, attribute flags).
+  - **D3-M3 (Backup GPT & Map Freeze)**:
+    - Read and validate backup GPT header and partition array at the end of the disk (`SEC_COUNT - 1`).
+    - Cross-check primary vs backup tables.
+    - Freeze verified partition table map in kernel memory.
+  - **D3 Final Gate**: `D3_GPT_COMPLETE = yes`.
+* **Hardware Acceptance Criteria**: Primary and backup GPT headers parsed; CRC32 checksums match; all eMMC partitions (`boot`, `system`, `userdata`, etc.) identified with exact sector ranges.
+* **Remaining Items**: Implementation of D3-M1, D3-M2, D3-M3.
 * **Dependencies**: Phase D2.
 
 ---
 
-### Phase D4 — Real Root Filesystem Mount
-* **Goal**: Mount an actual read-only root filesystem partition (APFS or HFS+) from physical UFS storage or ramdisk into VFS root vnode (`/`).
+### Phase D4 — IOKit Block Storage Driver Integration
+* **Goal**: Implement `IOBlockStorageDevice` / `IOBlockStorageDriver` attaching to Qualcomm SDCC1, publishing `disk0` and partition nubs (`disk0s1`, etc.) to the IOKit registry and BSD subsystem.
 * **Status**: **NOT STARTED**
-* **Hardware Acceptance Criteria**: `vfs_mountroot()` returns `0` (`KERN_SUCCESS`); `VFS_ROOT()` retrieves root directory vnode (`init_rootvnode != NULLVP`); `mountlist` shows `MNT_ROOTFS` active.
-* **Completed Items**: None.
-* **Remaining Items**:
-  - Determine root filesystem format (HFS+ recommended for early bring-up simplicity, or ramdisk).
+* **Hardware Acceptance Criteria**: `IOMedia` objects published; BSD block device switch table (`bdevsw`) attaches `disk0`; `IOFindBSDRoot()` matches root media nub.
+* **Remaining Items**: Implement IOKit block storage driver classes; publish disk nubs; remove synthetic `sd0a` fallback.
+* **Dependencies**: Phase D3.
+
+---
+
+### Phase D5 — Real Root Filesystem Mount
+* **Goal**: Mount an actual read-only root filesystem partition (APFS, HFS+, or ramdisk) into VFS root vnode (`/`).
+* **Status**: **NOT STARTED**
+* **Hardware Acceptance Criteria**: `vfs_mountroot()` returns `KERN_SUCCESS`; `VFS_ROOT()` retrieves root directory vnode (`init_rootvnode != NULLVP`); `mountlist` shows `MNT_ROOTFS` active.
+* **Dependencies**: Phase D4.
   - Prepare partition image containing minimal Darwin directory tree (`/sbin`, `/bin`, `/usr`, `/etc`, `/dev`).
   - Pass boot argument `rootdev=disk0sX` or `rd=disk0sX`.
   - Validate VFS directory lookup on `/`.

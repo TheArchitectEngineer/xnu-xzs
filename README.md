@@ -1,8 +1,8 @@
 # XNU on Sony Xperia XZs
 
-> **Apple XNU has been brought up natively on Sony Xperia XZs / Qualcomm MSM8996 through Mach SMP, BSD initialization, IOKit autoconfiguration and the BSD VFS root-storage boundary.**
+> **Apple XNU has been brought up natively on Sony Xperia XZs / Qualcomm MSM8996 through Mach SMP, BSD initialization, and physical eMMC storage bring-up (CMD17 single-block read verified byte-for-byte against independent TWRP oracle).**
 >
-> **Physical UFS storage support and a real root filesystem are not implemented yet.**
+> **Phase D2 Physical Storage is COMPLETE. Phase D3 (GPT Partition Discovery) is NEXT.**
 
 ---
 
@@ -12,7 +12,7 @@ This repository hosts an experimental port of Apple's **XNU kernel** (the core o
 
 The kernel runs **bare-metal at Exception Level 1 (EL1)**, loaded natively via the Sony S1 ABOOT fastboot bootloader. A custom early bootshim bridges Qualcomm device trees into an Apple Device Tree (ADT), configures ARM64 page tables with a 16KB granule, activates Qualcomm BLSP2 UARTDM console logging, drives ARM GICv3 interrupts, and brings all 4 Kryo CPU cores online into the Mach SMP scheduler via standard ARM PSCI.
 
-From Mach SMP, the kernel bootstraps the BSD kernel subsystem, populates VFS structures, executes IOKit autoconfiguration, and advances to the root-device discovery boundary (`vfs_mountroot`), successfully verifying block device vnode probing down to `bdevvp()`.
+From Mach SMP, the kernel bootstraps the BSD kernel subsystem, populates VFS structures, executes IOKit autoconfiguration, and drives physical eMMC storage communication over Qualcomm SDCC1/SDHCI, verifying single-block physical sector reads (`CMD17`, LBA 1) with 100% byte-for-byte equality against an independent TWRP Linux oracle.
 
 > [!WARNING]
 > **Research & Bring-up Notice**:
@@ -23,16 +23,18 @@ From Mach SMP, the kernel bootstraps the BSD kernel subsystem, populates VFS str
 ## Current Status
 
 ```text
-Phase D1 acceptance gate completed:
-BSD/VFS bootstrap reaches root-device / block-storage boundary.
+Phase D2 Physical Storage Bring-up: COMPLETE
+Physical eMMC sector read (CMD17, LBA 1) verified byte-for-byte on hardware.
+Phase D3 GPT Partition Discovery: NEXT
 ```
 
 * **Target Hardware**: Sony Xperia XZs (`G8231` / `tone` / `keyaki`)
-* **SoC**: Qualcomm Snapdragon 820 (`MSM8996 Pro`)
+* **SoC**: Qualcomm Snapdragon 820 (`MSM8996SG` / `MSM8996 Pro`)
 * **Architecture**: Quad-core Qualcomm Kryo ARMv8.0-A (64-bit)
+* **Storage Device**: Samsung BJNB4R 32GB eMMC 5.1 (`CID: 150100424a4e4234520fdac7c0381400`)
 * **Kernel Baseline**: Apple XNU `xnu-12377.1.9` (macOS 15.0 Sequoia / Darwin 24.0.0)
 * **Active Bring-up Branch**: `xzs-bringup`
-* **Highest Verified Checkpoint**: `[D51-TERMINAL]` / `bdevvp error=0x13 (ENODEV)`
+* **Milestone Tag**: `xzs-d2-storage-complete`
 
 ---
 
@@ -47,8 +49,49 @@ BSD/VFS bootstrap reaches root-device / block-storage boundary.
 | **Interrupt Controller** | ARM GICv3 (Distributor `0x09bc0000`, Redistributors `0x09c00000`) |
 | **Hardware Timer** | ARM Generic Timer (19.200 MHz, PPI 27 virtual / PPI 30 physical) |
 | **Serial Console** | Qualcomm BLSP2 UARTDM UART2 (`0x075b0000`, 115200 8N1) |
-| **Storage (Target)** | Qualcomm UFS 2.0 Host Controller (`0x00624000`, SPI 265) |
+| **Storage** | Samsung BJNB4R 32GB eMMC 5.1 on Qualcomm SDCC1 / SDHCI (`0x07464900`) |
 | **Boot Mechanism** | Sony S1 ABOOT fastboot (`fastboot boot boot.img`) |
+
+---
+
+## Verified Platform Subsystems
+
+| Subsystem | Milestone | Status |
+| :--- | :--- | :---: |
+| **Native XNU Execution** | EL1 bare-metal entry, ADT generation, boot_args | ✅ |
+| **MMU & Caches** | 16KB granule, TCR/MAIR, High KVA jump, WBWA coherency | ✅ |
+| **Interrupts (GICv3)** | GICD/GICR, system registers (`ICC_SRE_EL1`), SPI routing | ✅ |
+| **Timers** | ARM Generic Timer (PPI 27 virtual / PPI 30 physical) @ 19.2 MHz | ✅ |
+| **SMP & Cores** | 4/4 Kryo CPUs online via PSCI `CPU_ON`, cross-core IPIs | ✅ |
+| **Mach Scheduler** | Multi-core `pset0`, `idle_thread`, AST urgent preemption | ✅ |
+| **BSD & VFS Initialization** | `kernproc`, credentials, zones, mount table, devfs | ✅ |
+| **Physical eMMC Discovery** | SDCC1 host controller, clock RCG (400 kHz), controlled reset | ✅ |
+| **SDHCI Host** | Host power (1.8V), clock enable, timeout control, W1C IRQ | ✅ |
+| **MMC Protocol Handshake** | CMD0 (Idle), CMD1 (`CARD_READY=yes`, `FINAL_OCR=0xC0FF8080`) | ✅ |
+| **Card Identification** | CMD2 (`CID_MATCH=yes`, Samsung BJNB4R) | ✅ |
+| **RCA Assignment** | CMD3 (`ASSIGNED_RCA=2`, STBY state) | ✅ |
+| **Card Specific Data** | CMD9 (`CSD_MATCH=yes`, `d02701320f5903fff6dbffef8e404000`) | ✅ |
+| **Card Selection** | CMD7 (`CARD_SELECTION_CONFIRMED=yes`, TRAN state) | ✅ |
+| **EXT_CSD Data Transfer** | CMD8 (512 bytes captured via PIO, `SEC_COUNT=61071360`) | ✅ |
+| **Physical Block Read** | CMD17 (`LBA=1`, 512 bytes read via SDHCI_BUFFER) | ✅ |
+| **Oracle Equality** | Byte-for-byte SHA-256 match against TWRP disk oracle | ✅ |
+
+```text
+D2 Physical Storage:   COMPLETE
+D3 GPT Partition Map:  NEXT
+```
+
+### D2 Physical Sector Acceptance Evidence (LBA 1)
+
+```text
+D2 Acceptance Sector:    LBA 1 (Primary GPT Header)
+Byte Count:              512 bytes
+
+TWRP Oracle SHA-256:     e4b891b42fd57eb352ffbe0aa9098d04fe85f88e3425dcba529064cce72f862a
+XNU Hardware SHA-256:    e4b891b42fd57eb352ffbe0aa9098d04fe85f88e3425dcba529064cce72f862a
+
+BYTE_FOR_BYTE_MATCH=yes  (cmp -l exit 0, 100% exact 512/512 byte equality)
+```
 
 ---
 
@@ -161,11 +204,10 @@ vfs_mountroot: can't setup bdevvp
 
 ## Current Limitations
 
-1. **No Physical Storage Driver**: The Qualcomm MSM8996 Universal Flash Storage (UFS 2.0) host controller driver has not been implemented yet.
-2. **No Real Filesystem Mounted**: Without a storage driver, the kernel cannot mount an APFS, HFS+, or ramdisk rootfs.
-3. **No Userspace Execution**: The kernel terminates cleanly at the mountroot boundary; PID 1 (`launchd`) and userland execution are not started.
-4. **Deferred Subsystems**: Advanced networking (Skywalk, lo0, gif0, ethernet) and DTrace tracing are temporarily deferred.
-5. **Warm Reboot Nondeterminism**: Repeated warm reboots can cause early stalls; a cold reset is required for 100% deterministic reproduction (see [`docs/XZS_KNOWN_ISSUES.md`](docs/XZS_KNOWN_ISSUES.md)).
+1. **No Root Filesystem Mounted**: While physical block reads (CMD17) are verified on hardware, partition table parsing (Phase D3) and filesystem driver mounting (Phase D4/D5) have not yet been integrated.
+2. **No Userspace Execution**: The kernel terminates cleanly at the hardware bring-up boundary; PID 1 (`launchd`) and userland execution are not started.
+3. **Deferred Subsystems**: Advanced networking (Skywalk, lo0, gif0, ethernet) and DTrace tracing are temporarily deferred.
+4. **Warm Reboot Nondeterminism**: Repeated warm reboots can cause early stalls; a cold reset is required for 100% deterministic reproduction (see [`docs/XZS_KNOWN_ISSUES.md`](docs/XZS_KNOWN_ISSUES.md)).
 
 ---
 
@@ -245,18 +287,19 @@ Output: `artifacts/builds/xzs-xnu-boot.img`
 ## Roadmap
 
 ```text
-Phase A:  Native kernel entry                     [COMPLETE]
-Phase B:  Platform bring-up (UART, GIC, Timer)    [COMPLETE for current scope]
-Phase C:  Mach SMP Scheduler (4 Cores, IPI, AST)  [COMPLETE for current scope]
-Phase D1: BSD/VFS to Root Storage Boundary        [COMPLETE]
-Phase D2: Qualcomm MSM8996 UFS Controller Driver  [NOT STARTED]
-Phase D3: Block Device Nub & GPT Parsing          [NOT STARTED]
-Phase D4: Real Root Filesystem Mount (HFS+/APFS)  [NOT STARTED]
-Phase E:  PID 1 Userspace Bootstrap (launchd)     [NOT STARTED]
-Phase F:  Interactive Serial Console Shell        [NOT STARTED]
-Phase G:  Restore Deferred Subsystems             [NOT STARTED]
-Phase H:  Networking & Peripheral Device Drivers  [NOT STARTED]
-Phase I:  Userspace & Platform Expansion          [NOT STARTED]
+Phase A:   Native kernel entry                     [COMPLETE]
+Phase B:   Platform bring-up (UART, GIC, Timer)    [COMPLETE]
+Phase C:   Mach SMP Scheduler (4 Cores, IPI, AST)  [COMPLETE]
+Phase D1:  BSD/VFS to Root Storage Boundary        [COMPLETE]
+Phase D2:  Physical eMMC Storage Bring-up (CMD17)  [COMPLETE]
+Phase D3:  GUID Partition Table (GPT) Discovery    [NEXT]
+Phase D4:  IOKit Block Storage Integration (disk0) [NOT STARTED]
+Phase D5:  Real Root Filesystem Mount (HFS+/APFS)  [NOT STARTED]
+Phase E:   PID 1 Userspace Bootstrap (launchd)     [NOT STARTED]
+Phase F:   Interactive Serial Console Shell        [NOT STARTED]
+Phase G:   Restore Deferred Subsystems             [NOT STARTED]
+Phase H:   Networking & Peripheral Device Drivers  [NOT STARTED]
+Phase I:   Userspace & Platform Expansion          [NOT STARTED]
 ```
 
 *(Full roadmap: see [`docs/XZS_ROADMAP.md`](docs/XZS_ROADMAP.md))*

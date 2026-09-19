@@ -132,9 +132,10 @@ This document details the complete architectural execution flow of Apple XNU run
                                      │
                                      ▼  [FUTURE PHASES]
 +-------------------------------------------------------------------------+
-|  Phase D2: Qualcomm MSM8996 UFS 2.0 Host Controller Driver              |
-|  Phase D3: Block Device Nub (disk0) & GUID Partition Table (GPT)        |
-|  Phase D4: Real Root Filesystem Mount (HFS+ / APFS)                     |
+|  Phase D2: Physical eMMC Storage Bring-up (SDCC1 / CMD17 LBA 1) [DONE]   |
+|  Phase D3: GUID Partition Table (GPT) Discovery & Enumeration  [NEXT]   |
+|  Phase D4: IOKit Block Storage Integration (disk0 / IOMedia)             |
+|  Phase D5: Real Root Filesystem Mount (HFS+ / APFS / ramdisk)            |
 |  Phase E:  PID 1 Userspace Exec (/sbin/launchd)                         |
 |  Phase F:  Interactive Serial Console Shell (/bin/sh)                   |
 +-------------------------------------------------------------------------+
@@ -183,9 +184,8 @@ This document details the complete architectural execution flow of Apple XNU run
 | **APCS Hardware Watchdog** | `0x09830000` | 4 KB | APCS WDT (`+0x04 RST, +0x08 EN, +0x14 BITE`) | `osfmk/arm64/start.s` |
 | **MPM PS_HOLD** | `0x004ab000` | 4 KB | Power manager pull-down register | `osfmk/arm64/start.s` |
 | **MPM Sleep Timer** | `0x010b3000` | 4 KB | Qualcomm multi-processor sleep timer | `adt.c` |
-| **TLMM GPIO Controller** | `0x01010000` | 256 KB | Top Level Mode Multiplexer | `HARDWARE_MAP.md` |
-| **Qualcomm UFS Controller** | `0x00624000` | 9.25 KB | UFS 2.0 Host Controller (SPI 265) | `HARDWARE_MAP.md` (Phase D2) |
-| **Qualcomm UFS PHY** | `0x00627000` | 4 KB | UFS M-PHY physical interface | `HARDWARE_MAP.md` (Phase D2) |
+| **Qualcomm SDCC1 / SDHCI Controller** | `0x07464900` | 4 KB | SDC1 eMMC 5.1 Host Controller (Samsung BJNB4R) | `xzs_sdhci.c` (Phase D2) |
+| **Qualcomm SDCC1 Core Vendor Spec** | `0x07464A00` | 4 KB | SDCC1 vendor-specific register aperture | `xzs_sdhci.c` (Phase D2) |
 
 ### 3.3 Diagnostic Memory & Persistent SRAM
 

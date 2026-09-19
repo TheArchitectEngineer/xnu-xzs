@@ -7,32 +7,34 @@ This summary provides an executive overview of the project's technical status. I
 ## Current Milestone
 
 ```text
-Phase D1 acceptance gate completed:
-BSD/VFS bootstrap reaches root-device / block-storage boundary.
+Phase D2 acceptance gate completed:
+Physical eMMC storage bring-up verified on hardware.
+Exactly one 512-byte sector read from LBA 1 matches independent TWRP oracle byte-for-byte.
+Phase D3 (GPT Partition Discovery) is NEXT.
 ```
 
 * **Target Device**: Sony Xperia XZs (Model G8231 / Platform Tone / Board Keyaki)
 * **SoC**: Qualcomm Snapdragon 820 (MSM8996 Pro)
 * **CPU Architecture**: Quad-core Qualcomm Kryo ARMv8.0-A (2x Silver + 2x Gold)
+* **Storage Device**: Samsung BJNB4R 32GB eMMC 5.1 (`CID: 150100424a4e4234520fdac7c0381400`)
 * **Active Development Branch**: `xzs-bringup`
-* **Target Baseline Commit**: `27d000c`
+* **Milestone Tag**: `xzs-d2-storage-complete`
 
 ---
 
 ## Highest Hardware-Verified Checkpoint
 
 ```text
-[D50] ROOT DEVICE SELECTION ENTER
-[D50-I0..I8] Canonical IOMedia discovery traversed (timeout=1.0s)
-[D50b] IOFindBSDRoot returns canonical kIOReturnNotFound (0xe00002f0)
-[D50c] Synthetic rootdev selected (sd0a: major=6, minor=0)
-[D51] vfs_mountroot ENTER
-[D51b] bdevvp(rootdev, ...) error=0x13 (ENODEV)
-[D51-TERMINAL] cannot mount root, errno = 0x13
-[XZS-BOOT] PHASE D1 TERMINAL CONDITION REACHED — WARM REBOOTING TO FASTBOOT
+[BREADCRUMB] CP=0x000000000000d3b0 ERR=0x0000000000000041 (CMD17 Issued: 0x113A, ARG: 0x00000001)
+[BREADCRUMB] CP=0x000000000000d3b0 ERR=0x0000000000000042 (COMMAND_COMPLETE Latched, R1=0x00000900)
+[BREADCRUMB] CP=0x000000000000d3b0 ERR=0x0000000000000050 (BUFFER_READ_READY Latched)
+[BREADCRUMB] CP=0x000000000000d3b0 ERR=0x0000000000000052 (512 Bytes Captured from SDHCI_BUFFER)
+[BREADCRUMB] CP=0x000000000000d3b0 ERR=0x0000000000000053 (TRANSFER_COMPLETE Latched)
+[BREADCRUMB] CP=0x000000000000d3b0 ERR=0x0000000000000071 (BYTE_FOR_BYTE_MATCH: yes)
+[BREADCRUMB] CP=0x000000000000d3b0 ERR=0x0000000000000080 (D2_STORAGE_COMPLETE: yes)
 ```
 
-The kernel confirms that Mach SMP, BSD initialization, IOKit autoconfiguration, and VFS mountroot logic operate genuinely on physical silicon. The terminal error code `0x13` (`ENODEV`, decimal 19) proves that the VFS subsystem reached the storage layer and queried the BSD block device switch table (`bdevsw`), correctly failing because a physical storage controller driver has not yet been implemented.
+The kernel confirms that Mach SMP, BSD initialization, IOKit autoconfiguration, and Qualcomm SDCC1/SDHCI eMMC physical block read operate genuinely on physical silicon. The single-block physical sector payload (LBA 1, 512 bytes) was compared byte-for-byte against an independent TWRP Linux oracle (`/dev/block/mmcblk0`), confirming identical SHA-256 hash `e4b891b42fd57eb352ffbe0aa9098d04fe85f88e3425dcba529064cce72f862a` with zero byte differences.
 
 ---
 
@@ -51,7 +53,8 @@ The kernel confirms that Mach SMP, BSD initialization, IOKit autoconfiguration, 
 - [x] **BSD Subsystem Bootstrap**: Process 0 (`kernproc`), credentials, zones, domains, sysctl tree.
 - [x] **VFS Core Framework**: Mount lists, vnode pools (`vnodes=263168`), devfs bootstrap.
 - [x] **IOKit Autoconfiguration**: `IOKitBSDInit` publishing `IOBSD` plane to BSD.
-- [x] **Automated Recovery**: Warm reboot back to Fastboot within +6 seconds via Qualcomm APCS watchdog bite upon reaching D1 terminal state.
+- [x] **Physical eMMC Storage Bring-up (D2)**: SDCC1 clock (400 kHz), controlled reset, power-up, CMD0..CMD17, 512-byte PIO sector read, TWRP oracle byte-for-byte match.
+- [x] **Automated Recovery**: Warm reboot back to Fastboot within +6 seconds via Qualcomm APCS watchdog bite upon reaching diagnostic terminal state.
 
 ---
 
@@ -71,10 +74,10 @@ The following non-essential subsystems are temporarily deferred to eliminate all
 
 ## What Does Not Exist Yet
 
-- [ ] **Physical UFS Controller Driver**: No driver for Qualcomm MSM8996 UFS 2.0 (`0x00624000`).
-- [ ] **Block Storage Devices**: No physical `IOMedia` or `disk0` published in IOKit registry.
-- [ ] **Root Filesystem**: No APFS, HFS+, or ramdisk mounted at `/`.
-- [ ] **Userspace Process**: No PID 1 (`launchd`), shell, or `/dev/console` interactive session.
+- [ ] **GPT Partition Parser (D3)**: Primary and backup GUID Partition Table discovery and partition enumeration.
+- [ ] **Block Storage Devices (D4)**: Physical `IOMedia` or `disk0` published in IOKit registry.
+- [ ] **Root Filesystem (D5)**: No APFS, HFS+, or ramdisk mounted at `/`.
+- [ ] **Userspace Process (Phase E)**: No PID 1 (`launchd`), shell, or `/dev/console` interactive session.
 
 ---
 
