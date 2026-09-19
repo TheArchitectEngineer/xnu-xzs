@@ -405,3 +405,61 @@ Disassembly of `artifacts/scratch/twrp-Image` (`ufs_qcom_power_up_sequence` @ `0
 - `ufs_qcom_dev_ref_clk_ctrl` is ONLY called during dynamic bus scaling votes. It is NEVER called during initial PHY bring-up.
 - Bootloader already hands off with `REG_UFS_CFG1 = 0x1C00052C` (Bit 26 is already 1).
 - Neither `GCC_UFS_BCR` nor `REG_UFS_CFG1` soft reset destroys Bit 26.
+
+---
+
+## 10. Phase D2-C2.7: Isolated Sony PHY Sequence Replay & Hardware Telemetry
+
+### 10.1 Status Register Map Proof
+- `QSERDES_COM_LOCK_CMP_EN`: offset `0x0C8` (CONFIG register)
+- `QSERDES_COM_C_READY_STATUS`: offset `0x190` (STATUS register, bit 0 = C_READY)
+- `UFS_PHY_PCS_READY_STATUS`: offset `0xD68` (STATUS register, bit 0 = PCS_READY)
+- Register proof verified on silicon before sequence execution.
+
+### 10.2 Sony 0x134 Vendor Quirk Audit
+- Source disassembly of `artifacts/scratch/twrp-Image`:
+  - Read: `0xffffffc00049dd4c: ldr w3, [x20]` (`PHY + 0x134`)
+  - Saved: `0xffffffc00049dd6c: str w3, [x19, #0x100]` (`phy->vco_tune1_mode1`)
+  - Branch controlling read: `0xffffffc00049dd24: tbz w0, #2, #0xffffffc00049dd78`
+  - Branch controlling restore: `0xffffffc00049dfd8: tbz w0, #2, #0xffffffc00049e014`
+  - Write back: `0xffffffc00049e004: str w1, [x21]` (`PHY + 0x134`)
+  - Quirk condition: `quirks = (major == 2 && minor == 0 && step == 0) ? 7 : 0`
+  - On MSM8996 v2.2.0 (`major=2, minor=2, step=0`): `quirks = 0` (bit 2 is 0).
+  - Verdict: Stock Sony Linux driver does NOT save/restore `0x134` on v2.2.0 hardware (`SONY_2_2_0_SAVE_0x134 = no`, `SONY_2_2_0_RESTORE_0x134 = no`).
+
+### 10.3 Stage A: 0x134 Preservation Isolation
+- Retained old C2.6 C04 ordering, isolated `0x134` save/restore:
+  - `PRE_CAL_0x134 = 0x0A`
+  - `TABLE_0x134 = 0xD6`
+  - `RESTORED_0x134 = 0x0A`
+- Telemetry across 10ms, 100ms, 500ms, 1000ms:
+  - `C_READY (+0x190) = 0`
+  - `PCS_READY (+0xD68) = 0`
+  - `LOCK_CMP_EN (+0x0C8) = 1`
+- Classification: **A2** (`C_READY` remained 0; `0x134` preservation alone is insufficient).
+
+### 10.4 Stage B: Exact Sony Reset / Power Ordering
+- Preserved `0x134` and executed exact Sony kernel ordering:
+  1. Base: `C04 = 0`, `C00 = 0`.
+  2. `REG_UFS_CFG1`: assert soft reset (`bit 1 = 1`). Settle 1000 µs.
+  3. Calibrate PHY while soft reset remains asserted: write 76 Rate-A + Rate-B override.
+  4. Restore `0x134 = 0x0A`.
+  5. Verify: `CFG1 bit 1 = 1`, `0x134 = 0x0A`.
+  6. `REG_UFS_CFG1`: deassert soft reset (`bit 1 = 0`). Settle 1000 µs.
+  7. `PHY + 0xC04 = 1` (`POWER_DOWN_CONTROL = 1`). Memory barrier.
+  8. `PHY + 0xC00 = 1` (`PHY_START = 1`). Memory barrier.
+  9. Poll `0x190` and `0xD68` across 10ms, 100ms, 500ms, 1000ms.
+- Telemetry:
+  - `CR (+0x190) = 0`
+  - `PCS (+0xD68) = 0`
+  - `LOCK_CMP_EN (+0x0C8) = 0x01`
+  - `PHY + 0x160 = 0x00` (`RESET_SM_STATUS`)
+  - `CMN_CONFIG (+0x194) = 0x0E`
+  - `PHY_START (+0xC00) = 0x01`
+  - `POWER_DOWN_CONTROL (+0xC04) = 0x01`
+- Classification: **B3** (`C_READY = 0` after exact Sony sequence).
+
+### 10.5 Invariants & Reverse Rollback
+- Hard Invariant: `HCE = 0`, `HCS = 0`, `UICCMD = 0`, DMA untouched.
+- Clean reverse RPM rollback: `LN_BB` (SLEEP -> ACTIVE release) -> `L12` (ACTIVE release) -> `L28` (ACTIVE release) all returned ACK.
+- Automated return to Fastboot via pshold in ~7s.

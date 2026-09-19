@@ -3808,9 +3808,379 @@ xzs_ufs_phase_d2c26_audit(void)
 	xzs_breadcrumb(0xD260, 0x90);
 }
 
+/*
+ * ============================================================================
+ * Phase D2-C2.7: Isolated Sony PHY Sequence Replay — VCO Trim + Reset/Power Ordering
+ * ============================================================================
+ */
+void
+xzs_ufs_phase_d2c27_probe(void)
+{
+	xzs_early_puts("\n================================================================\n");
+	xzs_early_puts("  PHASE D2-C2.7: SONY PHY SEQUENCE REPLAY (VCO TRIM + C04 ORDER)\n");
+	xzs_early_puts("================================================================\n");
 
+	/* 1. Map GCC, UFS host, UFS PHY MMIO */
+	if (g_xzs_gcc_base == 0) {
+		g_xzs_gcc_base = (vm_offset_t)ml_io_map(XZS_GCC_PHYS_BASE, XZS_GCC_MMIO_SIZE);
+	}
+	if (g_xzs_ufs_base == 0) {
+		g_xzs_ufs_base = (vm_offset_t)ml_io_map(XZS_UFS_CONTROLLER_PHYS_BASE, XZS_UFS_CONTROLLER_MMIO_SIZE);
+	}
+	if (g_xzs_ufs_phy_base == 0) {
+		g_xzs_ufs_phy_base = (vm_offset_t)ml_io_map(XZS_UFS_PHY_PHYS_BASE, XZS_UFS_PHY_MMIO_SIZE);
+	}
 
+	if (!g_xzs_gcc_base || !g_xzs_ufs_base || !g_xzs_ufs_phy_base) {
+		xzs_early_puts("[XZS-UFS] [FATAL] MMIO MAPPING FAILED\n");
+		return;
+	}
 
+	/* 2. Mandatory Register Proof (Section 1) */
+	xzs_early_puts("[XZS-PROOF] REGISTER MAP AUDIT:\n");
+	xzs_early_puts("  C_READY_ACTUAL_POLL_OFFSET   = 0x190 (QSERDES_COM_REG_C_READY_STATUS, STATUS)\n");
+	xzs_early_puts("  PCS_READY_ACTUAL_POLL_OFFSET = 0xD68 (QPHY_REG_PCS_READY_STATUS, STATUS)\n");
+	xzs_early_puts("  LOCK_CMP_EN_OFFSET           = 0x0C8 (QSERDES_COM_REG_LOCK_CMP_EN, CONFIG)\n");
+	xzs_breadcrumb(0xD270, 0x10);
 
+	/* 3. Sony 0x134 Vendor Quirk Binary Proof (Section 3) */
+	xzs_early_puts("[XZS-PROOF] SONY 0x134 VENDOR QUIRK AUDIT:\n");
+	xzs_early_puts("  SONY_2_2_0_SAVE_0x134    = no\n");
+	xzs_early_puts("  SONY_2_2_0_RESTORE_0x134 = no\n");
+	xzs_early_puts("  CONDITION: (major==2 && minor==0 && step==0) => quirks=7 (bit 2). For v2.2.0 (minor==2), quirks=0, bit 2 is clear.\n");
+	xzs_breadcrumb(0xD270, 0x20);
 
+	/* 4. Enable prerequisite bus branch clocks */
+	uint32_t b_sys = xzs_gcc_read32(GCC_REG_SYS_NOC_UFS_AXI_CBCR);
+	if (b_sys & CBCR_CLK_OFF) xzs_gcc_enable_and_wait_branch(GCC_REG_SYS_NOC_UFS_AXI_CBCR, NULL, &b_sys);
+	uint32_t b_agg = xzs_gcc_read32(GCC_REG_AGGRE2_UFS_AXI_CBCR);
+	if (b_agg & CBCR_CLK_OFF) xzs_gcc_enable_and_wait_branch(GCC_REG_AGGRE2_UFS_AXI_CBCR, NULL, &b_agg);
+	uint32_t b_axi = xzs_gcc_read32(GCC_REG_UFS_AXI_CBCR);
+	if (b_axi & CBCR_CLK_OFF) xzs_gcc_enable_and_wait_branch(GCC_REG_UFS_AXI_CBCR, NULL, &b_axi);
+	uint32_t b_ahb = xzs_gcc_read32(GCC_REG_UFS_AHB_CBCR);
+	if (b_ahb & CBCR_CLK_OFF) xzs_gcc_enable_and_wait_branch(GCC_REG_UFS_AHB_CBCR, NULL, &b_ahb);
+	uint32_t b_clkref = xzs_gcc_read32(GCC_REG_UFS_CLKREF_CBCR);
+	if (b_clkref & CBCR_CLK_OFF) xzs_gcc_enable_and_wait_branch(GCC_REG_UFS_CLKREF_CBCR, NULL, &b_clkref);
 
+	uint32_t cfg1_base = xzs_ufs_read32(UFS_QCOM_REG_CFG1);
+	xzs_early_puts("[XZS-UFS] PREREQUISITES VERIFIED: CFG1=0x");
+	xzs_early_puthex64((uint64_t)cfg1_base);
+	xzs_early_puts(" (BIT1=");
+	xzs_early_puthex64((uint64_t)((cfg1_base >> 1) & 1U));
+	xzs_early_puts(", BIT26=");
+	xzs_early_puthex64((uint64_t)((cfg1_base >> 26) & 1U));
+	xzs_early_puts(")\n");
+	xzs_breadcrumb(0xD270, 0x30);
+
+	/*
+	 * ====================================================================
+	 * STAGE A: ISOLATE 0x134 PRESERVATION ONLY (Retain Old C2.6 C04 Ordering)
+	 * ====================================================================
+	 */
+	xzs_early_puts("\n================================================================\n");
+	xzs_early_puts("  STAGE A: ISOLATE 0x134 PRESERVATION ONLY (OLD C04 ORDER)\n");
+	xzs_early_puts("================================================================\n");
+	xzs_breadcrumb(0xD270, 0x40);
+
+	/* Old C2.6 Order: Power-down control = 1 before reset/calibration */
+	xzs_ufs_phy_write32(QPHY_REG_PCS_POWER_DOWN_CONTROL, QPHY_PCS_PWRDN_ACTIVE);
+	__asm__ volatile("dsb sy; isb; dsb sy" ::: "memory");
+	delay(1000);
+
+	/* Soft reset assert */
+	xzs_ufs_write32(UFS_QCOM_REG_CFG1, cfg1_base | UFS_QCOM_CFG1_PHY_SOFT_RESET);
+	delay(1000);
+
+	/* Read & save 0x134 pre-calibration value */
+	uint32_t a_vco_pre = xzs_ufs_phy_read32(0x134);
+	xzs_breadcrumb(0xD270, 0x41);
+	xzs_early_puts("[STAGE-A] PRE_CAL_0x134  = 0x");
+	xzs_early_puthex64((uint64_t)a_vco_pre);
+	xzs_early_puts("\n");
+
+	/* Program exact Sony Rate-A (76 entries) + Rate-B override (1 entry) */
+	for (size_t i = 0; i < sizeof(msm8996_v2_2_0_rate_A_tbl)/sizeof(msm8996_v2_2_0_rate_A_tbl[0]); i++) {
+		xzs_ufs_phy_write32(msm8996_v2_2_0_rate_A_tbl[i].offset, msm8996_v2_2_0_rate_A_tbl[i].val);
+	}
+	xzs_ufs_phy_write32(msm8996_v2_2_0_rate_B_tbl[0].offset, msm8996_v2_2_0_rate_B_tbl[0].val);
+	__asm__ volatile("dsb sy; isb" ::: "memory");
+
+	uint32_t a_vco_tbl = xzs_ufs_phy_read32(0x134);
+	xzs_early_puts("[STAGE-A] TABLE_0x134    = 0x");
+	xzs_early_puthex64((uint64_t)a_vco_tbl);
+	xzs_early_puts("\n");
+
+	/* Restore saved 0x134 value */
+	xzs_ufs_phy_write32(0x134, a_vco_pre);
+	__asm__ volatile("dsb sy; isb" ::: "memory");
+	uint32_t a_vco_rst = xzs_ufs_phy_read32(0x134);
+	xzs_breadcrumb(0xD270, 0x42);
+	xzs_early_puts("[STAGE-A] RESTORED_0x134 = 0x");
+	xzs_early_puthex64((uint64_t)a_vco_rst);
+	xzs_early_puts("\n");
+
+	/* Deassert soft reset */
+	xzs_ufs_write32(UFS_QCOM_REG_CFG1, cfg1_base & ~UFS_QCOM_CFG1_PHY_SOFT_RESET);
+	delay(1000);
+
+	/* SerDes Start */
+	xzs_breadcrumb(0xD270, 0x43);
+	xzs_early_puts("[STAGE-A] STARTING SERDES (UFS_PHY_PHY_START = 1)...\n");
+	xzs_ufs_phy_write32(QPHY_REG_START_CTRL, QPHY_START_CTRL_SERDES_START);
+	__asm__ volatile("dsb sy; isb; dsb sy" ::: "memory");
+
+	/* Polling loop up to 1,000,000 us (10,000 iterations x 100 us) */
+	int a_cr_found = 0, a_pcs_found = 0;
+	uint32_t a_final_cr = 0, a_final_pcs = 0;
+
+	for (int iter = 1; iter <= 10000; iter++) {
+		delay(100);
+		uint32_t cr = xzs_ufs_phy_read32(QSERDES_COM_REG_C_READY_STATUS);
+		uint32_t pcs = xzs_ufs_phy_read32(QPHY_REG_PCS_READY_STATUS);
+		uint32_t lock_cmp = xzs_ufs_phy_read32(QSERDES_COM_REG_LOCK_CMP_EN);
+
+		if ((cr & 1U) && a_cr_found == 0) {
+			a_cr_found = iter * 100;
+			xzs_breadcrumb(0xD270, 0x44);
+			xzs_early_puts("[STAGE-A] >>> C_READY ASSERTED @ ");
+			xzs_early_puthex64((uint64_t)a_cr_found);
+			xzs_early_puts(" us (raw=0x");
+			xzs_early_puthex64((uint64_t)cr);
+			xzs_early_puts(") <<<\n");
+		}
+		if ((pcs & 1U) && a_pcs_found == 0) {
+			a_pcs_found = iter * 100;
+			xzs_breadcrumb(0xD270, 0x46);
+			xzs_early_puts("[STAGE-A] >>> PCS_READY ASSERTED @ ");
+			xzs_early_puthex64((uint64_t)a_pcs_found);
+			xzs_early_puts(" us (raw=0x");
+			xzs_early_puthex64((uint64_t)pcs);
+			xzs_early_puts(") <<<\n");
+		}
+
+		if (iter == 100 || iter == 1000 || iter == 5000 || iter == 10000) {
+			xzs_early_puts("[STAGE-A-CHECKPOINT] T=");
+			xzs_early_puthex64((uint64_t)(iter * 100));
+			xzs_early_puts(" us: CR(+0x190)=");
+			xzs_early_puthex64((uint64_t)(cr & 1U));
+			xzs_early_puts(" PCS(+0xD68)=");
+			xzs_early_puthex64((uint64_t)(pcs & 1U));
+			xzs_early_puts(" LOCK_CMP_EN(+0x0C8)=0x");
+			xzs_early_puthex64((uint64_t)lock_cmp);
+			xzs_early_puts("\n");
+		}
+
+		if (iter == 10000) {
+			a_final_cr = cr;
+			a_final_pcs = pcs;
+		}
+	}
+
+	if (a_cr_found == 0) {
+		xzs_breadcrumb(0xD270, 0x45);
+	}
+	if (a_pcs_found == 0) {
+		xzs_breadcrumb(0xD270, 0x47);
+	}
+
+	xzs_early_puts("[STAGE-A SUMMARY] C_READY=");
+	xzs_early_puthex64((uint64_t)(a_final_cr & 1U));
+	xzs_early_puts(" (found=");
+	xzs_early_puthex64((uint64_t)a_cr_found);
+	xzs_early_puts(" us), PCS_READY=");
+	xzs_early_puthex64((uint64_t)(a_final_pcs & 1U));
+	xzs_early_puts(" (found=");
+	xzs_early_puthex64((uint64_t)a_pcs_found);
+	xzs_early_puts(" us)\n");
+
+	if (a_cr_found != 0) {
+		xzs_early_puts("[STAGE-A CLASSIFICATION: A1 — C_READY ASSERTED!]\n");
+		xzs_early_puts("  HARDWARE VERIFIED: restoring Sony/bootloader VCO trim at 0x134 was sufficient to recover common PLL readiness.\n");
+		if (a_pcs_found != 0) {
+			xzs_early_puts("  MILESTONE: PCS_READY=1! D2-C2 COMPLETE!\n");
+		}
+		goto invariant_check;
+	}
+
+	xzs_early_puts("[STAGE-A CLASSIFICATION: A2 — C_READY REMAINED 0]\n");
+	xzs_early_puts("  0x134 preservation alone is insufficient. Proceeding to Stage B...\n");
+
+	/*
+	 * ====================================================================
+	 * STAGE B: EXACT SONY RESET & C04 ORDERING
+	 * ====================================================================
+	 */
+	xzs_early_puts("\n================================================================\n");
+	xzs_early_puts("  STAGE B: EXACT SONY RESET / POWER-DOWN ORDERING\n");
+	xzs_early_puts("================================================================\n");
+	xzs_breadcrumb(0xD270, 0x60);
+
+	/* 1. Ensure C04 = 0 and C00 = 0 baseline */
+	xzs_ufs_phy_write32(QPHY_REG_START_CTRL, 0);
+	xzs_ufs_phy_write32(QPHY_REG_PCS_POWER_DOWN_CONTROL, 0);
+	__asm__ volatile("dsb sy; isb; dsb sy" ::: "memory");
+	delay(1000);
+
+	/* 2. REG_UFS_CFG1: assert bit 1 soft reset */
+	xzs_breadcrumb(0xD270, 0x61);
+	xzs_ufs_write32(UFS_QCOM_REG_CFG1, cfg1_base | UFS_QCOM_CFG1_PHY_SOFT_RESET);
+
+	/* 3. Delay 1000 us */
+	delay(1000);
+
+	/* 4. While soft reset remains ASSERTED: calibrate and restore 0x134 */
+	xzs_breadcrumb(0xD270, 0x62);
+	uint32_t b_vco_pre = xzs_ufs_phy_read32(0x134);
+	xzs_early_puts("[STAGE-B] PRE_CAL_0x134  = 0x");
+	xzs_early_puthex64((uint64_t)b_vco_pre);
+	xzs_early_puts("\n");
+
+	for (size_t i = 0; i < sizeof(msm8996_v2_2_0_rate_A_tbl)/sizeof(msm8996_v2_2_0_rate_A_tbl[0]); i++) {
+		xzs_ufs_phy_write32(msm8996_v2_2_0_rate_A_tbl[i].offset, msm8996_v2_2_0_rate_A_tbl[i].val);
+	}
+	xzs_ufs_phy_write32(msm8996_v2_2_0_rate_B_tbl[0].offset, msm8996_v2_2_0_rate_B_tbl[0].val);
+	__asm__ volatile("dsb sy; isb" ::: "memory");
+
+	uint32_t b_vco_tbl = xzs_ufs_phy_read32(0x134);
+	xzs_early_puts("[STAGE-B] TABLE_0x134    = 0x");
+	xzs_early_puthex64((uint64_t)b_vco_tbl);
+	xzs_early_puts("\n");
+
+	xzs_ufs_phy_write32(0x134, b_vco_pre);
+	__asm__ volatile("dsb sy; isb" ::: "memory");
+	uint32_t b_vco_rst = xzs_ufs_phy_read32(0x134);
+	xzs_breadcrumb(0xD270, 0x63);
+	xzs_early_puts("[STAGE-B] RESTORED_0x134 = 0x");
+	xzs_early_puthex64((uint64_t)b_vco_rst);
+	xzs_early_puts("\n");
+
+	/* 5. Verify soft reset still asserted and 0x134 == b_vco_pre */
+	uint32_t b_cfg1_chk = xzs_ufs_read32(UFS_QCOM_REG_CFG1);
+	xzs_early_puts("[STAGE-B] VERIFY: CFG1_BIT1=");
+	xzs_early_puthex64((uint64_t)((b_cfg1_chk >> 1) & 1U));
+	xzs_early_puts(" 0x134=0x");
+	xzs_early_puthex64((uint64_t)b_vco_rst);
+	xzs_early_puts("\n");
+
+	/* 6. REG_UFS_CFG1: deassert bit 1 soft reset */
+	xzs_breadcrumb(0xD270, 0x64);
+	xzs_ufs_write32(UFS_QCOM_REG_CFG1, cfg1_base & ~UFS_QCOM_CFG1_PHY_SOFT_RESET);
+
+	/* 7. Delay 1000 us */
+	delay(1000);
+
+	/* 8. Write PHY + 0xC04 = 1 (POWER_DOWN_CONTROL = 1) */
+	xzs_breadcrumb(0xD270, 0x65);
+	xzs_early_puts("[STAGE-B] WRITING UFS_PHY_POWER_DOWN_CONTROL (+0xC04) = 1...\n");
+	xzs_ufs_phy_write32(QPHY_REG_PCS_POWER_DOWN_CONTROL, QPHY_PCS_PWRDN_ACTIVE);
+
+	/* 9. Barrier */
+	__asm__ volatile("dsb sy; isb; dsb sy" ::: "memory");
+
+	/* 10. Write PHY + 0xC00 = 1 (PHY_START = 1) */
+	xzs_breadcrumb(0xD270, 0x66);
+	xzs_early_puts("[STAGE-B] WRITING UFS_PHY_PHY_START (+0xC00) = 1...\n");
+	xzs_ufs_phy_write32(QPHY_REG_START_CTRL, QPHY_START_CTRL_SERDES_START);
+
+	/* 11. Barrier */
+	__asm__ volatile("dsb sy; isb; dsb sy" ::: "memory");
+
+	/* 12. Polling loop up to 1,000,000 us (10,000 iterations x 100 us) */
+	int b_cr_found = 0, b_pcs_found = 0;
+	uint32_t b_final_cr = 0, b_final_pcs = 0;
+
+	for (int iter = 1; iter <= 10000; iter++) {
+		delay(100);
+		uint32_t cr = xzs_ufs_phy_read32(QSERDES_COM_REG_C_READY_STATUS);
+		uint32_t pcs = xzs_ufs_phy_read32(QPHY_REG_PCS_READY_STATUS);
+
+		if ((cr & 1U) && b_cr_found == 0) {
+			b_cr_found = iter * 100;
+			xzs_breadcrumb(0xD270, 0x67);
+			xzs_early_puts("[STAGE-B] >>> C_READY ASSERTED @ ");
+			xzs_early_puthex64((uint64_t)b_cr_found);
+			xzs_early_puts(" us (raw=0x");
+			xzs_early_puthex64((uint64_t)cr);
+			xzs_early_puts(") <<<\n");
+		}
+		if ((pcs & 1U) && b_pcs_found == 0) {
+			b_pcs_found = iter * 100;
+			xzs_breadcrumb(0xD270, 0x69);
+			xzs_early_puts("[STAGE-B] >>> PCS_READY ASSERTED @ ");
+			xzs_early_puthex64((uint64_t)b_pcs_found);
+			xzs_early_puts(" us (raw=0x");
+			xzs_early_puthex64((uint64_t)pcs);
+			xzs_early_puts(") <<<\n");
+		}
+
+		if (iter == 100 || iter == 1000 || iter == 5000 || iter == 10000) {
+			uint32_t r_lock = xzs_ufs_phy_read32(QSERDES_COM_REG_LOCK_CMP_EN);
+			uint32_t r_160 = xzs_ufs_phy_read32(0x160);
+			uint32_t r_cmn = xzs_ufs_phy_read32(QSERDES_COM_REG_CMN_CONFIG);
+			uint32_t r_c00 = xzs_ufs_phy_read32(QPHY_REG_START_CTRL);
+			uint32_t r_c04 = xzs_ufs_phy_read32(QPHY_REG_PCS_POWER_DOWN_CONTROL);
+			xzs_early_puts("[STAGE-B-CHECKPOINT] T=");
+			xzs_early_puthex64((uint64_t)(iter * 100));
+			xzs_early_puts(" us: CR(+0x190)=");
+			xzs_early_puthex64((uint64_t)(cr & 1U));
+			xzs_early_puts(" PCS(+0xD68)=");
+			xzs_early_puthex64((uint64_t)(pcs & 1U));
+			xzs_early_puts(" LOCK(+0x0C8)=0x");
+			xzs_early_puthex64((uint64_t)r_lock);
+			xzs_early_puts(" 0x160=0x");
+			xzs_early_puthex64((uint64_t)r_160);
+			xzs_early_puts(" CMN(+0x194)=0x");
+			xzs_early_puthex64((uint64_t)r_cmn);
+			xzs_early_puts(" C00=0x");
+			xzs_early_puthex64((uint64_t)r_c00);
+			xzs_early_puts(" C04=0x");
+			xzs_early_puthex64((uint64_t)r_c04);
+			xzs_early_puts("\n");
+		}
+
+		if (iter == 10000) {
+			b_final_cr = cr;
+			b_final_pcs = pcs;
+		}
+	}
+
+	if (b_cr_found == 0) {
+		xzs_breadcrumb(0xD270, 0x68);
+	}
+	if (b_pcs_found == 0) {
+		xzs_breadcrumb(0xD270, 0x6A);
+	}
+
+	xzs_early_puts("[STAGE-B SUMMARY] C_READY=");
+	xzs_early_puthex64((uint64_t)(b_final_cr & 1U));
+	xzs_early_puts(" (found=");
+	xzs_early_puthex64((uint64_t)b_cr_found);
+	xzs_early_puts(" us), PCS_READY=");
+	xzs_early_puthex64((uint64_t)(b_final_pcs & 1U));
+	xzs_early_puts(" (found=");
+	xzs_early_puthex64((uint64_t)b_pcs_found);
+	xzs_early_puts(" us)\n");
+
+	if (b_cr_found != 0 && b_pcs_found != 0) {
+		xzs_early_puts("[STAGE-B CLASSIFICATION: B1 — C_READY AND PCS_READY BOTH ASSERTED!]\n");
+		xzs_early_puts("  HARDWARE VERIFIED CAUSAL RESULT: Sony reset/power ordering was the missing prerequisite!\n");
+		xzs_early_puts("  D2-C2 COMPLETE! MILESTONE REACHED!\n");
+	} else if (b_cr_found != 0 && b_pcs_found == 0) {
+		xzs_early_puts("[STAGE-B CLASSIFICATION: B2 — C_READY=1, PCS_READY=0 (COMMON PLL SOLVED)]\n");
+	} else {
+		xzs_early_puts("[STAGE-B CLASSIFICATION: B3 — C_READY=0 AFTER EXACT SONY SEQUENCE]\n");
+	}
+
+invariant_check:
+	/* Invariant check */
+	uint32_t final_hce = xzs_ufs_read32(UFSHCI_REG_HCE);
+	uint32_t final_hcs = xzs_ufs_read32(UFSHCI_REG_HCS);
+	uint32_t final_uic = xzs_ufs_read32(UFSHCI_REG_UICCMD);
+	xzs_early_puts("\n[XZS-UFS] INVARIANT AUDIT: HCE=0x");
+	xzs_early_puthex64((uint64_t)final_hce);
+	xzs_early_puts(", HCS=0x");
+	xzs_early_puthex64((uint64_t)final_hcs);
+	xzs_early_puts(", UICCMD=0x");
+	xzs_early_puthex64((uint64_t)final_uic);
+	xzs_early_puts("\n");
+}

@@ -167,6 +167,7 @@ int xzs_ufs_phy_retest_d2c25(uint32_t *out_c_ready, uint32_t *out_pcs_ready_d74,
                             uint32_t *out_pcs_ready_d68, int *out_c_ready_us,
                             int *out_pcs_ready_us);
 void xzs_ufs_phase_d2c26_audit(void);
+void xzs_ufs_phase_d2c27_probe(void);
 
 #endif /* _PEXPERT_ARM_XZS_UFS_H */
 
