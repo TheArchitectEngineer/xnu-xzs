@@ -329,4 +329,11 @@ void xzs_sdhci_phase_d3m1_probe(void);
 
 void xzs_sdhci_phase_d3m2a_probe(void);
 
+/*
+ * Phase D3-M2B: Primary GPT Partition Map Parsing Declarations
+ */
+#define GPT_MAX_ENTRY_SLOTS             128U
+
+void xzs_sdhci_phase_d3m2b_probe(void);
+
 #endif /* _PEXPERT_ARM_XZS_SDHCI_H */

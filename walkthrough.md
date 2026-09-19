@@ -1,33 +1,48 @@
-# Phase D3-M2A Silicon Verification Walkthrough
+# Phase D3-M2B Silicon Verification Walkthrough
 
 ## Milestone Objective
-Phase D3-M2A: Read the 16,384-byte Primary GPT Partition Entry Array (LBA 2..33) from the physical Samsung BJNB4R eMMC storage using sequential `CMD17` single-block PIO transfers, compute the exact UEFI/IEEE 802.3 CRC32 checksum, verify it matches the Primary GPT Header's `PartitionEntryArrayCRC32` field, prove buffer immutability post-read, serialize the array as 32 hex chunks, and verify byte-for-byte identity against an independent host TWRP oracle.
+Phase D3-M2B: Re-read and integrity-verify the Primary GPT Header (LBA 1) and 16-KiB Entry Array (LBA 2..33) directly from the onboard Samsung BJNB4R eMMC storage on the physical Sony Xperia XZs (`MSM8996`), decode all 128 GPT partition slots into static kernel structures, validate extents, bounds, arithmetic safety, pairwise non-overlap, and unique GUIDs, deterministically decode canonical UTF-16LE names and preserve 72-byte raw hex, emit full telemetry, and verify 100% parity against an independent frozen host oracle JSON with zero differences.
 
 ---
 
 ## Changes Made
-1. **Generic Physical Sector Reader (`xzs_emmc_read_sector_pio`):**
-   - Refactored `xzs_emmc_read_sector_pio(uint32_t lba, uint64_t validated_sector_count, uint8_t out[512])` in `src/xnu/pexpert/arm/xzs_sdhci.c` and declared in `src/xnu/pexpert/pexpert/arm/xzs_sdhci.h`.
-   - Fails closed if `validated_sector_count == 0` or `(uint64_t)lba >= validated_sector_count`.
-   - Removed the milestone-specific `lba >= 2` boundary restriction.
-2. **Phase D3-M2A Probe Routine (`xzs_sdhci_phase_d3m2a_probe`):**
-   - Breadcrumb trace in namespace `CP = 0xD3D0` (`0x00` to `0x01`).
-   - Hardware initialization replay from cold reset through CMD0, CMD1 (polling until ready), CMD2, CMD3 (RCA=2), CMD9, CMD7, and CMD8 (`EXT_CSD`).
-   - Extracted live geometry: `live_sec_count = 61071360`, `live_last_physical_lba = 61071359`.
-   - Fresh physical LBA 1 read & validation: "EFI PART", revision `0x00010000`, size 92, Header CRC32 `0xBFDF741D` (exact match).
-   - Dynamic array geometry extracted: `128 * 128 = 16384` bytes, 32 sectors, bounds LBA 2..33.
-   - Buffer capacity: static aligned 16 KiB buffer `g_xzs_gpt_primary_entries`.
-   - Compact PIO read loop: 32 individual `CMD17` reads with ZERO console/UART dumping between transfers.
-   - Audit read sequence proof: `GPT_ARRAY_READ_BITMAP = 0xFFFFFFFF`, 32 attempts, 32 successes, 0 duplicates, 0 missing, 0 out-of-range.
-   - Exact CRC32 validation: computed `crc32(0, array, 16384)` yielding `0x64EDE0F4`, exact match with header field.
-   - Immutability diagnostic: `CRC_A` (post-read) == `CRC_B` (pre-serialization) -> `GPT_PARTITION_ARRAY_BUFFER_MUTATED_AFTER_READ = no`.
-   - Deterministic post-read chunk serialization: `GPT_ARRAY_CHUNK[00..31]` (512 bytes hex each).
-   - Strict HARD STOP: zero partition decoding/enumeration, zero reads of LBA 34+, zero backup GPT reads, zero writes, warm reset to fastboot.
-3. **Hooked in BSD Boot Pipeline:**
-   - Hooked `xzs_sdhci_phase_d3m2a_probe()` in `src/xnu/bsd/kern/bsd_init.c`.
-4. **Verification Tools & Independent Oracles:**
-   - Captured physical oracle directly from eMMC via TWRP: `artifacts/oracles/mmcblk0_gpt_primary_entries.bin`.
-   - Created `scripts/verify_d3m2a_acceptance.py` to parse ramoops log, reconstruct binary, and run automated acceptance checks.
+1. **Independent Host GPT Map Oracle (`scripts/host_gpt_entries_oracle.py`):**
+   - Consumed independent binary captures `artifacts/oracles/mmcblk0_lba1.bin` and `artifacts/oracles/mmcblk0_gpt_primary_entries.bin`.
+   - Derived all geometry and bounds from LBA 1 oracle (`FirstUsableLBA=34`, `LastUsableLBA=61071326`, `NumberOfPartitionEntries=128`, `SizeOfPartitionEntry=128`, `PartitionEntryArrayCRC32=0x64EDE0F4`).
+   - Verified array CRC32 (`0x64EDE0F4`) and SHA-256 (`8249f2bfa98ec...`).
+   - Generated and frozen machine-readable partition map JSON ahead of silicon evaluation:
+     - File: `artifacts/oracles/gpt_primary_partition_map.json`
+     - SHA-256: `13ee706f681f640b26b7a02350a27c7bc1e6ad4a7b95378f7c398b240b6b09e5`
+     - Host Used Count: 55, Host Unused Count: 73.
+
+2. **Automated Offline Acceptance Verifier (`scripts/verify_d3m2b_acceptance.py`):**
+   - Extracts all D3-M2B telemetry keys from `console-ramoops.log`.
+   - Reconstructs used entries from `GPT_ENTRY[xx].*` records.
+   - Matches records by original `slot_index` (`0..54`).
+   - Audits all 12 fields per used partition against the frozen oracle JSON.
+
+3. **Phase D3-M2B XNU Probe Implementation (`xzs_sdhci_phase_d3m2b_probe`):**
+   - Implemented in `src/xnu/pexpert/arm/xzs_sdhci.c` and declared in `src/xnu/pexpert/pexpert/arm/xzs_sdhci.h`.
+   - Hooked into BSD initialization path in `src/xnu/bsd/kern/bsd_init.c`.
+   - Static map storage: `static xzs_gpt_partition_entry_t g_xzs_gpt_parsed_entries[128]` (zero kernel stack allocation).
+   - Breadcrumb sequence in namespace `CP = 0xD3E0` (`0x00` -> `0x01`).
+   - Integrity gates:
+     - Replay fresh hardware init, extract live geometry (`live_sec_count = 61071360`).
+     - Fresh LBA 1 read & Header CRC32 validation (`0xBFDF741D`).
+     - Derive dynamic array geometry (`runtime_num_entries = 128`, `runtime_entry_size = 128`, `runtime_array_bytes = 16384`).
+     - Fresh LBA 2..33 read & Array CRC32 validation (`0x64EDE0F4`).
+     - Loop over `runtime_num_entries` with per-slot bounds validation.
+   - USED / UNUSED classification: slot is UNUSED iff `PartitionTypeGUID == all_zero`.
+   - Strict validation:
+     - Unique GUID non-zero and pairwise unique.
+     - Extents within `[gpt_first_usable_lba, gpt_last_usable_lba]` and `< live_sec_count`.
+     - Overflow-safe sector and byte arithmetic.
+     - Pairwise extent non-overlap across all 55 used entries: `A.start <= B.end && B.start <= A.end`.
+   - Deterministic string encoding:
+     - Canonical name: ASCII for `0x0020..0x007E`, `\uXXXX` otherwise, terminated at `0x0000`.
+     - Preserved raw hex for 72-byte name and 16-byte type/unique GUIDs.
+     - Formatted GUIDs: `Data1 (LE32) - Data2 (LE16) - Data3 (LE16) - Data4[0..1] - Data4[2..7]`.
+   - Hard Safety Boundary: Zero reads beyond LBA 33, zero partition content reads, zero filesystem probes, zero rootfs selection, zero backup GPT reads, zero storage writes, warm reset to fastboot.
 
 ---
 
@@ -35,51 +50,77 @@ Phase D3-M2A: Read the 16,384-byte Primary GPT Partition Entry Array (LBA 2..33)
 
 ```text
 ================================================================================
-PHASE D3-M2A: PRIMARY GPT PARTITION ENTRY ARRAY ACCEPTANCE AUDIT
+PHASE D3-M2B: PRIMARY GPT PARTITION MAP ACCEPTANCE AUDIT
 ================================================================================
-Target Log File:     artifacts/logs/console-ramoops.log
-Independent Oracle:  artifacts/oracles/mmcblk0_gpt_primary_entries.bin
-Output Reconstructed:artifacts/builds/d3m2a_primary_entries.bin
+Target Log File:        artifacts/logs/console-ramoops.log
+Frozen Host Oracle JSON:artifacts/oracles/gpt_primary_partition_map.json
 --------------------------------------------------------------------------------
 
 1. AUDITING REQUIRED TELEMETRY KEYS:
-  [PASS] All 43 telemetry keys verified
+  [PASS] D3_BRANCH = xzs-d3-gpt
+  [PASS] D3_BRANCH_BASE = 20cdf4a2c86f1b9eac7573479025ac618b505e84
+  [PASS] ORACLE_INDEPENDENCE = yes
+  [PASS] LIVE_SEC_COUNT_DERIVED_FROM_EXT_CSD = yes
+  [PASS] LIVE_SEC_COUNT = 61071360
+  [PASS] DEVICE_GEOMETRY_ORACLE_MATCH = yes
+  [PASS] FRESH_PRIMARY_HEADER_VERIFIED = yes
+  [PASS] PRIMARY_GPT_HEADER_VERIFIED = yes
+  [PASS] FRESH_PRIMARY_ARRAY_CRC_VERIFIED = yes
+  [PASS] PRIMARY_GPT_PARTITION_ARRAY_VERIFIED = yes
+  [PASS] GPT_PARTITION_ARRAY_CRC32_VERIFIED = yes
+  [PASS] KERNEL_GPT_CRC_ORACLE_HARDCODED = no
+  [PASS] ENTRY_COUNT_DERIVED_FROM_HEADER = yes
+  [PASS] ENTRY_SIZE_DERIVED_FROM_HEADER = yes
+  [PASS] RUNTIME_NUM_ENTRIES = 128
+  [PASS] RUNTIME_ENTRY_SIZE = 128
+  [PASS] PARTITION_ENTRY_BOUNDS_CHECKS = yes
+  [PASS] ENTRY_RESERVED_TAIL_BYTES_PER_SLOT = 0
+  [PASS] PARTITION_PARSER_ENTERED = yes
+  [PASS] GPT_ENTRY_SLOTS_PARSED = 128
+  [PASS] KERNEL_USED_COUNT_HARDCODED = no
+  [PASS] USED_UNIQUE_GUID_ZERO_COUNT = 0
+  [PASS] DUPLICATE_UNIQUE_GUID_COUNT = 0
+  [PASS] UNIQUE_PARTITION_GUIDS_VALID = yes
+  [PASS] INVALID_USED_EXTENT_COUNT = 0
+  [PASS] PARTITION_SIZE_ARITHMETIC_OVERFLOW_COUNT = 0
+  [PASS] OVERLAPPING_PARTITION_PAIR_COUNT = 0
+  [PASS] PRIMARY_PARTITION_EXTENTS_NON_OVERLAPPING = yes
+  [PASS] ALL_USED_ENTRIES_WITHIN_USABLE_RANGE = yes
+  [PASS] D3M2B_GPT_SECTOR_READ_COUNT = 33
+  [PASS] LBA34_PLUS_READS = 0
+  [PASS] PARTITION_CONTENT_READS = 0
+  [PASS] FILESYSTEM_PROBES = 0
+  [PASS] ROOTFS_SELECTION_PERFORMED = no
+  [PASS] BACKUP_GPT_READ = no
+  [PASS] ZERO_STORAGE_WRITES = yes
+  [PASS] PRIMARY_GPT_PARTITION_MAP_VERIFIED = yes
+  [PASS] D3_COMPLETE = no
+  [PASS] PARSED_MAP_STORAGE = STATIC
+  [PASS] GPT_USED_ENTRY_COUNT = 55 (matches host oracle)
+  [PASS] GPT_UNUSED_ENTRY_COUNT = 73 (matches host oracle)
+  HOST_USED_COUNT_ORACLE_DERIVED: yes
 
-2. EXTRACTING & VALIDATING 32 HEX CHUNKS:
-  [PASS] Extracted exactly 32 chunks (00..31) with valid hex content.
+2. PARSED ENTRY COUNT & SLOT IDENTITY PARITY:
+  [PASS] Exactly 55 used partition records extracted from XNU telemetry.
+  [PASS] Used slot indices match exactly: [0, 1, 2, ..., 54]
+  HOST_VS_XNU_USED_SLOT_INDICES_MATCH: yes
 
-3. RECONSTRUCTED BINARY AUDIT (artifacts/builds/d3m2a_primary_entries.bin):
-  Byte size: 16384 (expected 16384)
-  Calculated SHA-256: 8249f2bfa98ec675bf66b6342e29a0fbf6ab0ccb716c789a172f1f46b1828dd3
-  Expected   SHA-256: 8249f2bfa98ec675bf66b6342e29a0fbf6ab0ccb716c789a172f1f46b1828dd3
-  [PASS] SHA-256 exact match!
-  Calculated CRC32:   0x64EDE0F4
-  Expected   CRC32:   0x64EDE0F4
-  [PASS] CRC32 exact match!
-
-4. BYTE-FOR-BYTE COMPARISON AGAINST INDEPENDENT PHYSICAL ORACLE:
-  [PASS] ZERO byte differences!
-  D3M2A_ARRAY_BYTE_FOR_BYTE_MATCH: yes
+3. FIELD-BY-FIELD ACCURACY AUDIT ACROSS ALL 55 PARTITIONS:
+  [PASS] ZERO field differences across all 55 used partitions!
+  HOST_VS_XNU_PARTITION_NAME_RAW_MATCH: yes
+  HOST_VS_XNU_PARTITION_NAME_CANONICAL_MATCH: yes
+  HOST_VS_XNU_ALL_USED_FIELDS_MATCH: yes
+  HOST_VS_XNU_PRIMARY_PARTITION_MAP_MATCH: yes
 
 ================================================================================
-PHASE D3-M2A ACCEPTANCE: ALL AUDITS PASSED [SILICON CERTIFIED]
+PHASE D3-M2B ACCEPTANCE: ALL AUDITS PASSED [SILICON CERTIFIED]
 ================================================================================
-```
-
-Direct binary checks:
-```bash
-cmp artifacts/builds/d3m2a_primary_entries.bin artifacts/oracles/mmcblk0_gpt_primary_entries.bin
-# Exit code 0 (identical)
-
-sha256sum artifacts/builds/d3m2a_primary_entries.bin artifacts/oracles/mmcblk0_gpt_primary_entries.bin
-8249f2bfa98ec675bf66b6342e29a0fbf6ab0ccb716c789a172f1f46b1828dd3  artifacts/builds/d3m2a_primary_entries.bin
-8249f2bfa98ec675bf66b6342e29a0fbf6ab0ccb716c789a172f1f46b1828dd3  artifacts/oracles/mmcblk0_gpt_primary_entries.bin
 ```
 
 ---
 
 ## Artifacts Produced
-- `artifacts/reports/D3_M2A_ARRAY_READ_REPORT.md`: Comprehensive formal milestone report.
-- `artifacts/oracles/mmcblk0_gpt_primary_entries.bin`: Physical 16-KiB TWRP oracle.
-- `artifacts/builds/d3m2a_primary_entries.bin`: Exact 16-KiB binary reconstructed from XNU silicon execution.
-- `scripts/verify_d3m2a_acceptance.py`: Automated acceptance verifier script.
+- `artifacts/reports/D3_M2B_PARTITION_MAP_REPORT.md`: Comprehensive formal milestone report with complete 55-partition table.
+- `artifacts/oracles/gpt_primary_partition_map.json`: Frozen independent host oracle (SHA-256: `13ee706f681f640b...`).
+- `scripts/host_gpt_entries_oracle.py`: Host oracle generation and bounds derivation script.
+- `scripts/verify_d3m2b_acceptance.py`: Automated acceptance verifier script.
