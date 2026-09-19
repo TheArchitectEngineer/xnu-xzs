@@ -489,9 +489,9 @@ bsd_init(void)
 	xzs_early_puts("[XZS-BOOT] [D30] bsd_init ENTERED\n");
 
 #if CONFIG_XZS_BRINGUP
-	/* Phase D3-M1: Primary GPT Header — Read, Parse, Bounds & CRC32 */
-	extern void xzs_sdhci_phase_d3m1_probe(void);
-	xzs_sdhci_phase_d3m1_probe();
+	/* Phase D3-M2A: Primary GPT Partition Entry Array — Read & CRC32 */
+	extern void xzs_sdhci_phase_d3m2a_probe(void);
+	xzs_sdhci_phase_d3m2a_probe();
 #endif
 	struct uthread *ut;
 	vnode_t init_rootvnode = NULLVP;

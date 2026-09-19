@@ -319,7 +319,14 @@ void xzs_sdhci_phase_d2m5_probe(void);
 #define GPT_MAX_HEADER_SIZE             512U
 #define GPT_MIN_ENTRY_SIZE              128U
 
-int  xzs_emmc_read_sector_pio(uint32_t lba, uint8_t out[512]);
+int  xzs_emmc_read_sector_pio(uint32_t lba, uint64_t validated_sector_count, uint8_t out[512]);
 void xzs_sdhci_phase_d3m1_probe(void);
+
+/*
+ * Phase D3-M2A: Primary GPT Partition Entry Array Declarations
+ */
+#define GPT_PRIMARY_ARRAY_BUFFER_CAPACITY 16384U
+
+void xzs_sdhci_phase_d3m2a_probe(void);
 
 #endif /* _PEXPERT_ARM_XZS_SDHCI_H */
