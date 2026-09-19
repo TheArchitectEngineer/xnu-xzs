@@ -22,7 +22,20 @@ BDEVVP_ACQUISITION_VERIFIED = yes.
 BDEVVP_LBA1_BYTE_MATCH = yes.
 ZERO_STORAGE_WRITES = yes.
 D4_COMPLETE = yes.
-Phase D5 (Real Root Filesystem Mount) is NEXT.
+
+Phase D5-M1 (RootFS Tooling & XZSFS Format Freeze) is COMPLETE:
+XZSFS v1 on-disk format defined & frozen (docs/XZSFS_FORMAT_V1.md).
+Deterministic image generator (scripts/mkxzsfs.py) and independent verifier (scripts/verify_xzsfs.py) operational.
+Static ARM64 Mach-O binaries (/sbin/launchd, /bin/sh) format-verified.
+Deterministic rootfs image generated (artifacts/builds/xzs-rootfs.img, 35.0 KiB).
+All 12 negative corruption tests rejected. Host-side only; zero silicon writes; no kernel VFS implementation yet.
+XZSFS_FORMAT_V1_FROZEN = yes.
+XZSFS_DETERMINISTIC_BUILD = yes.
+XZSFS_HOST_STRUCTURAL_VERIFY = yes.
+XZSFS_HOST_PAYLOAD_VERIFY = yes.
+D5-M1_COMPLETE = yes.
+D5_COMPLETE = no.
+Phase D5-M2 (RAMDisk Block Transport) is NEXT.
 ```
 
 * **Target Device**: Sony Xperia XZs (Model G8231 / Platform Tone / Board Keyaki)

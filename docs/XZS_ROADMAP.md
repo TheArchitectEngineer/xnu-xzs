@@ -17,7 +17,7 @@ Progress is strictly gated by physical hardware verification. Speculative percen
 | **Phase D2** | Physical eMMC storage bring-up (SDCC1, CMD0..CMD17, PIO) | **COMPLETE** |
 | **Phase D3** | GUID Partition Table (GPT) discovery & partition enumeration | **COMPLETE** |
 | **Phase D4** | Block-storage driver integration (`bdevsw` / `disk0`) | **COMPLETE** |
-| **Phase D5** | Real root filesystem mount (HFS+ / APFS / ramdisk) | **NOT STARTED** |
+| **Phase D5** | Real root filesystem mount (RAMDisk XZSFS) | **IN PROGRESS (D5-M1 Complete)** |
 | **Phase E** | PID 1 bootstrap (`initproc` / launchd exec) | **NOT STARTED** |
 | **Phase F** | Interactive serial shell (`/bin/sh` or micro-shell) | **NOT STARTED** |
 | **Phase G** | Restore deferred subsystems (Skywalk, DTrace, jetsam buffer) | **NOT STARTED** |
@@ -202,15 +202,19 @@ Progress is strictly gated by physical hardware verification. Speculative percen
 ---
 
 ### Phase D5 — Real Root Filesystem Mount
-* **Goal**: Mount an actual read-only root filesystem partition (APFS, HFS+, or ramdisk) into VFS root vnode (`/`).
-* **Status**: **NOT STARTED**
+* **Goal**: Mount an actual read-only root filesystem (RAMDisk XZSFS) into VFS root vnode (`/`).
+* **Status**: **IN PROGRESS**
+  - **D5-M1 (Format Freeze & Tooling)**: **COMPLETE** (XZSFS v1 on-disk format frozen, `mkxzsfs.py` generator, `verify_xzsfs.py` independent verifier, static ARM64 Mach-O binaries verified, deterministic rootfs image built).
+  - **D5-M2 (RAMDisk Block Transport)**: PENDING (ADT `/chosen/memory-map/RAMDisk` -> `rd=md0` -> `mdevadd`).
+  - **D5-M3 (Kernel XZSFS Driver)**: PENDING (Read-only VFS filesystem driver for XZSFS v1).
+  - **D5-M4 (Silicon Root Mount Proof)**: PENDING (`vfs_mountroot()` -> `VFS_ROOT()` -> `namei` lookup of `/sbin/launchd`).
 * **Hardware Acceptance Criteria**: `vfs_mountroot()` returns `KERN_SUCCESS`; `VFS_ROOT()` retrieves root directory vnode (`init_rootvnode != NULLVP`); `mountlist` shows `MNT_ROOTFS` active.
 * **Dependencies**: Phase D4.
-  - Prepare partition image containing minimal Darwin directory tree (`/sbin`, `/bin`, `/usr`, `/etc`, `/dev`).
-  - Pass boot argument `rootdev=disk0sX` or `rd=disk0sX`.
-  - Validate VFS directory lookup on `/`.
-* **Known Blockers**: APFS encryption/container complexity (mitigated by using unencrypted HFS+ or ramdisk first).
-* **Dependencies**: Phase D3.
+  - RootFS source tree (`rootfs/xzs-root`) containing `/dev`, `/sbin/launchd`, `/bin/sh`, `/etc`, `/tmp`, `/var`.
+  - Pass boot argument `rd=md0`.
+  - Validate VFS directory lookup on `/` and `/sbin/launchd`.
+* **Known Blockers**: None for host format or RAMDisk approach.
+* **Dependencies**: Phase D4.
 
 ---
 
