@@ -365,8 +365,8 @@ Multi-byte bulk read (`+0x00..+0x07`) was compared against single-byte reads (`+
 - **Hardware Version:** `QCOM_HW_VER` @ `0x6240E4` = `0x20020000` (Qualcomm UFS Host v2.2.0).
 - **Calibration Replay:** Full Sony Tone v2.2.0 calibration table (76 Rate-A entries + Rate-B override) programmed and verified byte-for-byte on silicon.
 - **Clock Reference:** `GCC_UFS_CLKREF` (`0x88008`) confirmed running (`CBCR = 0x00000001`).
-- **Supplies:** L28 (1.200V / 300 mA), L12 (1.800V / 9 mA), LN_BB reference clock (ID 8) voted via RPM SMD V0 over GLINK.
-- **Outcome:** `C_READY_STATUS` (`0x0C8`) remained `0` throughout 1-second bounded polling window.
+- **Supplies:** L28 (0.925V / 18 mA), L12 (1.800V / 9 mA), LN_BB reference clock (ID 8) voted via RPM SMD V0 over GLINK.
+- **Outcome:** `C_READY_STATUS` (`0x190`) remained `0` throughout 1-second bounded polling window.
 - **Conclusion:** C_READY failure was not caused by missing power supplies or generic clock gates. A deeper differential audit between reference/firmware state and XNU was required.
 
 ---
@@ -394,7 +394,7 @@ Disassembly of `artifacts/scratch/twrp-Image` (`ufs_qcom_power_up_sequence` @ `0
 5. **Settle Reset Release:** `usleep_range(1000, 1100)`.
 6. **Power-On PHY (`phy_power_on`):** Write `1` to `0x627C04` (`UFS_PHY_POWER_DOWN_CONTROL`).
 7. **Start SerDes (`phy_start`):** Write `1` to `0x627C00` (`UFS_PHY_PHY_START`).
-8. **Lock Poll:** Poll `0x627D68` (`UFS_PHY_PCS_READY_STATUS`) or `0x6270C8` (`QSERDES_COM_C_READY_STATUS`).
+8. **Lock Poll:** Poll `0x627D68` (`UFS_PHY_PCS_READY_STATUS`) or `0x627190` (`QSERDES_COM_C_READY_STATUS`).
 
 ### 9.3 Critical Sequence Deltas Identified in XNU D2-C2.5
 1. **Quirk `0x134` Clobbered:** Table entry 42 overwrote `0x134` with `0xD6`. Silicon bootloader handoff value was `0x0A`. Sony kernel explicitly restores `0x134` to `0x0A`.

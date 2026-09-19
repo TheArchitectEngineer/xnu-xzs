@@ -49,7 +49,7 @@ Disassembly of Sony downstream kernel `artifacts/scratch/twrp-Image`:
 7. **Start SerDes (`phy_start` -> `ufs_qcom_phy_start_serdes`):**  
    Write `1` to `0x627C00` (`UFS_PHY_PHY_START`).
 8. **Lock Poll:**  
-   Poll `0x627D68` (`UFS_PHY_PCS_READY_STATUS`) or `0x6270C8` (`QSERDES_COM_C_READY_STATUS`) with 1 s timeout.
+   Poll `0x627D68` (`UFS_PHY_PCS_READY_STATUS`) or `0x627190` (`QSERDES_COM_C_READY_STATUS`) with 1 s timeout.
 
 ---
 
@@ -107,7 +107,7 @@ Disassembly of Sony downstream kernel `artifacts/scratch/twrp-Image`:
 - **PHY Analog State:**  
   `0x134` (`QSERDES_COM_VCO_TUNE1_MODE1`) = `0x0000000A` (Trim value from bootloader)  
   `0xC04` (`POWER_DOWN_CONTROL`) = `0x00000000`  
-  `0x0C8` (`C_READY_STATUS`) = `0x00000000`  
+  `0x190` (`C_READY_STATUS`) = `0x00000000`
 
 ---
 
@@ -161,7 +161,7 @@ Across all 5 audited stages (`EARLY_PRE` -> `POST_POWER` -> `POST_CAL` -> `POST_
 
 ## GCC/RPM State
 - **GLINK/RPM Transport:** `rpm_requests` channel open, V0 protocol negotiated.
-- **PM8994 L28:** 1.200V / 300 mA (ACK received).
+- **PM8994 L28:** 0.925V (925000 uV) / 18 mA (ACK received).
 - **PM8994 L12:** 1.800V / 9 mA (ACK received).
 - **LN_BB Reference Clock:** ID 8 SWEN=1 (ACK received).
 - **GCC Clocks:** GDSC ON (`0xA0222000`), BCR=0, CLKREF=1, AXI/AHB/SYS_NOC/AGGRE2 enabled and running (`CLK_OFF = 0`).
@@ -256,7 +256,7 @@ Summary of registers changing across stages or diverging from source expected:
 - **Sony Downstream Behavior:** Soft reset (`REG_UFS_CFG1` bit 1) is held ASSERTED throughout calibration programming.
 - **XNU Previous Behavior:** Soft reset was toggled (asserted and deasserted) BEFORE calibration programming.
 
-### 4. `UFS_PHY_PCS_READY_STATUS` (`0xD68`) / `QSERDES_COM_C_READY_STATUS` (`0x0C8`)
+### 4. `UFS_PHY_PCS_READY_STATUS` (`0xD68`) / `QSERDES_COM_C_READY_STATUS` (`0x190`)
 - **Silicon Actual:** `0x00000000` (Unlocked).
 - **Expected:** `0x00000001` (Locked).
 
@@ -275,7 +275,7 @@ Summary of registers changing across stages or diverging from source expected:
 ---
 
 ## HARDWARE VERIFIED FACTS
-1. PM8994 L28 (1.200V / 300 mA), L12 (1.800V / 9 mA), and LN_BB (ID 8) are accepted via RPM SMD V0 protocol over GLINK.
+1. PM8994 L28 (0.925V / 18 mA), L12 (1.800V / 9 mA), and LN_BB (ID 8) are accepted via RPM SMD V0 protocol over GLINK.
 2. Interconnect branch clocks (`SYS_NOC_UFS_AXI`, `AGGRE2_UFS_AXI`, `UFS_AXI`, `UFS_AHB`) are gated by default at bootloader handoff and must be un-gated before accessing Host MMIO `0x624000` to prevent AXI SError aborts.
 3. Bootloader leaves `REG_UFS_CFG1 = 0x1C00052C` with bit 26 (`UFS_DEV_REF_CLK_EN`) already set to 1.
 4. Neither `GCC_UFS_BCR` assert nor `REG_UFS_CFG1` bit 1 soft reset clears bit 26.
@@ -316,7 +316,7 @@ Summary of registers changing across stages or diverging from source expected:
 3. Deassert soft reset (`REG_UFS_CFG1 &= ~2`) and settle for 1 ms.
 4. Write `UFS_PHY_POWER_DOWN_CONTROL` (`0xC04 = 1`).
 5. Write `UFS_PHY_PHY_START` (`0xC00 = 1`).
-6. Poll `C_READY_STATUS` (`0x0C8`) and `PCS_READY_STATUS` (`0xD68`).
+6. Poll `C_READY_STATUS` (`0x190`) and `PCS_READY_STATUS` (`0xD68`).
 
 ---
 
