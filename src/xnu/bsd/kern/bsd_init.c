@@ -1095,11 +1095,11 @@ bsd_init(void)
 
 		/*
 		 * ================================================================
-		 * PHASE D5-M2-R4: RAMDisk Root Device Selection Acceptance Check
+		 * PHASE D5-M2-R5: bdevvp(md0) + Sector 0 Acceptance Check
 		 * ================================================================
 		 */
-		extern void xzs_d5m2_r4_verify(dev_t root_dev, const char *root_name);
-		xzs_d5m2_r4_verify(rootdev, rootdevice);
+		extern void xzs_d5m2_r5_verify(dev_t root_dev, const char *root_name);
+		xzs_d5m2_r5_verify(rootdev, rootdevice);
 
 		xzs_early_puts("[XZS-BOOT] [D51] vfs_mountroot ENTER\n");
 		extern void xzs_breadcrumb(uint32_t cp, uint32_t err);
@@ -1907,6 +1907,140 @@ xzs_d5m2_r4_verify(dev_t root_dev, const char *root_name)
 
 	xzs_breadcrumb(0xD510, 0x10);
 	xzs_early_puts("[XZS-RAMDISK] PHASE D5-M2-R4 COMPLETE & VERIFIED (PASS)\n");
+	xzs_early_puts("[XZS-RAMDISK] TERMINAL STATE — TRIGGERING WARM RESET TO FASTBOOT\n\n");
+	delay(50000);
+	xzs_spin_halt();
+}
+
+/*
+ * ============================================================================
+ * PHASE D5-M2-R5: bdevvp(md0) + Sector 0 Acceptance Check
+ * ============================================================================
+ */
+void
+xzs_d5m2_r5_verify(dev_t root_dev, const char *root_name)
+{
+	xzs_early_puts("\n================================================================================\n");
+	xzs_early_puts("[XZS-RAMDISK] PHASE D5-M2-R5: bdevvp(md0) + SECTOR 0 ACCEPTANCE CHECK\n");
+	xzs_early_puts("================================================================================\n");
+	xzs_breadcrumb(0xD510, 0x00);
+
+	extern dev_t mdevlookup(int devid);
+	extern uint32_t xzs_get_mdevadd_count(void);
+	extern void xzs_early_puthex64(uint64_t val);
+	extern void delay(int usec);
+	extern uint32_t crc32(uint32_t crc, const void *buf, size_t size);
+
+	dev_t md0_dev = mdevlookup(0);
+	uint32_t mdevadd_count = xzs_get_mdevadd_count();
+
+	boolean_t is_md0 = (root_dev == md0_dev && root_name != NULL && strncmp(root_name, "md0", 3) == 0);
+	boolean_t equals_lookup0 = (root_dev == md0_dev && md0_dev != (dev_t)-1);
+	boolean_t count_is_1 = (mdevadd_count == 1);
+
+	if (!is_md0 || !equals_lookup0 || !count_is_1) {
+		xzs_early_puts("[XZS-RAMDISK] FATAL: rootdev is not md0 or mdevadd count != 1!\n");
+		xzs_breadcrumb(0xD510, 0xEA);
+		xzs_spin_halt();
+		return;
+	}
+
+	xzs_breadcrumb(0xD510, 0x10);
+	xzs_early_puts("  1. ACQUIRE BLOCK VNODE ON md0:\n");
+
+	struct vnode *vp = NULL;
+	int rc_bdevvp = bdevvp(root_dev, &vp);
+	if (rc_bdevvp != 0 || vp == NULL) {
+		xzs_early_puts("[XZS-RAMDISK] FATAL: bdevvp(root_dev) failed!\n");
+		xzs_breadcrumb(0xD510, 0xEB);
+		xzs_spin_halt();
+		return;
+	}
+
+	xzs_breadcrumb(0xD510, 0x40);
+	xzs_early_puts("  MD0_BDEVVP_SUCCESS:                      yes\n");
+	xzs_early_puts("  MD0_VNODE_NON_NULL:                      yes\n\n");
+
+	xzs_early_puts("  2. READ SECTOR 0 (SUPERBLOCK):\n");
+	buf_t bp0 = NULL;
+	errno_t err0 = buf_bread(vp, 0, 512, NOCRED, &bp0);
+	if (err0 != 0 || bp0 == NULL || buf_error(bp0) != 0 || buf_resid(bp0) != 0) {
+		xzs_early_puts("[XZS-RAMDISK] FATAL: buf_bread sector 0 failed!\n");
+		xzs_breadcrumb(0xD510, 0xEC);
+		xzs_spin_halt();
+		return;
+	}
+
+	const uint8_t *sec0 = (const uint8_t *)buf_dataptr(bp0);
+	uint32_t magic0 = *(const uint32_t *)&sec0[0];
+	uint32_t ver0 = *(const uint32_t *)&sec0[4];
+	uint32_t hdr_sz0 = *(const uint32_t *)&sec0[8];
+	uint32_t sec_sz0 = *(const uint32_t *)&sec0[12];
+	uint64_t img_sz0 = *(const uint64_t *)&sec0[16];
+	uint32_t obj_cnt0 = *(const uint32_t *)&sec0[24];
+	uint32_t root_id0 = *(const uint32_t *)&sec0[28];
+	uint32_t meta_crc0 = *(const uint32_t *)&sec0[80];
+	uint32_t sec0_crc = crc32(0, sec0, 512);
+
+	xzs_early_puts("  SECTOR0_MAGIC:                           0x");
+	xzs_early_puthex64((uint64_t)magic0);
+	xzs_early_puts(" (expected: 0x5346535A 'XZSF')\n");
+	xzs_early_puts("  SECTOR0_VERSION:                         0x");
+	xzs_early_puthex64((uint64_t)ver0);
+	xzs_early_puts(" (expected: 0x1)\n");
+	xzs_early_puts("  SECTOR0_HEADER_SIZE:                     0x");
+	xzs_early_puthex64((uint64_t)hdr_sz0);
+	xzs_early_puts(" (expected: 0x200 / 512)\n");
+	xzs_early_puts("  SECTOR0_SECTOR_SIZE:                     0x");
+	xzs_early_puthex64((uint64_t)sec_sz0);
+	xzs_early_puts(" (expected: 0x200 / 512)\n");
+	xzs_early_puts("  SECTOR0_IMAGE_SIZE_BYTES:                0x");
+	xzs_early_puthex64(img_sz0);
+	xzs_early_puts(" (expected: 0x8C00 / 35840)\n");
+	xzs_early_puts("  SECTOR0_OBJECT_COUNT:                    0x");
+	xzs_early_puthex64((uint64_t)obj_cnt0);
+	xzs_early_puts(" (expected: 0x9)\n");
+	xzs_early_puts("  SECTOR0_ROOT_OBJECT_ID:                  0x");
+	xzs_early_puthex64((uint64_t)root_id0);
+	xzs_early_puts(" (expected: 0x1)\n");
+	xzs_early_puts("  SECTOR0_METADATA_CRC32:                  0x");
+	xzs_early_puthex64((uint64_t)meta_crc0);
+	xzs_early_puts(" (expected: 0x29717031)\n");
+	xzs_early_puts("  SECTOR0_RAW_CRC32:                       0x");
+	xzs_early_puthex64((uint64_t)sec0_crc);
+	xzs_early_puts(" (expected: 0x64d02a99)\n\n");
+
+	buf_brelse(bp0);
+	bp0 = NULL;
+
+	boolean_t s0_valid = (magic0 == 0x5346535A && ver0 == 1 && hdr_sz0 == 512 &&
+	                      sec_sz0 == 512 && img_sz0 == 35840 && obj_cnt0 == 9 &&
+	                      root_id0 == 1 && meta_crc0 == 0x29717031 && sec0_crc == 0x64d02a99);
+
+	if (!s0_valid) {
+		xzs_early_puts("[XZS-RAMDISK] FATAL: Sector 0 validation failed!\n");
+		xzs_breadcrumb(0xD510, 0xED);
+		xzs_spin_halt();
+		return;
+	}
+
+	xzs_breadcrumb(0xD510, 0x50);
+
+	xzs_early_puts("=== D5-M2-R5 TELEMETRY BEGIN ===\n");
+	xzs_early_puts("MD0_BDEVVP_SUCCESS:                        yes\n");
+	xzs_early_puts("MD0_SECTOR0_BYTE_MATCH:                    yes\n");
+	xzs_early_puts("BUF_BREAD_BRELSE_BALANCED:                 yes\n");
+	xzs_early_puts("SECTOR1_READ_ATTEMPTED:                    no\n");
+	xzs_early_puts("SECTOR69_READ_ATTEMPTED:                   no\n");
+	xzs_early_puts("FULL_IMAGE_CRC_ATTEMPTED:                  no\n");
+	xzs_early_puts("VFS_MOUNTROOT_CALLED:                      no\n");
+	xzs_early_puts("XZSFS_MOUNT_ATTEMPTED:                     no\n");
+	xzs_early_puts("PID1_STARTED:                              no\n");
+	xzs_early_puts("EXECVE_ATTEMPTED:                          no\n");
+	xzs_early_puts("ZERO_STORAGE_WRITES:                       yes\n");
+	xzs_early_puts("=== D5-M2-R5 TELEMETRY END ===\n\n");
+
+	xzs_early_puts("[XZS-RAMDISK] PHASE D5-M2-R5 COMPLETE & VERIFIED (PASS)\n");
 	xzs_early_puts("[XZS-RAMDISK] TERMINAL STATE — TRIGGERING WARM RESET TO FASTBOOT\n\n");
 	delay(50000);
 	xzs_spin_halt();
