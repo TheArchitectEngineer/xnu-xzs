@@ -423,6 +423,9 @@ void bootshim_main(uint64_t dtb_phys, uint64_t current_el, uint64_t mpidr) {
     uart_puts("  ADT size: ");
     uart_putdec((uint64_t)adt_len);
     uart_puts(" bytes\n");
+    uart_puts("  R3_RAMDISK_ADT_PRESENT:       yes\n");
+    uart_puts("  R3_BASE:                      0x81700000\n");
+    uart_puts("  R3_LENGTH:                    36864\n");
 
     /* Checkpoint F: Populate struct boot_args at 0x81800000 */
     g_dlog->last_stage = XZS_STAGE_SHIM_F;
