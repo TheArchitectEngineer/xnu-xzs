@@ -3476,11 +3476,10 @@ static const struct xzs_audit_desc g_d2c26_whitelist[] = {
 	{ 3, 0x71C, "QSERDES_RX_SIGDET_DEGLITCH_CNTRL" },
 	{ 3, 0x72C, "QSERDES_RX_RX_INTERFACE_MODE" },
 
-	/* PHY Domain — PCS Aperture (5 registers) */
+	/* PHY Domain — PCS Aperture (4 registers) */
 	{ 3, 0xC00, "UFS_PHY_PHY_START" },
 	{ 3, 0xC04, "UFS_PHY_POWER_DOWN_CONTROL" },
 	{ 3, 0xD68, "UFS_PHY_PCS_READY_STATUS" },
-	{ 3, 0xD70, "UFS_PHY_PCS_STATUS2" },
 	{ 3, 0xD74, "UFS_PHY_PCS_READY_STATUS_SONY_ALT" },
 };
 
@@ -3594,7 +3593,44 @@ xzs_ufs_phase_d2c26_audit(void)
 		return;
 	}
 
-	/* Stage 1: EARLY_D2C26_PRE_MUTATION (before any XNU change) */
+	/* 2. Capture raw GCC bootloader state before any bus clock mutation */
+	uint32_t b_sys_raw = xzs_gcc_read32(GCC_REG_SYS_NOC_UFS_AXI_CBCR);
+	uint32_t b_agg_raw = xzs_gcc_read32(GCC_REG_AGGRE2_UFS_AXI_CBCR);
+	uint32_t b_axi_raw = xzs_gcc_read32(GCC_REG_UFS_AXI_CBCR);
+	uint32_t b_ahb_raw = xzs_gcc_read32(GCC_REG_UFS_AHB_CBCR);
+	uint32_t b_clkref_raw = xzs_gcc_read32(GCC_REG_UFS_CLKREF_CBCR);
+	uint32_t bcr_raw = xzs_gcc_read32(GCC_REG_UFS_BCR);
+	uint32_t gdsc_raw = xzs_gcc_read32(GCC_REG_UFS_GDSC);
+
+	xzs_early_puts("[XZS-BOOT-GCC] RAW_PRE: SYS=0x");
+	xzs_early_puthex64((uint64_t)b_sys_raw);
+	xzs_early_puts(" AGG=0x");
+	xzs_early_puthex64((uint64_t)b_agg_raw);
+	xzs_early_puts(" AXI=0x");
+	xzs_early_puthex64((uint64_t)b_axi_raw);
+	xzs_early_puts(" AHB=0x");
+	xzs_early_puthex64((uint64_t)b_ahb_raw);
+	xzs_early_puts(" CLKREF=0x");
+	xzs_early_puthex64((uint64_t)b_clkref_raw);
+	xzs_early_puts(" BCR=0x");
+	xzs_early_puthex64((uint64_t)bcr_raw);
+	xzs_early_puts(" GDSC=0x");
+	xzs_early_puthex64((uint64_t)gdsc_raw);
+	xzs_early_puts("\n");
+
+	/* 3. Enable prerequisite bus interconnect branch clocks so Host/PHY MMIO can be read safely */
+	uint32_t b_sys = b_sys_raw;
+	if (b_sys & CBCR_CLK_OFF) xzs_gcc_enable_and_wait_branch(GCC_REG_SYS_NOC_UFS_AXI_CBCR, NULL, &b_sys);
+	uint32_t b_agg = b_agg_raw;
+	if (b_agg & CBCR_CLK_OFF) xzs_gcc_enable_and_wait_branch(GCC_REG_AGGRE2_UFS_AXI_CBCR, NULL, &b_agg);
+	uint32_t b_axi = b_axi_raw;
+	if (b_axi & CBCR_CLK_OFF) xzs_gcc_enable_and_wait_branch(GCC_REG_UFS_AXI_CBCR, NULL, &b_axi);
+	uint32_t b_ahb = b_ahb_raw;
+	if (b_ahb & CBCR_CLK_OFF) xzs_gcc_enable_and_wait_branch(GCC_REG_UFS_AHB_CBCR, NULL, &b_ahb);
+	uint32_t b_clkref = b_clkref_raw;
+	if (b_clkref & CBCR_CLK_OFF) xzs_gcc_enable_and_wait_branch(GCC_REG_UFS_CLKREF_CBCR, NULL, &b_clkref);
+
+	/* Stage 1: EARLY_D2C26_PRE_MUTATION (safe readback after bus interconnect enabled) */
 	xzs_early_puts("\n[XZS-UFS] CAPTURING STAGE: EARLY_D2C26_PRE_MUTATION...\n");
 	xzs_breadcrumb(0xD260, 0x20); /* host dump */
 	xzs_breadcrumb(0xD260, 0x30); /* clock dump */
@@ -3661,15 +3697,15 @@ xzs_ufs_phase_d2c26_audit(void)
 	xzs_early_puts("\n");
 
 	/* Re-verify bus branch clocks */
-	uint32_t b_sys = xzs_gcc_read32(GCC_REG_SYS_NOC_UFS_AXI_CBCR);
+	b_sys = xzs_gcc_read32(GCC_REG_SYS_NOC_UFS_AXI_CBCR);
 	if (b_sys & CBCR_CLK_OFF) xzs_gcc_enable_and_wait_branch(GCC_REG_SYS_NOC_UFS_AXI_CBCR, NULL, &b_sys);
-	uint32_t b_agg = xzs_gcc_read32(GCC_REG_AGGRE2_UFS_AXI_CBCR);
+	b_agg = xzs_gcc_read32(GCC_REG_AGGRE2_UFS_AXI_CBCR);
 	if (b_agg & CBCR_CLK_OFF) xzs_gcc_enable_and_wait_branch(GCC_REG_AGGRE2_UFS_AXI_CBCR, NULL, &b_agg);
-	uint32_t b_axi = xzs_gcc_read32(GCC_REG_UFS_AXI_CBCR);
+	b_axi = xzs_gcc_read32(GCC_REG_UFS_AXI_CBCR);
 	if (b_axi & CBCR_CLK_OFF) xzs_gcc_enable_and_wait_branch(GCC_REG_UFS_AXI_CBCR, NULL, &b_axi);
-	uint32_t b_ahb = xzs_gcc_read32(GCC_REG_UFS_AHB_CBCR);
+	b_ahb = xzs_gcc_read32(GCC_REG_UFS_AHB_CBCR);
 	if (b_ahb & CBCR_CLK_OFF) xzs_gcc_enable_and_wait_branch(GCC_REG_UFS_AHB_CBCR, NULL, &b_ahb);
-	uint32_t b_clkref = xzs_gcc_read32(GCC_REG_UFS_CLKREF_CBCR);
+	b_clkref = xzs_gcc_read32(GCC_REG_UFS_CLKREF_CBCR);
 	if (b_clkref & CBCR_CLK_OFF) xzs_gcc_enable_and_wait_branch(GCC_REG_UFS_CLKREF_CBCR, NULL, &b_clkref);
 
 	/* Stage 3: POST_POWER */
