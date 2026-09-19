@@ -376,4 +376,11 @@ struct buf;
 void xzs_sdhci_phase_d4m2_probe(void);
 void xzs_buf_set_dev(struct buf *bp, uint32_t dev);
 
+/*
+ * Phase D4: Read-Only BSD Block Storage & Integration
+ */
+void xzs_sdhci_phase_d4_probe(void);
+int  xzs_storage_nub_publish(int bsd_major, int bsd_minor);
+int  xzs_storage_nub_find_bsd_name(const char *name, char *out_name, size_t out_name_size, int *out_major, int *out_minor);
+
 #endif /* _PEXPERT_ARM_XZS_SDHCI_H */

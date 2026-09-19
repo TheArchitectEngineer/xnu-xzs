@@ -730,9 +730,9 @@ bsd_init(void)
 	xzs_breadcrumb(0xD41, 0);
 
 #if CONFIG_XZS_BRINGUP
-	/* Phase D4-M2: BSD bdevsw Read-Only Block Device Integration */
-	extern void xzs_sdhci_phase_d4m2_probe(void);
-	xzs_sdhci_phase_d4m2_probe();
+	/* Phase D4: Read-Only BSD Block Storage & Integration */
+	extern void xzs_sdhci_phase_d4_probe(void);
+	xzs_sdhci_phase_d4_probe();
 #endif
 
 
