@@ -598,3 +598,33 @@ Hardware readback on MSM8996 silicon before controller bus bringup:
 - **VADC Telemetry Audit:** Audited all 24 channels of PM8994 `vadc@3100`; none route to L12, L28, or L25 (`L12/L28/L25_ADC_MEASURABLE = no`, `L12/L28/L25_PHYSICAL_PROVEN = no` by current software path).
 - **Reference Clock Debug Mux Audit:** `gcc_ufs_clkref_clk` verified present in debug mux table, but measurement safely unexecuted without APCS counter hardware (`REFCLK_DEBUG_MEASUREMENT = NOT_EXECUTED`).
 - **Status:** CASE B / ANALOG_STATE_UNRESOLVED. Software-level digital and analog configurations are fully exhausted; next phase requires auditing stock Sony bootloader / ABOOT / XBL firmware bringup.
+
+---
+
+## 14. Phase D2-C2.11: Stock Sony Boot Firmware UFS Oracle Audit
+
+### 14.1 Objective & Methodology
+- Extracted and audited all 16 stock firmware partitions from physical device `BH905SX976` (`aboot`, `xbl`, `tz`, `rpm`, `hyp`, `pmic`, `devcfg`, `s1sbl`, `boot`, etc.) to locate the known-good UFS initialization oracle.
+- Compared firmware dispatch, call graphs, register sequences, and storage drivers against XNU.
+
+### 14.2 Ground Truth Discovery: Physical Storage is eMMC 5.1
+1. **Hardware Identification:**
+   - Interrogation of sysfs on the target device proved the internal storage chip is **Samsung `BJNB4R` eMMC 5.1** (`CID = 150100424a4e4234520fdac7c0381400`, size = 31.2 GB), mapped to block device `/dev/block/mmcblk0` on controller `sdhci@7464900`.
+   - The Sony Xperia XZ (`Kagura`) and Xperia XZs (`Keyaki` / G8231) were manufactured exclusively with eMMC 5.1 internal flash. Physical UFS hardware is **NOT POPULATED** on the PCB.
+2. **eFuse & Boot Straps:**
+   - Register `0x00076044` (`BOOT_CONFIG`) has bits 5:1 hard-fused to `0b00010` (`BOOT_DEV_EMMC = 2`).
+   - Bit combination for UFS (`BOOT_DEV_UFS = 4`) is not set.
+3. **Firmware Call Graph Audit:**
+   - `aboot` (`platform/msm_shared/boot_device.c` lines `0xaa024ae4`–`0xaa024b88`): because `boot_device == 2`, formats `androidboot.bootdevice=7464900.sdhci`.
+   - `aboot` (`target/msm8996/init.c` `0xaa07b71c`): calls `mmc_init()`. UFS initialization is uncalled dead code.
+   - `xbl.img`: loads images via `BDEV_SD_DRIVER` (`/hdev/sdc1`). UFS driver is uninvoked.
+   - Boot firmware contains **ZERO** QMP UFS PHY calibration tables or SerDes start logic.
+4. **Resolution of Linux Probe Failure & C_READY = 0:**
+   - Explains why `ufshcd 624000.ufshc` probe failed in Linux with `-ENODEV` (`err -19`).
+   - Explains why `C_READY` never asserted across D2-C2.1 through D2-C2.10: the differential SerDes lanes terminate without a partner transceiver.
+
+### 14.3 Outcome & Status
+```text
+D2-C2 STATUS: CLOSED / PHYSICAL_STORAGE_IS_EMMC (7464900.sdhci)
+```
+- All storage bringup must pivot to the Qualcomm SDCC v5 controller at `0x7464900` (`sdhci@7464900`).

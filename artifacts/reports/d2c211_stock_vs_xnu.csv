@@ -1,0 +1,16 @@
+order,domain,resource/register,stock_value/action,xnu_value/action,classification,evidence,pre_phy?,candidate?
+1,BOOT_STRAP,0x76044 (BOOT_CONFIG),Bits 5:1=2 (BOOT_DEV_EMMC),Probed UFS without checking strap,VALUE_DIFFERENCE,Disassembly of aboot platform/msm_shared/boot_device.c line 0xaa024ae4,yes,yes
+2,STORAGE_DEVICE,Physical Storage Chip,Samsung BJNB4R 32GB eMMC 5.1 (MMC),Targeted nonexistent physical UFS chip,VALUE_DIFFERENCE,TWRP sysfs /sys/block/mmcblk0/device/name and cid,yes,yes
+3,STORAGE_CONTROLLER,0x7464900 (sdhci@7464900),Active storage controller for boot/system,Not yet initialized in XNU,STOCK_ONLY,Disassembly of aboot target/msm8996/init.c and TWRP dmesg,yes,yes
+4,STORAGE_CONTROLLER,0x624000 (ufshc@624000),Unused / probe returns -ENODEV (-19),Mapped and clocked at 200MHz,XNU_ONLY,TWRP dmesg: ufshcd_variant_hba_init failed err -19,yes,no
+5,PHY,0x627000 (ufsphy@627000),Unused / uninitialized in boot chain,Full 76-entry Rate-A table replay,XNU_ONLY,Disassembly of aboot and xbl: zero QMP PHY writes,no,no
+6,POWER_RPM,ldoa/28 (0.925V),Pre-existing active in PMIC,Explicitly voted (0.925V 18mA),MATCH,D2-C2.10 silicon run and SPMI readback,yes,no
+7,POWER_RPM,ldoa/12 (1.800V),Pre-existing active in PMIC,Explicitly voted (1.800V 9mA),MATCH,D2-C2.10 silicon run and SPMI readback,yes,no
+8,POWER_RPM,ldoa/25 (1.200V),Always-on (DT vddp-ref-clk-always-on),Explicitly voted (1.200V 0mA) rollback preserved,MATCH,D2-C2.10 silicon run and SPMI readback,yes,no
+9,POWER_RPM,clka/8 (LN_BB),Shared reference clock buffer,Explicitly voted (Active + Sleep sets),MATCH,D2-C2.10 silicon run,yes,no
+10,GCC_CLOCK,0x88008 (GCC_UFS_CLKREF_CBCR),Active (CLK_OFF=0),Enabled and verified running,MATCH,D2-C2.10 silicon run,yes,no
+11,GCC_CLOCK,0x75024 (UFS_AXI_CLK_SRC),200 MHz (CFG=0x105),Programmed to 200 MHz (CFG=0x105),MATCH,D2-C2.9/C2.10 silicon run,yes,no
+12,GCC_CLOCK,0x76014 (UNIPRO_SRC),300 MHz (CFG=0x103),Programmed to 300 MHz (CFG=0x103),MATCH,D2-C2.9/C2.10 silicon run,yes,no
+13,HOST_INVARIANT,0x624034 (UFSHCI_REG_HCE),0x00 (Uninitialized),0x00 (Preserved),MATCH,XNU invariant preserved,yes,no
+14,HOST_INVARIANT,0x624090 (UFSHCI_REG_UICCMD),0x00 (Uninitialized),0x00 (Preserved),MATCH,XNU invariant preserved,yes,no
+15,BOOT_CMDLINE,androidboot.bootdevice,androidboot.bootdevice=7464900.sdhci,N/A,STOCK_ONLY,TWRP dmesg command line,yes,yes
