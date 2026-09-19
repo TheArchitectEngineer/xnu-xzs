@@ -66,7 +66,7 @@ Audited directly from stock Sony bootloader image `artifacts/firmware/stock/aboo
    aa00af88: cmp  r0, #0             ; check status == 0
    aa00af8c: beq  0xaa00b01c         ; success -> proceed to CMD9 (CSD)
    ```
-3. **Response Type Translation in `mmc_send_cmd` (`0xaa008908 - 0xaa008780`)**:
+3. **Response Type Translation in `mmc_send_cmd` (`0xaa0086a8 - 0xaa008980`)**:
    - `ABOOT_INTERNAL_RESP_TYPE = 0x40` (stock bootloader internal enum).
    - At `0xaa008908`: `cmp r2, #64; beq 0xaa008934`.
    - At `0xaa008934`: sets `r1 = 2` (`SDHCI_CMD_RESP_48`).
@@ -205,8 +205,7 @@ CMD3_R1_REJECT_BITS = 0x00000000 (PASS)
   - `CURRENT_STATE` in the Card Status register reflects the state of the device **when the command is received**.
   - When Samsung BJNB4R receives `CMD3`, it is currently in the **Identification State (`ident` = 2)**.
   - The card acknowledges `CMD3` by returning `R1 = 0x00000500` (`CURRENT_STATE = 2`, `READY_FOR_DATA = 1`, zero error bits).
-  - The card transitions from `ident` (2) to `stby` (3) **upon completing transmission of the R1 response**.
-  - Subsequent addressed commands (such as `CMD9 SEND_CSD` or `CMD13 SEND_STATUS` addressed to `RCA = 2`) operate on the card in `stby` state.
+  - CMD3 was accepted while card reported IDENT in the command response. The subsequent addressed command will operationally verify that RCA assignment and the expected post-CMD3 state transition succeeded.
   - In Sony ABOOT (`aboot.img @ 0xaa00af88`), the bootloader verifies `r0 == 0` (zero SDHCI errors) and proceeds directly to CMD9 with argument `0x00020000` without asserting `(R1 >> 9) & 0xF == 3`.
 
 ---
@@ -249,13 +248,13 @@ CMD3_ARGUMENT = 0x00020000
 ## D2-M4D-B Status
 
 ```text
-D2-M4D-B STATUS = COMPLETE (HARDWARE TELEMETRY CAPTURED)
-ASSIGNED_RCA    = 2
-CMD3_ARGUMENT   = 0x00020000
-CMD3_COMMAND    = 0x031A
-CMD3_R1_RAW     = 0x00000500
-CMD3_R1_REJECT  = 0x00000000
-CURRENT_STATE   = 2 (IDENT)
+D2-M4D-B STATUS                 = COMPLETE (HARDWARE TELEMETRY CAPTURED)
+CMD3_R1_RAW                     = 0x00000500
+CURRENT_STATE_IN_CMD3_RESPONSE  = 2 (IDENT)
+CMD3_R1_REJECT_BITS             = 0
+ASSIGNED_RCA                    = 2
+CMD3_ARGUMENT                   = 0x00020000
+CMD3_COMMAND                    = 0x031A
 ```
 
 ---
