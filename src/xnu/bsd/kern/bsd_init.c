@@ -487,6 +487,12 @@ void
 bsd_init(void)
 {
 	xzs_early_puts("[XZS-BOOT] [D30] bsd_init ENTERED\n");
+
+#if CONFIG_XZS_BRINGUP
+	/* Phase D2-M5: Final D2 Acceptance — CMD17 / READ_SINGLE_BLOCK */
+	extern void xzs_sdhci_phase_d2m5_probe(void);
+	xzs_sdhci_phase_d2m5_probe();
+#endif
 	struct uthread *ut;
 	vnode_t init_rootvnode = NULLVP;
 	struct proc_ro_data kernproc_ro_data = {
@@ -1022,6 +1028,8 @@ bsd_init(void)
 	inittodr(0);
 	xzs_early_puts("[XZS-BOOT] [D49a] inittodr DONE\n");
 	xzs_watchdog_pet();
+
+
 
 	/* Mount the root file system. */
 	xzs_early_puts("[XZS-BOOT] [D50] ROOT DEVICE SELECTION ENTER\n");

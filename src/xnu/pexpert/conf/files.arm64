@@ -8,4 +8,8 @@ pexpert/arm/pe_serial.c                standard
 
 pexpert/arm/hwtrace/hwtrace.c         standard
 pexpert/arm/hwtrace/apt_msg.c         standard
+pexpert/arm/xzs_ufs.c                 standard
+pexpert/arm/xzs_spmi.c                standard
+pexpert/arm/xzs_rpm.c                 standard
+pexpert/arm/xzs_sdhci.c               standard
 

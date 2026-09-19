@@ -1,0 +1,38 @@
+Category,Parameter,Linux_TWRP_Reference,XNU_D2M1_Oracle_State,Match_Status,Notes
+Controller,Device_Tree_Node,sdhci@7464900,sdhci@7464900,MATCH,Live device tree node audited
+Controller,Compatible_String,qcom;sdhci-msm,qcom;sdhci-msm,MATCH,Qualcomm SDCC v5 Host Controller
+Controller,HC_MMIO_Physical_Base,0x07464900,0x07464900,MATCH,Standard SDHCI Host Controller aperture (len 0x500)
+Controller,CORE_MMIO_Physical_Base,0x07464000,0x07464000,MATCH,Qualcomm Vendor Core registers (len 0x800)
+Controller,CMDQ_MMIO_Physical_Base,0x07464E00,0x07464E00,MATCH,Command Queueing aperture (len 0x19C)
+Controller,Bus_Width,8-bit (qcom;bus-width = <8>),8-bit (qcom;bus-width = <8>),MATCH,Physical eMMC 8-bit parallel bus
+Controller,HC_IRQ,SPI 141 (GIC 173),SPI 141 (GIC 173),MATCH,SDHCI interrupt line
+Controller,PWR_IRQ,SPI 134 (GIC 166),SPI 134 (GIC 166),MATCH,Power event interrupt line
+Clocks,iface_clk,gcc_sdcc1_ahb_clk,gcc_sdcc1_ahb_clk,MATCH,CBCR @ 0x00313008
+Clocks,core_clk,gcc_sdcc1_apps_clk,gcc_sdcc1_apps_clk,MATCH,CBCR @ 0x00313004
+Clocks,core_clk_parent,sdcc1_apps_clk_src (gpll4),sdcc1_apps_clk_src (gpll4),MATCH,RCG @ 0x00313010 / 0x00313014
+Clocks,ice_core_clk,gcc_sdcc1_ice_core_clk,gcc_sdcc1_ice_core_clk,MATCH,CBCR @ 0x00313038
+Clocks,ice_core_clk_parent,sdcc1_ice_core_clk_src (gpll0),sdcc1_ice_core_clk_src (gpll0),MATCH,RCG @ 0x00313040 / 0x00313044
+Clocks,Reset_BCR,GCC_SDCC1_BCR @ 0x00313000,GCC_SDCC1_BCR @ 0x00313000,MATCH,Block Reset Controller register
+Clocks,Max_Rate,384000000 Hz,384000000 Hz,MATCH,HS400 mode 2x clock rate
+Power,VDD_Supply,pm8994_l20 (2.95V),pm8994_l20 (2.95V),MATCH,LDO 20 (range 200uA to 570mA)
+Power,VDD_IO_Supply,pm8994_s4 (1.80V),pm8994_s4 (1.80V),MATCH,SMPS 4 (always-on; 9 active users)
+Pinctrl,Active_Pins,sdc1_clk(16mA) sdc1_cmd(10mA pullup) sdc1_data(10mA pullup) sdc1_rclk(pulldown),sdc1_clk(16mA) sdc1_cmd(10mA pullup) sdc1_data(10mA pullup) sdc1_rclk(pulldown),MATCH,Phandles 0x110..0x113
+Pinctrl,Sleep_Pins,sdc1_clk(2mA) sdc1_cmd(2mA pullup) sdc1_data(2mA pullup) sdc1_rclk(pulldown),sdc1_clk(2mA) sdc1_cmd(2mA pullup) sdc1_data(2mA pullup) sdc1_rclk(pulldown),MATCH,Phandles 0x114..0x117
+Firmware_Oracle,Boot_Device_ID,BOOT_DEV_EMMC (2),BOOT_DEV_EMMC (2),MATCH,BOOT_CONFIG register 0x00076044
+Firmware_Oracle,Boot_Command_Line,androidboot.bootdevice=7464900.sdhci,androidboot.bootdevice=7464900.sdhci,MATCH,Set by aboot boot_device.c
+Firmware_Oracle,ABOOT_Init_Func,mmc_init() @ 0xaa00ac14,mmc_init() @ 0xaa00ac14,MATCH,Invoked from target_init() @ 0xaa000b98
+Firmware_Oracle,ABOOT_Block_Read,mmc_sdhci_read() @ 0xaa00bbc8,mmc_sdhci_read() @ 0xaa00bbc8,MATCH,Issues CMD17/18 to read MBR and GPT
+eMMC_Card,Card_Name,BJNB4R,BJNB4R,MATCH,Samsung eMMC 5.1
+eMMC_Card,Manufacturer_ID,0x000015,0x000015,MATCH,Samsung Electronics
+eMMC_Card,OEM_ID,0x0100,0x0100,MATCH,Samsung OEM ID
+eMMC_Card,Serial_Number,0xdac7c038,0xdac7c038,MATCH,32-bit unique serial
+eMMC_Card,Manufacturing_Date,01/2017,01/2017,MATCH,Month 1 / Year 2017
+eMMC_Card,FW_Revision,0x0f00000000000000,0x0f00000000000000,MATCH,eMMC internal firmware rev 0x0F
+eMMC_Card,HW_Revision,0x0,0x0,MATCH,Hardware stepping 0x0
+eMMC_Card,CID,150100424a4e4234520fdac7c0381400,150100424a4e4234520fdac7c0381400,MATCH,Card Identification Register
+eMMC_Card,CSD,d02701320f5903fff6dbffef8e404000,d02701320f5903fff6dbffef8e404000,MATCH,Card Specific Data Register
+eMMC_Card,EXT_CSD_REV,0x08 (MMC 5.1),0x08 (MMC 5.1),MATCH,Byte 192 in EXT_CSD
+eMMC_Card,Card_Capacity_Bytes,31268536320 (29.12 GiB),31268536320 (29.12 GiB),MATCH,61071360 sectors @ 512 bytes/sector
+eMMC_Card,Boot_Partition_Size,4096 KB (mmcblk0boot0/1),4096 KB (mmcblk0boot0/1),MATCH,BOOT_SIZE_MULT = 0x20
+eMMC_Card,RPMB_Partition_Size,4096 KB (mmcblk0rpmb),4096 KB (mmcblk0rpmb),MATCH,RPMB replay protected memory block
+eMMC_Card,Operating_Timing,HS400 (Enhanced Strobe),HS400 (Enhanced Strobe),MATCH,STROBE_SUPPORT = 0x1 HS_TIMING = 0x3
