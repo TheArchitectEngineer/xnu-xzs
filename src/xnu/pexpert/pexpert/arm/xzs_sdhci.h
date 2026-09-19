@@ -310,4 +310,16 @@ void xzs_sdhci_phase_d2m4dd_probe(void);
 void xzs_sdhci_phase_d2m4e_probe(void);
 void xzs_sdhci_phase_d2m5_probe(void);
 
+/*
+ * Phase D3: GPT Header & Partition Parsing Declarations & Invariants
+ */
+#define GPT_SIGNATURE_MAGIC             0x5452415020494645ULL /* "EFI PART" in little-endian */
+#define GPT_REVISION_1_0                0x00010000U
+#define GPT_MIN_HEADER_SIZE             92U
+#define GPT_MAX_HEADER_SIZE             512U
+#define GPT_MIN_ENTRY_SIZE              128U
+
+int  xzs_emmc_read_sector_pio(uint32_t lba, uint8_t out[512]);
+void xzs_sdhci_phase_d3m1_probe(void);
+
 #endif /* _PEXPERT_ARM_XZS_SDHCI_H */
