@@ -490,8 +490,8 @@ bsd_init(void)
 
 #if CONFIG_XZS_BRINGUP
 	/* Phase D2-M3: MSM8996 SDC1 — Exact Host Power + Internal/Card Clock Activation */
-	extern void xzs_sdhci_phase_d2m3_probe(void);
-	xzs_sdhci_phase_d2m3_probe();
+	extern void xzs_sdhci_phase_d2m4a_probe(void);
+	xzs_sdhci_phase_d2m4a_probe();
 #endif
 	struct uthread *ut;
 	vnode_t init_rootvnode = NULLVP;

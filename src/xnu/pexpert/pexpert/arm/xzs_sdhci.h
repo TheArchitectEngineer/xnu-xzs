@@ -181,16 +181,57 @@
 #define SDCC1_400K_D                    0xFFFFFFFBU
 
 /*
+ * SDHCI Command & Argument Registers (relative to HC Base: 0x07464900)
+ */
+#define SDHCI_ARGUMENT                  0x08U
+#define SDHCI_TRANSFER_MODE             0x0CU
+#define SDHCI_COMMAND                   0x0EU
+
+#define SDHCI_CMD_RESP_MASK             0x03U
+#define SDHCI_CMD_RESP_NONE             0x00U
+#define SDHCI_CMD_RESP_136              0x01U
+#define SDHCI_CMD_RESP_48               0x02U
+#define SDHCI_CMD_RESP_48_BUSY          0x03U
+#define SDHCI_CMD_CRC                   (1U << 3)
+#define SDHCI_CMD_INDEX                 (1U << 4)
+#define SDHCI_CMD_DATA                  (1U << 5)
+#define SDHCI_MAKE_CMD(c, f)            ((uint16_t)(((c) << 8) | (f)))
+
+/*
+ * SDHCI Interrupt Registers & Status Bits (relative to HC Base: 0x07464900)
+ */
+#define SDHCI_INT_STATUS                0x30U
+#define SDHCI_INT_ENABLE                0x34U
+#define SDHCI_SIGNAL_ENABLE             0x38U
+
+#define SDHCI_INT_RESPONSE              (1U << 0)  /* Command Complete */
+#define SDHCI_INT_DATA_END              (1U << 1)  /* Transfer Complete */
+#define SDHCI_INT_ERROR                 (1U << 15) /* Error Interrupt */
+#define SDHCI_INT_TIMEOUT               (1U << 16) /* Command Timeout Error (CTO) */
+#define SDHCI_INT_CRC                   (1U << 17) /* Command CRC Error (CCRC) */
+#define SDHCI_INT_END_BIT               (1U << 18) /* Command End Bit Error (CEND) */
+#define SDHCI_INT_INDEX                 (1U << 19) /* Command Index Error (CINDEX) */
+#define SDHCI_INT_BUS_POWER             (1U << 23) /* Bus Power Error */
+#define SDHCI_INT_CMD_ERR_MASK          (SDHCI_INT_TIMEOUT | SDHCI_INT_CRC | SDHCI_INT_END_BIT | SDHCI_INT_INDEX | SDHCI_INT_BUS_POWER)
+#define SDHCI_INT_ALL_MASK              0xFFFFFFFFU
+
+/*
  * Function Prototypes
  */
 uint32_t xzs_sdhci_hc_read32(uint32_t offset);
 uint16_t xzs_sdhci_hc_read16(uint32_t offset);
 uint8_t  xzs_sdhci_hc_read8(uint32_t offset);
 
+void xzs_sdhci_hc_write32(uint32_t offset, uint32_t val);
+void xzs_sdhci_hc_write16(uint32_t offset, uint16_t val);
+void xzs_sdhci_hc_write8(uint32_t offset, uint8_t val);
+
 uint32_t xzs_sdhci_core_read32(uint32_t offset);
+void xzs_sdhci_core_write32(uint32_t offset, uint32_t val);
 
 void xzs_sdhci_phase_d2m1_probe(void);
 void xzs_sdhci_phase_d2m2_probe(void);
 void xzs_sdhci_phase_d2m3_probe(void);
+void xzs_sdhci_phase_d2m4a_probe(void);
 
 #endif /* _PEXPERT_ARM_XZS_SDHCI_H */
