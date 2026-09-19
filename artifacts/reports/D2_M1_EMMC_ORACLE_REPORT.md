@@ -344,7 +344,7 @@ Executed live on Sony Xperia XZs physical silicon via automated `full-test-and-e
 [XZS-SDHCI] 6. EXECUTING READ-ONLY SILICON IDENTITY PROBE:
   [0x51] SDHCI_HOST_VERSION (0x74649FE): 0x00004902
     -> Spec Version:   0x00000002 (SDHCI 3.00)
-    -> Vendor Version: 0x00000049 (Qualcomm Controller ID 0x49)
+    -> Vendor Version: 0x00000049 (Vendor-defined version field 0x49, not a standardized vendor ID)
 
 [BREADCRUMB] CP=0x000000000000d300 ERR=0x0000000000000052
   [0x52] SDHCI_CAPABILITIES   (0x7464940): 0x742dc8b2
@@ -366,7 +366,8 @@ Executed live on Sony Xperia XZs physical silicon via automated `full-test-and-e
     -> Driver Type C:     NO
     -> Driver Type D:     NO
   [0x52] SDHCI_PRESENT_STATE  (0x7464924): 0x01f80000
-    -> Card Inserted:     NO (internal non-removable)
+    -> Native SDHCI card-detect bits are not authoritative for soldered non-removable eMMC (qcom,nonremovable)
+    -> Card Inserted:     NO (expected for non-removable eMMC with disconnected CD pin)
     -> Card State Stable: NO
     -> Card Detect Pin:   DEASSERTED
     -> Write Protect Pin: PROTECTED
@@ -398,7 +399,7 @@ Executed live on Sony Xperia XZs physical silicon via automated `full-test-and-e
 ## HARDWARE VERIFIED FACTS
 
 1. **Active Storage Controller Response:** The Qualcomm SDCC v5 Host Controller at physical address `0x07464900` responded cleanly to 16-bit and 32-bit MMIO reads without triggering any asynchronous SError or synchronous data abort.
-2. **SDHCI Version:** `SDHCI_HOST_VERSION` returned `0x4902`, confirming SDHCI Specification 3.00 compliance (`spec_version = 0x02`) and Qualcomm Vendor ID `0x49`.
+2. **SDHCI Version:** `SDHCI_HOST_VERSION` returned `0x4902`, confirming SDHCI Specification 3.00 compliance (`spec_version = 0x02`) and vendor-defined version `0x49` (not a standardized vendor ID).
 3. **Hardware Capabilities:** `SDHCI_CAPABILITIES` (`0x742dc8b2`) proves hardware support for:
    - 8-bit bus width (`bit 18 = 1`)
    - 64-bit ADMA (`bit 28 = 1` and `bit 19 = 1`)
@@ -466,7 +467,7 @@ All 10 required stopping conditions were fulfilled:
 ## Recommended D2-M2 Plan
 
 ### Goal: Clock, Power, Reset, and Pinctrl Reproduction
-1. **Clock Configuration:** Program `SDCC1_APPS_CMD_RCGR` / `CFG_RCGR` to 400 KHz initial frequency (GPLL0 divider) matching LittleKernel init state.
+1. **Clock Configuration:** Program `SDCC1_APPS_CMD_RCGR` / `CFG_RCGR` to 400 KHz initial frequency (XO-derived, not GPLL0) matching LittleKernel init state.
 2. **Regulator Management:** Verify `pm8994_s4` (1.80V) and evaluate explicit `pm8994_l20` (2.95V) vote if needed during card power-up.
 3. **Controller Software Reset:** Issue `SDHCI_SOFTWARE_RESET` (write `0x01` to HC offset `0x2F`) and poll until self-clearing.
 4. **Breadcrumbs:** Use namespace `CP = 0xD310`.
