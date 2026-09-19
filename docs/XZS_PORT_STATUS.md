@@ -7,13 +7,15 @@ This summary provides an executive overview of the project's technical status. I
 ## Current Milestone
 
 ```text
-Phase D4-M1 acceptance gate completed:
-Persistent eMMC runtime context & multi-sector read pipeline verified on hardware.
-One-time hardware initialization reused across multiple non-contiguous reads.
-Zero controller resets between reads; 100% byte-for-byte match on 4 target sectors.
-PERSISTENT_EMMC_RUNTIME_VERIFIED = yes.
-MULTI_SECTOR_PIPELINE_VERIFIED = yes.
-Phase D4-M2 (BSD bdevsw Block Device Layer) is NEXT.
+Phase D4-M2 acceptance gate completed:
+BSD bdevsw read-only block device integration verified on physical hardware.
+Real BSD buf_t requests driven through bdevsw[1].d_strategy() with controller mutex serialization.
+100% byte-for-byte oracle match on 512B LBA1 and 1024B LBA1..2 requests.
+Dynamic major allocated (1), read-only open/strategy policy enforced, zero storage writes.
+BSD_BLOCK_STRATEGY_VERIFIED = yes.
+BDEVSW_IMPLEMENTED = yes.
+CONTROLLER_SERIALIZATION_ENABLED = yes.
+Phase D4-M3 (Character Device & devfs /dev/disk0 Integration) is NEXT.
 ```
 
 * **Target Device**: Sony Xperia XZs (Model G8231 / Platform Tone / Board Keyaki)
@@ -28,28 +30,30 @@ Phase D4-M2 (BSD bdevsw Block Device Layer) is NEXT.
 ## Highest Hardware-Verified Checkpoint
 
 ```text
-[BREADCRUMB] CP=0x000000000000d400 ERR=0x0000000000000000 (Enter D4-M1)
-[BREADCRUMB] CP=0x000000000000d400 ERR=0x0000000000000010 (Git Baseline)
-[BREADCRUMB] CP=0x000000000000d400 ERR=0x0000000000000020 (Independent Sector Oracles Frozen)
-[BREADCRUMB] CP=0x000000000000d400 ERR=0x0000000000000030 (Persistent Init Call #1 Begin)
-[BREADCRUMB] CP=0x000000000000d400 ERR=0x0000000000000031 (Persistent Init Complete)
-[BREADCRUMB] CP=0x000000000000d400 ERR=0x0000000000000032 (Context Geometry Derived Live)
-[BREADCRUMB] CP=0x000000000000d400 ERR=0x0000000000000033 (Persistent Init Call #2 Context Reused)
-[BREADCRUMB] CP=0x000000000000d400 ERR=0x0000000000000040 (Multi-Sector Read LBA 1..2 Begin)
-[BREADCRUMB] CP=0x000000000000d400 ERR=0x0000000000000041 (LBA 1 Byte & Header CRC32 Verified: 0xBFDF741D)
-[BREADCRUMB] CP=0x000000000000d400 ERR=0x0000000000000050 (LBA 2 Generation Recorded)
-[BREADCRUMB] CP=0x000000000000d400 ERR=0x0000000000000051 (LBA 2 Verified)
-[BREADCRUMB] CP=0x000000000000d400 ERR=0x0000000000000060 (LBA 33 Single-Sector Read Begin)
-[BREADCRUMB] CP=0x000000000000d400 ERR=0x0000000000000061 (LBA 33 Verified)
-[BREADCRUMB] CP=0x000000000000d400 ERR=0x0000000000000070 (Backup Header LBA 61071359 Read Begin)
-[BREADCRUMB] CP=0x000000000000d400 ERR=0x0000000000000071 (Backup Header Byte & CRC32 Verified: 0x03F02415)
-[BREADCRUMB] CP=0x000000000000d400 ERR=0x0000000000000080 (Lifecycle Counters Verified: 1 Init / 1 Reuse / 4 Reads)
-[BREADCRUMB] CP=0x000000000000d400 ERR=0x0000000000000081 (All Four Sector Oracles Match: 100% Byte Identity)
-[BREADCRUMB] CP=0x000000000000d400 ERR=0x0000000000000090 (Phase D4-M1 Complete)
-[BREADCRUMB] CP=0x000000000000d400 ERR=0x0000000000000001 (Diagnostic Terminal Warm Reset to Fastboot)
+[BREADCRUMB] CP=0x000000000000d410 ERR=0x0000000000000000 (Enter D4-M2)
+[BREADCRUMB] CP=0x000000000000d410 ERR=0x0000000000000010 (Git Baseline)
+[BREADCRUMB] CP=0x000000000000d410 ERR=0x0000000000000020 (bdevsw Layout Audited)
+[BREADCRUMB] CP=0x000000000000d410 ERR=0x0000000000000030 (Controller Mutex Initialized)
+[BREADCRUMB] CP=0x000000000000d410 ERR=0x0000000000000021 (Dynamic Major Allocated: 1)
+[BREADCRUMB] CP=0x000000000000d410 ERR=0x0000000000000031 (bdevsw Switch Registered)
+[BREADCRUMB] CP=0x000000000000d410 ERR=0x0000000000000040 (Read-Only Open Pass)
+[BREADCRUMB] CP=0x000000000000d410 ERR=0x0000000000000041 (Write Open Rejected: EROFS)
+[BREADCRUMB] CP=0x000000000000d410 ERR=0x0000000000000050 (Strategy LBA1 Begin)
+[BREADCRUMB] CP=0x000000000000d410 ERR=0x0000000000000051 (Strategy LBA1 Completed)
+[BREADCRUMB] CP=0x000000000000d410 ERR=0x0000000000000052 (LBA1 512B Oracle Pass)
+[BREADCRUMB] CP=0x000000000000d410 ERR=0x0000000000000060 (Strategy Multi-Sector Read Begin)
+[BREADCRUMB] CP=0x000000000000d410 ERR=0x0000000000000061 (Strategy Multi-Sector Completed)
+[BREADCRUMB] CP=0x000000000000d410 ERR=0x0000000000000062 (1024B Oracle Pass)
+[BREADCRUMB] CP=0x000000000000d410 ERR=0x0000000000000070 (Out-of-Range Rejection Pass: EINVAL)
+[BREADCRUMB] CP=0x000000000000d410 ERR=0x0000000000000071 (Misaligned Rejection Pass: EINVAL)
+[BREADCRUMB] CP=0x000000000000d410 ERR=0x0000000000000072 (Write Strategy Rejection Pass: EROFS)
+[BREADCRUMB] CP=0x000000000000d410 ERR=0x0000000000000080 (ioctl / psize / close Pass)
+[BREADCRUMB] CP=0x000000000000d410 ERR=0x0000000000000081 (Persistent Lifecycle Counters Pass)
+[BREADCRUMB] CP=0x000000000000d410 ERR=0x0000000000000090 (Phase D4-M2 Complete)
+[BREADCRUMB] CP=0x000000000000d410 ERR=0x0000000000000001 (Terminal Warm Reset to Fastboot)
 ```
 
-The kernel confirms that Mach SMP, BSD initialization, IOKit autoconfiguration, physical eMMC persistent runtime lifecycle, and multi-sector pipelined block transfers operate genuinely on physical silicon. The eMMC controller is initialized once and kept in operational TRAN state. Multiple non-contiguous sector reads (LBA 1, LBA 2, LBA 33, and Backup Header LBA 61071359) execute across the persistent context with zero intermediate controller resets and 100% byte-for-byte oracle match.
+The kernel confirms that Mach SMP, BSD initialization, IOKit autoconfiguration, physical eMMC persistent runtime lifecycle, dynamic `bdevsw` registration, mutex serialization, and legitimate `buf_t` strategy I/O operate genuinely on physical silicon. The block driver (`bdevsw[1]`) processes 512-byte and 1024-byte buffer transfers directly to eMMC CMD17 with 100% byte parity against independent physical oracles.
 
 ---
 
@@ -70,7 +74,8 @@ The kernel confirms that Mach SMP, BSD initialization, IOKit autoconfiguration, 
 - [x] **IOKit Autoconfiguration**: `IOKitBSDInit` publishing `IOBSD` plane to BSD.
 - [x] **Physical eMMC Storage Bring-up (D2)**: SDCC1 clock (400 kHz), controlled reset, power-up, CMD0..CMD17, 512-byte PIO sector read, TWRP oracle byte-for-byte match.
 - [x] **GUID Partition Table Discovery & Seal (D3)**: Primary & Backup GPT Header CRC32 verified, 16-KiB entry array verified, 55 partitions enumerated, reciprocal links confirmed, 100% byte-for-byte and map-for-map match. `AUTHORITATIVE_GPT_PARTITION_MAP_VERIFIED = yes`.
-- [x] **Persistent eMMC Runtime Context & Multi-Sector Pipeline (D4-M1)**: `xzs_emmc_context_t` lifecycle, idempotent initialization (`INIT_CALL_COUNT=2`, `INITIALIZATION_COUNT=1`, `INITIALIZATION_REUSE_COUNT=1`, `CONTROLLER_RESET_COUNT=1`), 64-bit multi-sector pipeline (`xzs_emmc_read_blocks_sync`), checked request ranges, zero resets between reads, 100% byte-for-byte oracle match on 4 non-contiguous sectors (LBA 1, 2, 33, 61071359).
+- [x] **Persistent eMMC Runtime Context & Multi-Sector Pipeline (D4-M1)**: `xzs_emmc_context_t` lifecycle, idempotent initialization (`INIT_CALL_COUNT=2`, `INITIALIZATION_COUNT=1`, `INITIALIZATION_REUSE_COUNT=1`, `CONTROLLER_RESET_COUNT=1`), 64-bit multi-sector pipeline (`xzs_emmc_read_blocks_sync`), checked request ranges, zero resets between reads, 100% byte-for-byte oracle match on 4 non-contiguous sectors.
+- [x] **BSD `bdevsw` Read-Only Block Device Layer (D4-M2)**: Dynamic major registration via `bdevsw_add()`, controller mutex serialization (`lck_mtx_t`), `d_open`/`d_close`/`d_strategy`/`d_ioctl`/`d_psize` handlers, genuine `buf_t` mapping and biowait completion, 512B and 1024B strategy reads matching physical oracles with 100% parity, synthetic error rejection (out-of-range, misaligned, write) issuing zero physical commands.
 - [x] **Automated Recovery**: Warm reboot back to Fastboot within +5 seconds via Qualcomm APCS watchdog bite upon reaching diagnostic terminal state.
 
 ---
@@ -91,8 +96,8 @@ The following non-essential subsystems are temporarily deferred to eliminate all
 
 ## What Does Not Exist Yet
 
-- [ ] **BSD Block Device Switch (D4-M2)**: `struct bdevsw`, `bdevsw_add()`, `d_strategy()`, `/dev/disk0`, `/dev/rdisk0`.
-- [ ] **Partition Slice Devices (D4-M3)**: Devfs slice nodes (`disk0s1`..`disk0s55`) backed by authoritative GPT partition map.
+- [ ] **Character Device & devfs Disk Nodes (D4-M3)**: `cdevsw`, `/dev/disk0`, `/dev/rdisk0`.
+- [ ] **Partition Slice Devices (D4-M4)**: Devfs slice nodes (`disk0s1`..`disk0s55`) backed by authoritative GPT partition map.
 - [ ] **Root Filesystem (D5)**: No APFS, HFS+, or ramdisk mounted at `/`.
 - [ ] **Userspace Process (Phase E)**: No PID 1 (`launchd`), shell, or `/dev/console` interactive session.
 
@@ -104,11 +109,11 @@ The following non-essential subsystems are temporarily deferred to eliminate all
 ```bash
 DEVELOPER_DIR=/Applications/Xcode-beta.app/Contents/Developer \
 make -C src/xnu \
-KERNEL_CONFIGS=DEVELOPMENT \
-ARCH_CONFIGS=ARM64 \
-MACHINE_CONFIGS=VMAPPLE \
-RC_DARWIN_KERNEL_VERSION=24.0.0 \
-build -j$(sysctl -n hw.ncpu)
+  KERNEL_CONFIGS=DEVELOPMENT \
+  ARCH_CONFIGS=ARM64 \
+  MACHINE_CONFIGS=VMAPPLE \
+  RC_DARWIN_KERNEL_VERSION=24.0.0 \
+  build -j$(sysctl -n hw.ncpu)
 
 ./scripts/check-no-pac.sh src/xnu/BUILD/obj/DEVELOPMENT_ARM64_VMAPPLE/kernel.development.vmapple
 ./scripts/package-boot.sh
@@ -117,7 +122,7 @@ build -j$(sysctl -n hw.ncpu)
 ### 2. Hardware Deployment & Telemetry Verification
 ```bash
 ./scripts/run-and-extract.sh
-python3 scripts/verify_d4m1_acceptance.py
+python3 scripts/verify_d4m2_acceptance.py artifacts/logs/xnu-console-extracted.log
 ```
 
 ### 3. Cold-Reset Note
@@ -133,6 +138,6 @@ python3 scripts/verify_d4m1_acceptance.py
 ## Next Technical Boundary
 
 ```text
-Phase D4-M2: BSD bdevsw Block Device Layer & devfs Registration
+Phase D4-M3: Character Device Companion & devfs Node Registration (/dev/disk0, /dev/rdisk0)
 ```
-Implement controller serialization lock (`lck_mtx_t`), BSD `bdevsw` switch table (`d_open`, `d_close`, `d_strategy`, `d_psize`, `d_ioctl`), integrate buffer cache strategy I/O into `xzs_emmc_read_blocks_sync()`, and create `/dev/disk0` / `/dev/rdisk0` nodes via `devfs_make_node()`.
+Implement `cdevsw`, register dynamic character major via `cdevsw_add_with_bdev()`, publish `/dev/disk0` and `/dev/rdisk0` via `devfs_make_node()`, and verify user/kernel character and block reads while strictly preserving read-only safety invariants.

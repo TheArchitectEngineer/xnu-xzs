@@ -482,17 +482,21 @@ bsd_rooted_ramdisk(void)
  * used like any other.
  */
 extern void xzs_early_puts(const char *s);
+void xzs_buf_set_dev(struct buf *bp, uint32_t dev);
+
+void
+xzs_buf_set_dev(struct buf *bp, uint32_t dev)
+{
+	if (bp != NULL) {
+		bp->b_dev = (dev_t)dev;
+	}
+}
 
 void
 bsd_init(void)
 {
 	xzs_early_puts("[XZS-BOOT] [D30] bsd_init ENTERED\n");
 
-#if CONFIG_XZS_BRINGUP
-	/* Phase D4-M1: Persistent eMMC Runtime Context & Multi-Sector Read Pipeline */
-	extern void xzs_sdhci_phase_d4m1_probe(void);
-	xzs_sdhci_phase_d4m1_probe();
-#endif
 	struct uthread *ut;
 	vnode_t init_rootvnode = NULLVP;
 	struct proc_ro_data kernproc_ro_data = {
@@ -724,6 +728,12 @@ bsd_init(void)
 	vfsinit();
 	xzs_early_puts("[XZS-BOOT] [D41] VFS INIT COMPLETE\n");
 	xzs_breadcrumb(0xD41, 0);
+
+#if CONFIG_XZS_BRINGUP
+	/* Phase D4-M2: BSD bdevsw Read-Only Block Device Integration */
+	extern void xzs_sdhci_phase_d4m2_probe(void);
+	xzs_sdhci_phase_d4m2_probe();
+#endif
 
 
 #if CONFIG_PROC_UUID_POLICY

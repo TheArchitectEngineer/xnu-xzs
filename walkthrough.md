@@ -1132,3 +1132,65 @@ d5e6f9b5f517fd73e6d10ad6065518b140b4cf1c
 D3 tag:
 xzs-d3-gpt-complete
 ```
+
+---
+
+## 6. Phase D4-M1: Persistent eMMC Runtime Context & Multi-Sector Read Pipeline
+
+### Objectives & Accomplishments
+1. **Persistent Runtime Context (`xzs_emmc_context_t`)**:
+   - Dynamic hardware geometry: `sector_size=512`, `sector_count=61071360`, `last_physical_lba=61071359`, `ext_csd_rev=0x08`, `rca=2`.
+   - Fails-closed lifecycle: `initialized` flag set strictly upon verified EXT_CSD derivation.
+2. **Idempotent Initialization (`xzs_emmc_init_persistent`)**:
+   - Subsequent calls detect initialization, increment `initialization_reuse_count = 1`, and return `0` with zero controller resets (`INITIALIZATION_COUNT=1`).
+3. **Multi-Sector Synchronous Read API (`xzs_emmc_read_blocks_sync`)**:
+   - Validated against 4 target sectors on silicon: LBA1, LBA2, LBA33, and Backup GPT Header.
+   - 100% byte-for-byte match against independent frozen host TWRP oracles.
+4. **Safety Boundaries**:
+   - Zero storage writes (`CMD24=0`, `CMD25=0`, `CMD18=0`).
+   - No `bdevsw`, no devfs, no IOKit nub, no rootfs probing.
+
+---
+
+## 7. Phase D4-M2: BSD `bdevsw` Read-Only Block Device Integration
+
+### Objectives & Accomplishments
+1. **Audited Local `struct bdevsw` Layout**:
+   - Audited exact layout from `src/xnu/bsd/sys/conf.h` and reference implementation `src/xnu/bsd/dev/memdev.c`.
+2. **Dynamic Major Registration (`bdevsw_add`)**:
+   - Registered dynamically via `bdevsw_add(-1, &g_xzs_bdevsw)` at `BSD_POST_VFSINIT` (`bsd_init.c:733`).
+   - Allocated major number: `1` (`BDEV_MAJOR_DYNAMIC=yes`, `BDEVSW_REGISTER_COUNT=1`).
+3. **Persistent Hardware Ownership & Read-Only `d_open` / `d_close`**:
+   - `xzs_bdev_open()` ensures persistent runtime is initialized on first open.
+   - Strictly permits `FREAD`, rejects `FWRITE` with `EROFS`.
+   - `xzs_bdev_close()` safely closes without touching hardware state (`CLOSE_RESETS_STORAGE=no`).
+4. **Controller Serialization Mutex**:
+   - Dedicated `lck_mtx_t g_xzs_emmc_mtx` initialized at bring-up.
+   - Synchronously locks controller strictly across physical sector transfers. Released before `buf_biodone()`.
+5. **Legitimate `buf_t` Integration & Strategy Driver (`xzs_bdev_strategy`)**:
+   - Driven via genuine in-tree `buf_alloc(NULL)`, `buf_reset()`, `buf_map()`, `buf_biowait()`, and `buf_free()`.
+   - Maps minor 0 directly to physical eMMC LBA: `start_lba = (uint64_t)buf_blkno(bp)`.
+   - Enforces read-only policy: reject non-`B_READ` with `EROFS`.
+   - Bounds-checks against live geometry: reject out-of-range or misaligned requests with `EINVAL`.
+6. **Physical Strategy Acceptance & Oracle Parity**:
+   - Single-sector read (LBA 1, 512 B): CRC32 `0xD3A34BC1`, SHA256 `e4b891b42fd57eb352ffbe0aa9098d04fe85f88e3425dcba529064cce72f862a` (100% byte match).
+   - Multi-sector read (LBA 1..2, 1024 B): CRC32 `0xA21C1724`, SHA256 `4a161d7ec294bc215b8dd22989a4f87f1c501fac3250acf66e5e2a4085ece8d0` (100% byte match).
+7. **Synthetic Failure Injection**:
+   - Out-of-range request rejected with `EINVAL` (0 CMD17s).
+   - Misaligned 513-byte request rejected with `EINVAL` (0 CMD17s).
+   - Write request rejected with `EROFS` (0 CMD24s/CMD25s).
+8. **Live Geometry Validation**:
+   - `d_ioctl` (`DKIOCGETBLOCKSIZE`=512, `DKIOCGETBLOCKCOUNT`=61071360, `DKIOCISWRITABLE`=0).
+   - `d_psize` returns 61071360 (512-byte block units, 31,268,536,320 bytes total).
+9. **Final D4-M2 Certified Status**:
+   - `D4-M1_COMPLETE=yes`
+   - `D4-M2_COMPLETE=yes`
+   - `PERSISTENT_EMMC_RUNTIME_VERIFIED=yes`
+   - `BSD_BLOCK_STRATEGY_VERIFIED=yes`
+   - `BDEVSW_IMPLEMENTED=yes`
+   - `CONTROLLER_SERIALIZATION_ENABLED=yes`
+   - `DEVFS_DISK0_PUBLISHED=no`
+   - `PARTITION_SLICES_PUBLISHED=no`
+   - `IOKIT_STORAGE_NUB_PUBLISHED=no`
+   - `ZERO_STORAGE_WRITES=yes`
+   - `D4_COMPLETE=no`

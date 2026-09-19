@@ -16,7 +16,7 @@ Progress is strictly gated by physical hardware verification. Speculative percen
 | **Phase D1** | BSD / VFS bootstrap to root-storage boundary | **COMPLETE** |
 | **Phase D2** | Physical eMMC storage bring-up (SDCC1, CMD0..CMD17, PIO) | **COMPLETE** |
 | **Phase D3** | GUID Partition Table (GPT) discovery & partition enumeration | **COMPLETE** |
-| **Phase D4** | Block-storage driver integration (`bdevsw` / `disk0`) | **IN PROGRESS (D4-M1 Complete)** |
+| **Phase D4** | Block-storage driver integration (`bdevsw` / `disk0`) | **IN PROGRESS (D4-M1 & D4-M2 Complete)** |
 | **Phase D5** | Real root filesystem mount (HFS+ / APFS / ramdisk) | **NOT STARTED** |
 | **Phase E** | PID 1 bootstrap (`initproc` / launchd exec) | **NOT STARTED** |
 | **Phase F** | Interactive serial shell (`/bin/sh` or micro-shell) | **NOT STARTED** |
@@ -150,7 +150,7 @@ Progress is strictly gated by physical hardware verification. Speculative percen
 ### Phase D4 — Block Storage Driver & BSD Integration
 * **Goal**: Transition eMMC hardware operations from diagnostic probes into a persistent, reusable block storage runtime, implement BSD block device switch (`bdevsw`) and raw/block device nodes (`/dev/disk0`, `/dev/rdisk0`), and publish partition slice devices (`disk0s1`..`disk0s55`) backed by the authoritative GPT map.
 * **Architecture**: `XZS_HYBRID_IOKIT_BDEVSW_STORAGE` (BSD `bdevsw` switch table backed by persistent eMMC runtime with lightweight IOKit media nub discovery).
-* **Status**: **IN PROGRESS (D4-M1 Complete)**
+* **Status**: **IN PROGRESS (D4-M1 & D4-M2 Complete)**
 * **Detailed Milestone Execution & Verification**:
   - **D4-M1 (Persistent eMMC Runtime Context & Multi-Sector Pipeline)**: ✅ **COMPLETE**
     - Established static persistent runtime context (`xzs_emmc_context_t`, `g_xzs_emmc_ctx`) with fail-closed semantics.
@@ -160,13 +160,21 @@ Progress is strictly gated by physical hardware verification. Speculative percen
     - Verified on physical hardware: 4 non-contiguous reads (`LBA 1`, `LBA 2`, `LBA 33`, Backup Header `LBA 61071359`) across a single persistent session with zero intermediate controller resets.
     - 100% byte-for-byte exact identity against independent frozen TWRP oracles. Both primary and backup GPT header CRCs dynamically verified on read buffers.
     - `PERSISTENT_EMMC_RUNTIME_VERIFIED = yes`, `MULTI_SECTOR_PIPELINE_VERIFIED = yes`.
-  - **D4-M2 (BSD Block Device Switch Layer)**: ⏳ **NEXT**
-    - Implement controller serialization lock (`lck_mtx_t`).
-    - Implement BSD `bdevsw` switch table (`d_open`, `d_close`, `d_strategy`, `d_psize`, `d_ioctl`).
-    - Integrate buffer cache strategy I/O into `xzs_emmc_read_blocks_sync()`.
-    - Register major block device number via `bdevsw_add()`.
-    - Create `/dev/disk0` and `/dev/rdisk0` nodes via `devfs_make_node()`.
-  - **D4-M3 (Partition Slice Device Layer)**: 📋 **PLANNED**
+  - **D4-M2 (BSD Block Device Switch Layer)**: ✅ **COMPLETE**
+    - Implemented controller serialization lock (`lck_mtx_t g_xzs_emmc_mtx`).
+    - Implemented BSD `bdevsw` switch table (`xzs_bdev_open`, `xzs_bdev_close`, `xzs_bdev_strategy`, `xzs_bdev_psize`, `xzs_bdev_ioctl`).
+    - Registered major block device dynamically via `bdevsw_add(-1, &g_xzs_bdevsw)` at `BSD_POST_VFSINIT` (allocated major 1).
+    - Integrated genuine in-tree `buf_t` handling (`buf_alloc(NULL)`, `buf_reset()`, `buf_map()`, `buf_biowait()`, `buf_free()`).
+    - Verified 512B LBA1 read (CRC32 `0xD3A34BC1`, SHA256 `e4b891b42fd57eb352ffbe0aa9098d04fe85f88e3425dcba529064cce72f862a`, 100% match).
+    - Verified 1024B LBA1..2 multi-sector read (CRC32 `0xA21C1724`, SHA256 `4a161d7ec294bc215b8dd22989a4f87f1c501fac3250acf66e5e2a4085ece8d0`, 100% match).
+    - Verified synthetic failure rejection: out-of-range -> `EINVAL`, misaligned -> `EINVAL`, write -> `EROFS`, with zero physical commands issued.
+    - Verified geometry query ioctls and `d_psize` (61,071,360 512-byte blocks).
+    - `BSD_BLOCK_STRATEGY_VERIFIED = yes`, `BDEVSW_IMPLEMENTED = yes`, `CONTROLLER_SERIALIZATION_ENABLED = yes`.
+  - **D4-M3 (Character Device Companion & devfs Node Registration)**: ⏳ **NEXT**
+    - Implement `cdevsw`, register dynamic character major via `cdevsw_add_with_bdev()`.
+    - Publish `/dev/disk0` and `/dev/rdisk0` via `devfs_make_node()`.
+    - Verify character and block device node access from kernel/user paths.
+  - **D4-M4 (Partition Slice Device Layer)**: 📋 **PLANNED**
     - Expose authoritative GPT partition entries as devfs slice devices (`disk0s1`..`disk0s55`).
     - Checked sector offset and length translation in `d_strategy`.
 * **Dependencies**: Phase D3.

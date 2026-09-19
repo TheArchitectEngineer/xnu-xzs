@@ -369,4 +369,11 @@ int  xzs_emmc_read_sector_sync(uint64_t lba, void *out512);
 int  xzs_emmc_read_blocks_sync(uint64_t start_lba, uint32_t count, void *buffer);
 void xzs_sdhci_phase_d4m1_probe(void);
 
+/*
+ * Phase D4-M2: BSD bdevsw Read-Only Block Device Integration
+ */
+struct buf;
+void xzs_sdhci_phase_d4m2_probe(void);
+void xzs_buf_set_dev(struct buf *bp, uint32_t dev);
+
 #endif /* _PEXPERT_ARM_XZS_SDHCI_H */
