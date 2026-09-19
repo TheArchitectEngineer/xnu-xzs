@@ -565,3 +565,36 @@ Hardware readback on MSM8996 silicon before controller bus bringup:
 - Hard Invariant: `HCE = 0, HCS = 0, UICCMD = 0`, DMA untouched.
 - Clean reverse RPM rollback: `LN_BB` (Sleep set) -> `LN_BB` (Active set) -> `L12` -> `L28` all acknowledged in 10 µs each.
 - Automated warm reset to Fastboot mode.
+
+---
+
+## 13. Phase D2-C2.10: Analog Power / Reference Clock Proof + Exact vddp-ref-clk Replay
+
+### 13.1 GCC Reset Audit & Digital Freeze
+- Verified from `twrp-kernel.bin` reset maps that `0x75000` (`GCC_UFS_BCR`) is present, while `GCC_UFS_PHY_BCR` is **NOT PRESENT** (`MSM8996_GCC_UFS_BCR_PRESENT=yes`, `MSM8996_GCC_UFS_PHY_BCR_PRESENT=no`).
+- Preserved digital clock freeze: `UFS_AXI 200 MHz`, `UNIPRO_SRC 300 MHz`, bus branches active, lane clocks OFF, TX/RX CFG OFF, ICE branch OFF. Zero guessed resets written.
+
+### 13.2 Exact Sony PHY Power-On Call Order
+- Disassembled `ufs_qcom_phy_power_on` and `ufs_qcom_power_up_sequence`:
+  1. `L28 (vdda_phy: 0.925V, 18mA)` enable -> ACK in 30 µs.
+  2. `power_control(true)` -> write `+0xC04 = 0x01`.
+  3. `L12 (vdda_pll: 1.800V, 9mA)` enable -> ACK in 40 µs.
+  4. `ref_clk_src (LN_BB: clka/8)` enable in ACTIVE + SLEEP -> ACKs in 10 µs each.
+  5. `ref_clk (GCC_UFS_CLKREF)` verified running (`CLK_OFF = 0`).
+  6. `L25 (vddp_ref_clk: 1.200V, DT load_uA=100 -> RPM ma=0)` enable -> ACK in 40 µs.
+  7. Soft reset assert (`REG_UFS_CFG1` bit 1 = 1) -> 1 ms delay.
+  8. 76-entry Rate-A table + 1-entry Rate-B override (`0x128 = 0x44`).
+  9. Soft reset deassert (`REG_UFS_CFG1` bit 1 = 0) -> 1 ms delay.
+  10. `+0xC04 = 0x01`.
+  11. `+0xC00 = 0x01` (SerDes start).
+  12. Poll `C_READY (+0x190)` and `PCS_READY (+0xD68)` across 1.0s.
+
+### 13.3 Stage A Silicon Results & Status
+- **Pre-Vote SPMI Audit:** L25 (`0x5800`) readback: `ENABLE = 0x80`, `STATUS = 0x80` (`L25_PREEXISTING_ACTIVE = yes`).
+- **Polling Telemetry Across 1.0s:**
+  - `T = 10ms..1000ms`: `CR(+0x190) = 0`, `PCS(+0xD68) = 0`, `LOCK(+0x0C8) = 0x01`, `0x160 = 0x00`, `CMN(+0x194) = 0x0E`, `C00 = 0x01`, `C04 = 0x01`.
+- **Classification:** `C_READY = 0` after exact L25 replay. Concluded that exact L25/vddp-ref-clk vote is insufficient to recover QSERDES common PLL readiness.
+- **Rollback Safety Policy:** Because L25 was preexisting active and marked `always-on` in DT, L25 was preserved enabled at rollback (`RESTORED_PREEXISTING_STATE`). Unconditional global `SWEN=0` was **NEVER** transmitted.
+- **VADC Telemetry Audit:** Audited all 24 channels of PM8994 `vadc@3100`; none route to L12, L28, or L25 (`L12/L28/L25_ADC_MEASURABLE = no`, `L12/L28/L25_PHYSICAL_PROVEN = no` by current software path).
+- **Reference Clock Debug Mux Audit:** `gcc_ufs_clkref_clk` verified present in debug mux table, but measurement safely unexecuted without APCS counter hardware (`REFCLK_DEBUG_MEASUREMENT = NOT_EXECUTED`).
+- **Status:** CASE B / ANALOG_STATE_UNRESOLVED. Software-level digital and analog configurations are fully exhausted; next phase requires auditing stock Sony bootloader / ABOOT / XBL firmware bringup.

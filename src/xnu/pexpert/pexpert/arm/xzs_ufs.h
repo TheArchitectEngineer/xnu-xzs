@@ -185,6 +185,7 @@ void xzs_ufs_phase_d2c26_audit(void);
 void xzs_ufs_phase_d2c27_probe(void);
 void xzs_ufs_phase_d2c28_probe(void);
 void xzs_ufs_phase_d2c29_probe(void);
+void xzs_ufs_phase_d2c210_probe(void);
 
 #endif /* _PEXPERT_ARM_XZS_UFS_H */
 

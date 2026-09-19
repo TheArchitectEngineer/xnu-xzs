@@ -768,6 +768,16 @@ static int xzs_rpm_vote_clk_buffer(uint32_t resource_id, uint32_t set, bool enab
 	return xzs_rpm_send_kvp_request_and_wait_ack(set, QCOM_SMD_RPM_CLK_BUF_A, resource_id, &kvp, 1, out_elapsed_us);
 }
 
+int xzs_rpm_vote_ldo(uint32_t resource_id, uint32_t uV, uint32_t mA, bool enable, uint32_t *out_elapsed_us)
+{
+	return xzs_rpm_send_request_and_wait_ack(QCOM_SMD_RPM_LDOA, resource_id, uV, mA, enable, out_elapsed_us);
+}
+
+int xzs_rpm_vote_clk_buffer_public(uint32_t resource_id, uint32_t set, bool enable, uint32_t *out_elapsed_us)
+{
+	return xzs_rpm_vote_clk_buffer(resource_id, set, enable, out_elapsed_us);
+}
+
 /*
  * PMIC register name lookup helper
  */
@@ -2090,5 +2100,172 @@ rollback:
 	/* 7. Terminal Recovery Pipeline */
 	xzs_early_puts("\n[XZS-RPM] 7. EXPERIMENT COMPLETE — TRIGGERING WARM RESET TO FASTBOOT\n");
 	xzs_breadcrumb(0xD290, 0x01);
+	xzs_spin_halt();
+}
+
+/*
+ * ============================================================================
+ * Phase D2-C2.10: MSM8996 QMP UFS Analog Power / Refclk Proof + L25 Replay
+ * ============================================================================
+ */
+void
+xzs_rpm_phase_d2c210_probe(void)
+{
+	xzs_early_puts("\n========================================================\n");
+	xzs_early_puts("  PHASE D2-C2.10: MSM8996 QMP UFS ANALOG POWER & REFCLK\n");
+	xzs_early_puts("========================================================\n");
+	xzs_breadcrumb(0xD2A0, 0x00);
+
+	/* 1. Map RPM Message RAM & APCS Doorbell */
+	if (g_msgram_base == 0) {
+		g_msgram_base = (uintptr_t)ml_io_map(RPM_MSGRAM_PHYS_BASE, RPM_MSGRAM_SIZE);
+		if (g_msgram_base == 0) {
+			xzs_early_puts("[XZS-RPM] [FATAL] FAILED TO MAP RPM MESSAGE RAM\n");
+			xzs_spin_halt();
+			return;
+		}
+	}
+	if (g_apcs_ipc_base == 0) {
+		g_apcs_ipc_base = (uintptr_t)ml_io_map(RPM_APCS_IPC_PHYS_BASE, 0x1000);
+		if (g_apcs_ipc_base == 0) {
+			xzs_early_puts("[XZS-RPM] [FATAL] FAILED TO MAP APCS IPC DOORBELL\n");
+			xzs_spin_halt();
+			return;
+		}
+	}
+
+	uintptr_t toc_addr = g_msgram_base + RPM_MSGRAM_SIZE - RPM_TOC_SIZE;
+	struct rpm_toc *toc = (struct rpm_toc *)toc_addr;
+	if (toc->magic != RPM_TOC_MAGIC) {
+		xzs_early_puts("[XZS-RPM] [FAIL] INVALID TOC MAGIC\n");
+		xzs_spin_halt();
+		return;
+	}
+
+	uint32_t tx_offset = 0, tx_size = 0;
+	uint32_t rx_offset = 0, rx_size = 0;
+	bool tx_found = false, rx_found = false;
+	for (uint32_t i = 0; i < toc->count; i++) {
+		if (toc->entries[i].id == RPM_TX_FIFO_ID) {
+			tx_offset = toc->entries[i].offset;
+			tx_size = toc->entries[i].size;
+			tx_found = true;
+		} else if (toc->entries[i].id == RPM_RX_FIFO_ID) {
+			rx_offset = toc->entries[i].offset;
+			rx_size = toc->entries[i].size;
+			rx_found = true;
+		}
+	}
+	if (!tx_found || !rx_found) {
+		xzs_early_puts("[XZS-RPM] [FAIL] FIFOS NOT FOUND IN TOC\n");
+		xzs_spin_halt();
+		return;
+	}
+
+	g_tx_desc = (volatile struct channel_desc *)(g_msgram_base + tx_offset);
+	g_tx_fifo = (volatile uint8_t *)(g_msgram_base + tx_offset + 8U);
+	g_tx_fifo_size = tx_size;
+	g_rx_desc = (volatile struct channel_desc *)(g_msgram_base + rx_offset);
+	g_rx_fifo = (volatile uint8_t *)(g_msgram_base + rx_offset + 8U);
+	g_rx_fifo_size = rx_size;
+
+	g_tx_desc->write_index = 0;
+	g_rx_desc->read_index = 0;
+	xzs_rpm_wmb();
+
+	int h_rc = xzs_rpm_glink_handshake();
+	if (h_rc != 0) {
+		xzs_early_puts("[XZS-RPM] [FAIL] GLINK HANDSHAKE FAILED\n");
+		xzs_spin_halt();
+		return;
+	}
+	xzs_early_puts("[XZS-RPM] [PASS] RPM GLINK TRANSPORT CHANNEL VERIFIED\n");
+
+	/* 2. Sample Pre-Vote SPMI Baseline for L25, L12, and L28 */
+	xzs_early_puts("\n[XZS-ANALOG] AUDITING PRE-VOTE PMIC SPMI STATE:\n");
+	(void)xzs_spmi_init();
+
+	uint8_t l25_type = 0, l25_subtype = 0, l25_status = 0, l25_vset = 0, l25_enable = 0, l25_mode = 0;
+	(void)xzs_spmi_read8(PM8994_SID, PM8994_PERIPH_L25 + PMIC_REG_TYPE, &l25_type);
+	(void)xzs_spmi_read8(PM8994_SID, PM8994_PERIPH_L25 + PMIC_REG_SUBTYPE, &l25_subtype);
+	(void)xzs_spmi_read8(PM8994_SID, PM8994_PERIPH_L25 + PMIC_REG_STATUS, &l25_status);
+	(void)xzs_spmi_read8(PM8994_SID, PM8994_PERIPH_L25 + PMIC_REG_VOLTAGE_SET, &l25_vset);
+	(void)xzs_spmi_read8(PM8994_SID, PM8994_PERIPH_L25 + PMIC_REG_ENABLE, &l25_enable);
+	(void)xzs_spmi_read8(PM8994_SID, PM8994_PERIPH_L25 + PMIC_REG_MODE, &l25_mode);
+
+	bool l25_preexisting_active = ((l25_enable & PMIC_ENABLE_BIT) != 0);
+
+	xzs_early_puts("  L25 (0x5800): TYPE=0x");
+	xzs_early_puthex64((uint64_t)l25_type);
+	xzs_early_puts(" SUBTYPE=0x");
+	xzs_early_puthex64((uint64_t)l25_subtype);
+	xzs_early_puts(" STATUS=0x");
+	xzs_early_puthex64((uint64_t)l25_status);
+	xzs_early_puts(" ENABLE=0x");
+	xzs_early_puthex64((uint64_t)l25_enable);
+	xzs_early_puts(" VSET=0x");
+	xzs_early_puthex64((uint64_t)l25_vset);
+	xzs_early_puts(" MODE=0x");
+	xzs_early_puthex64((uint64_t)l25_mode);
+	xzs_early_puts(" -> PREEXISTING_ACTIVE=");
+	xzs_early_puts(l25_preexisting_active ? "yes\n" : "no\n");
+
+	uint8_t l12_enable = 0, l12_status = 0, l28_enable = 0, l28_status = 0;
+	(void)xzs_spmi_read8(PM8994_SID, PM8994_PERIPH_L12 + PMIC_REG_ENABLE, &l12_enable);
+	(void)xzs_spmi_read8(PM8994_SID, PM8994_PERIPH_L12 + PMIC_REG_STATUS, &l12_status);
+	(void)xzs_spmi_read8(PM8994_SID, PM8994_PERIPH_L28 + PMIC_REG_ENABLE, &l28_enable);
+	(void)xzs_spmi_read8(PM8994_SID, PM8994_PERIPH_L28 + PMIC_REG_STATUS, &l28_status);
+
+	xzs_early_puts("  L12 (0x4B00): ENABLE=0x");
+	xzs_early_puthex64((uint64_t)l12_enable);
+	xzs_early_puts(" STATUS=0x");
+	xzs_early_puthex64((uint64_t)l12_status);
+	xzs_early_puts("\n");
+
+	xzs_early_puts("  L28 (0x5B00): ENABLE=0x");
+	xzs_early_puthex64((uint64_t)l28_enable);
+	xzs_early_puts(" STATUS=0x");
+	xzs_early_puthex64((uint64_t)l28_status);
+	xzs_early_puts("\n");
+
+	/* 3. Execute Phase D2-C2.10 Sequence in xzs_ufs.c */
+	extern void xzs_ufs_phase_d2c210_probe(void);
+	xzs_ufs_phase_d2c210_probe();
+
+	/* 4. Reverse Order Rollback & State Restoration */
+	xzs_breadcrumb(0xD2A0, 0x80);
+	xzs_early_puts("\n[XZS-RPM] 4. REVERSE ORDER ROLLBACK & STATE RESTORATION:\n");
+
+	/* L25 Rollback Safety Policy */
+	if (l25_preexisting_active) {
+		xzs_early_puts("  L25: PREEXISTING ACTIVE & ALWAYS-ON -> PRESERVING ENABLE (RESTORED_PREEXISTING_STATE)\n");
+		xzs_early_puts("  [NOTICE] NEVER issuing unconditional global SWEN=0 to L25\n");
+	} else {
+		xzs_early_puts("  L25: Releasing experiment vote in ACTIVE set (SWEN=0)...\n");
+		uint32_t rb_l25 = 0;
+		(void)xzs_rpm_send_request_and_wait_ack(QCOM_SMD_RPM_LDOA, 25, 1200000U, 0U, false, &rb_l25);
+	}
+
+	xzs_early_puts("  Releasing LN_BB (clka/8) in SLEEP set (SWEN=0)...\n");
+	uint32_t rb_ln_slp = 0;
+	(void)xzs_rpm_vote_clk_buffer(RPM_LN_BB_CLK_ID, MSM_RPM_CTX_SLEEP_SET, false, &rb_ln_slp);
+
+	xzs_early_puts("  Releasing LN_BB (clka/8) in ACTIVE set (SWEN=0)...\n");
+	uint32_t rb_ln_act = 0;
+	(void)xzs_rpm_vote_clk_buffer(RPM_LN_BB_CLK_ID, MSM_RPM_CTX_ACTIVE_SET, false, &rb_ln_act);
+
+	xzs_early_puts("  Releasing L12 in ACTIVE set (SWEN=0)...\n");
+	uint32_t rb_l12 = 0;
+	(void)xzs_rpm_send_request_and_wait_ack(QCOM_SMD_RPM_LDOA, 12, 1800000U, 9U, false, &rb_l12);
+
+	xzs_early_puts("  Releasing L28 in ACTIVE set (SWEN=0)...\n");
+	uint32_t rb_l28 = 0;
+	(void)xzs_rpm_send_request_and_wait_ack(QCOM_SMD_RPM_LDOA, 28, 925000U, 18U, false, &rb_l28);
+
+	xzs_early_puts("[XZS-RPM] ROLLBACK COMPLETE\n");
+
+	/* 5. Terminal Recovery Pipeline */
+	xzs_early_puts("\n[XZS-RPM] 5. EXPERIMENT COMPLETE — TRIGGERING WARM RESET TO FASTBOOT\n");
+	xzs_breadcrumb(0xD2A0, 0x01);
 	xzs_spin_halt();
 }

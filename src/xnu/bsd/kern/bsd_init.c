@@ -489,9 +489,9 @@ bsd_init(void)
 	xzs_early_puts("[XZS-BOOT] [D30] bsd_init ENTERED\n");
 
 #if CONFIG_XZS_BRINGUP
-	/* Phase D2-C2.9: Exact MSM8996 UFS RCG Rate Programming + Pre-PHY Replay */
-	extern void xzs_rpm_phase_d2c29_probe(void);
-	xzs_rpm_phase_d2c29_probe();
+	/* Phase D2-C2.10: MSM8996 QMP UFS — Analog Power / Reference Clock Proof + Exact vddp-ref-clk Replay */
+	extern void xzs_rpm_phase_d2c210_probe(void);
+	xzs_rpm_phase_d2c210_probe();
 #endif
 	struct uthread *ut;
 	vnode_t init_rootvnode = NULLVP;

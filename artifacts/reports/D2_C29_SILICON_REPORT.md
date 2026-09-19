@@ -240,11 +240,9 @@ Audit of live Sony DT (`artifacts/builds/twrp-extracted.dts`) and kernel drivers
 
 1. **RCG Frequency Ruled Out:**
    Lack of active RCG clock generation for `UFS_AXI` or `UNIPRO_SRC` was NOT the reason `C_READY` failed to lock. Both clock trees are now running at exact Linux frequencies on silicon with `C_READY` still remaining 0.
-2. **QSERDES Internal State Machine / Bias / Reference Input:**
-   Because power supplies (L28, L12), RPM reference clock buffer (LN_BB), controller bus clocks (AXI, AHB, SYS_NOC, AGGRE2), reference clock branch (`CLKREF`), and controller core clocks (`UFS_AXI`, `UNIPRO_CORE`) are verified active and identical to Linux, the root cause for `C_READY = 0` must reside in:
-   - **Internal PHY Bias / Bandgap / Clock buffer initialization:** `QSERDES_COM_BIAS_EN_CLKBUFLR_EN (+0x034)` or `QSERDES_COM_SYS_CLK_CTRL (+0x03C)` behavior when reference clock arrives.
-   - **PHY Master Reset / Digital Reset Wrapper:** An internal GCC or controller reset gate (e.g. `GCC_UFS_PHY_BCR` or controller wrapper reset register) holding the analog QMP block in reset.
-   - **Reference Clock Selection:** Whether the QMP PHY requires internal mux configuration to select `LN_BB` vs alternative clock sources.
+2. **Analog Prerequisites Audit Required:**
+   Because controller bus clocks (AXI, AHB, SYS_NOC, AGGRE2), reference clock branch (`CLKREF`), and controller core clocks (`UFS_AXI 200MHz`, `UNIPRO_CORE 300MHz`) are verified active and identical to Linux, the remaining question is whether analog prerequisites (L28, L12, LN_BB reference clock propagation, and L25 vddp-ref-clk) are actually active or accepted-only.
+   Audit of the MSM8996 GCC reset table proved that `GCC_UFS_BCR` (@ `0x75000`) exists, while `GCC_UFS_PHY_BCR` is **NOT PRESENT** (`MSM8996_GCC_UFS_PHY_BCR_PRESENT=no`). No guessed reset register may be written.
 
 ---
 
@@ -261,12 +259,14 @@ Causal Elimination:
   - External UFS_RESET:                 AUDITED (Does not exist in live DT)
   - RPM Regulators (L28/L12):           FROZEN (ACK verified)
   - LN_BB buffer:                       FROZEN (ACK verified)
+  - GCC_UFS_PHY_BCR:                    NOT PRESENT (Proven from kernel binary)
 ```
 
 ---
 
 ## Recommended Next Phase
 
-### Phase D2-C2.10: QMP PHY Internal Clock Buffer / Bias & GCC PHY Block Reset Audit
-1. Audit whether `GCC_UFS_PHY_BCR` (or similar PHY block reset register in GCC) must be toggled to release the QMP analog wrapper from reset.
-2. Audit whether `QSERDES_COM_BIAS_EN_CLKBUFLR_EN` (+0x034) or `QSERDES_COM_SYSCLK_EN_SEL` (+0x0AC) requires explicit settling time or sequencing before SerDes start.
+### Phase D2-C2.10: MSM8996 QMP UFS — Analog Power / Reference Clock Proof + Exact vddp-ref-clk Replay
+1. Prove or disprove remaining analog prerequisites: L28 (vdda_phy), L12 (vdda_pll), LN_BB (19.2 MHz reference), and L25 (vddp_ref_clk).
+2. Distinguish RPM request acceptance from physical state.
+3. Reconstruct exact Sony PHY power-on dependency chain and execute exact sequence on silicon.

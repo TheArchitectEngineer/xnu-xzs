@@ -40,5 +40,8 @@ void xzs_rpm_phase_d2c26_probe(void);
 void xzs_rpm_phase_d2c27_probe(void);
 void xzs_rpm_phase_d2c28_probe(void);
 void xzs_rpm_phase_d2c29_probe(void);
+void xzs_rpm_phase_d2c210_probe(void);
+int xzs_rpm_vote_ldo(uint32_t resource_id, uint32_t uV, uint32_t mA, bool enable, uint32_t *out_elapsed_us);
+int xzs_rpm_vote_clk_buffer_public(uint32_t resource_id, uint32_t set, bool enable, uint32_t *out_elapsed_us);
 
 #endif /* _PEXPERT_ARM_XZS_RPM_H_ */
