@@ -336,4 +336,9 @@ void xzs_sdhci_phase_d3m2a_probe(void);
 
 void xzs_sdhci_phase_d3m2b_probe(void);
 
+/*
+ * Phase D3-M3: Backup GPT Header & Partition Entry Array Verification
+ */
+void xzs_sdhci_phase_d3m3_probe(void);
+
 #endif /* _PEXPERT_ARM_XZS_SDHCI_H */
