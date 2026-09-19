@@ -1095,11 +1095,11 @@ bsd_init(void)
 
 		/*
 		 * ================================================================
-		 * PHASE D5-M2-R5: bdevvp(md0) + Sector 0 Acceptance Check
+		 * PHASE D5-M2-R6: Sector 1 + Sector 69 Acceptance Check
 		 * ================================================================
 		 */
-		extern void xzs_d5m2_r5_verify(dev_t root_dev, const char *root_name);
-		xzs_d5m2_r5_verify(rootdev, rootdevice);
+		extern void xzs_d5m2_r6_verify(dev_t root_dev, const char *root_name);
+		xzs_d5m2_r6_verify(rootdev, rootdevice);
 
 		xzs_early_puts("[XZS-BOOT] [D51] vfs_mountroot ENTER\n");
 		extern void xzs_breadcrumb(uint32_t cp, uint32_t err);
@@ -2041,6 +2041,192 @@ xzs_d5m2_r5_verify(dev_t root_dev, const char *root_name)
 	xzs_early_puts("=== D5-M2-R5 TELEMETRY END ===\n\n");
 
 	xzs_early_puts("[XZS-RAMDISK] PHASE D5-M2-R5 COMPLETE & VERIFIED (PASS)\n");
+	xzs_early_puts("[XZS-RAMDISK] TERMINAL STATE — TRIGGERING WARM RESET TO FASTBOOT\n\n");
+	delay(50000);
+	xzs_spin_halt();
+}
+
+/*
+ * ============================================================================
+ * PHASE D5-M2-R6: Sector 1 + Sector 69 Acceptance Check
+ * ============================================================================
+ */
+void
+xzs_d5m2_r6_verify(dev_t root_dev, const char *root_name)
+{
+	xzs_early_puts("\n================================================================================\n");
+	xzs_early_puts("[XZS-RAMDISK] PHASE D5-M2-R6: SECTOR 1 + SECTOR 69 ACCEPTANCE CHECK\n");
+	xzs_early_puts("================================================================================\n");
+	xzs_breadcrumb(0xD510, 0x00);
+
+	extern dev_t mdevlookup(int devid);
+	extern uint32_t xzs_get_mdevadd_count(void);
+	extern void xzs_early_puthex64(uint64_t val);
+	extern void delay(int usec);
+	extern uint32_t crc32(uint32_t crc, const void *buf, size_t size);
+
+	dev_t md0_dev = mdevlookup(0);
+	uint32_t mdevadd_count = xzs_get_mdevadd_count();
+
+	boolean_t is_md0 = (root_dev == md0_dev && root_name != NULL && strncmp(root_name, "md0", 3) == 0);
+	boolean_t equals_lookup0 = (root_dev == md0_dev && md0_dev != (dev_t)-1);
+	boolean_t count_is_1 = (mdevadd_count == 1);
+
+	if (!is_md0 || !equals_lookup0 || !count_is_1) {
+		xzs_early_puts("[XZS-RAMDISK] FATAL: rootdev is not md0 or mdevadd count != 1!\n");
+		xzs_breadcrumb(0xD510, 0xEA);
+		xzs_spin_halt();
+		return;
+	}
+
+	xzs_breadcrumb(0xD510, 0x10);
+	xzs_early_puts("  1. ACQUIRE BLOCK VNODE ON md0:\n");
+
+	struct vnode *vp = NULL;
+	int rc_bdevvp = bdevvp(root_dev, &vp);
+	if (rc_bdevvp != 0 || vp == NULL) {
+		xzs_early_puts("[XZS-RAMDISK] FATAL: bdevvp(root_dev) failed!\n");
+		xzs_breadcrumb(0xD510, 0xEB);
+		xzs_spin_halt();
+		return;
+	}
+
+	xzs_breadcrumb(0xD510, 0x40);
+	xzs_early_puts("  MD0_BDEVVP_SUCCESS:                      yes\n");
+	xzs_early_puts("  MD0_VNODE_NON_NULL:                      yes\n\n");
+
+	/*
+	 * Step 2: Read Sector 0
+	 */
+	xzs_early_puts("  2. READ SECTOR 0 (SUPERBLOCK):\n");
+	buf_t bp0 = NULL;
+	errno_t err0 = buf_bread(vp, 0, 512, NOCRED, &bp0);
+	if (err0 != 0 || bp0 == NULL || buf_error(bp0) != 0 || buf_resid(bp0) != 0) {
+		xzs_early_puts("[XZS-RAMDISK] FATAL: buf_bread sector 0 failed!\n");
+		xzs_breadcrumb(0xD510, 0xEC);
+		xzs_spin_halt();
+		return;
+	}
+
+	const uint8_t *sec0 = (const uint8_t *)buf_dataptr(bp0);
+	uint32_t magic0 = *(const uint32_t *)&sec0[0];
+	uint32_t ver0 = *(const uint32_t *)&sec0[4];
+	uint32_t sec0_crc = crc32(0, sec0, 512);
+
+	xzs_early_puts("  SECTOR0_MAGIC:                           0x");
+	xzs_early_puthex64((uint64_t)magic0);
+	xzs_early_puts(" (expected: 0x5346535A 'XZSF')\n");
+	xzs_early_puts("  SECTOR0_RAW_CRC32:                       0x");
+	xzs_early_puthex64((uint64_t)sec0_crc);
+	xzs_early_puts(" (expected: 0x64d02a99)\n");
+
+	buf_brelse(bp0);
+	bp0 = NULL;
+
+	if (magic0 != 0x5346535A || ver0 != 1 || sec0_crc != 0x64d02a99) {
+		xzs_early_puts("[XZS-RAMDISK] FATAL: Sector 0 validation failed!\n");
+		xzs_breadcrumb(0xD510, 0xED);
+		xzs_spin_halt();
+		return;
+	}
+	xzs_breadcrumb(0xD510, 0x50);
+	xzs_early_puts("  MD0_SECTOR0_BYTE_MATCH:                  yes\n\n");
+
+	/*
+	 * Step 3: Read Sector 1 (Object Table start)
+	 */
+	xzs_early_puts("  3. READ SECTOR 1 (OBJECT TABLE START):\n");
+	buf_t bp1 = NULL;
+	errno_t err1 = buf_bread(vp, 1, 512, NOCRED, &bp1);
+	if (err1 != 0 || bp1 == NULL || buf_error(bp1) != 0 || buf_resid(bp1) != 0) {
+		xzs_early_puts("[XZS-RAMDISK] FATAL: buf_bread sector 1 failed!\n");
+		xzs_breadcrumb(0xD510, 0xEE);
+		xzs_spin_halt();
+		return;
+	}
+
+	const uint8_t *sec1 = (const uint8_t *)buf_dataptr(bp1);
+	uint32_t root_obj_id = *(const uint32_t *)&sec1[0];
+	uint32_t root_parent_id = *(const uint32_t *)&sec1[4];
+	uint32_t root_type = *(const uint32_t *)&sec1[8];
+	uint32_t root_mode = *(const uint32_t *)&sec1[12];
+	uint32_t sec1_crc = crc32(0, sec1, 512);
+
+	xzs_early_puts("  ROOT_OBJ_ID:                             0x");
+	xzs_early_puthex64((uint64_t)root_obj_id);
+	xzs_early_puts(" (expected: 0x1)\n");
+	xzs_early_puts("  ROOT_PARENT_ID:                          0x");
+	xzs_early_puthex64((uint64_t)root_parent_id);
+	xzs_early_puts(" (expected: 0x1)\n");
+	xzs_early_puts("  ROOT_TYPE:                               0x");
+	xzs_early_puthex64((uint64_t)root_type);
+	xzs_early_puts(" (expected: 0x1 / DIR)\n");
+	xzs_early_puts("  ROOT_MODE:                               0x");
+	xzs_early_puthex64((uint64_t)root_mode);
+	xzs_early_puts(" (expected: 0x1ed / 0755)\n");
+	xzs_early_puts("  SECTOR1_CRC32:                           0x");
+	xzs_early_puthex64((uint64_t)sec1_crc);
+	xzs_early_puts(" (expected: 0x8fa03256)\n");
+
+	buf_brelse(bp1);
+	bp1 = NULL;
+
+	if (root_obj_id != 1 || root_parent_id != 1 || root_type != 1 || sec1_crc != 0x8fa03256) {
+		xzs_early_puts("[XZS-RAMDISK] FATAL: Sector 1 root object invariant mismatch!\n");
+		xzs_breadcrumb(0xD510, 0xEF);
+		xzs_spin_halt();
+		return;
+	}
+	xzs_breadcrumb(0xD510, 0x51);
+	xzs_early_puts("  MD0_SECTOR1_BYTE_MATCH:                  yes\n\n");
+
+	/*
+	 * Step 4: Read Sector 69 (Last XZSFS Logical Sector)
+	 */
+	xzs_early_puts("  4. READ SECTOR 69 (LAST LOGICAL SECTOR):\n");
+	buf_t bp69 = NULL;
+	errno_t err69 = buf_bread(vp, 69, 512, NOCRED, &bp69);
+	if (err69 != 0 || bp69 == NULL || buf_error(bp69) != 0 || buf_resid(bp69) != 0) {
+		xzs_early_puts("[XZS-RAMDISK] FATAL: buf_bread sector 69 failed!\n");
+		xzs_breadcrumb(0xD510, 0xF1);
+		xzs_spin_halt();
+		return;
+	}
+
+	const uint8_t *sec69 = (const uint8_t *)buf_dataptr(bp69);
+	uint32_t sec69_crc = crc32(0, sec69, 512);
+
+	xzs_early_puts("  SECTOR69_CRC32:                          0x");
+	xzs_early_puthex64((uint64_t)sec69_crc);
+	xzs_early_puts(" (expected: 0xd97e5162)\n");
+
+	buf_brelse(bp69);
+	bp69 = NULL;
+
+	if (sec69_crc != 0xd97e5162) {
+		xzs_early_puts("[XZS-RAMDISK] FATAL: Sector 69 CRC mismatch!\n");
+		xzs_breadcrumb(0xD510, 0xF2);
+		xzs_spin_halt();
+		return;
+	}
+	xzs_breadcrumb(0xD510, 0x52);
+	xzs_early_puts("  MD0_LAST_XZSFS_SECTOR_BYTE_MATCH:        yes\n\n");
+
+	xzs_early_puts("=== D5-M2-R6 TELEMETRY BEGIN ===\n");
+	xzs_early_puts("MD0_BDEVVP_SUCCESS:                        yes\n");
+	xzs_early_puts("MD0_SECTOR0_BYTE_MATCH:                    yes\n");
+	xzs_early_puts("MD0_SECTOR1_BYTE_MATCH:                    yes\n");
+	xzs_early_puts("MD0_LAST_XZSFS_SECTOR_BYTE_MATCH:          yes\n");
+	xzs_early_puts("BUF_BREAD_BRELSE_BALANCED:                 yes\n");
+	xzs_early_puts("FULL_IMAGE_CRC_ATTEMPTED:                  no\n");
+	xzs_early_puts("VFS_MOUNTROOT_CALLED:                      no\n");
+	xzs_early_puts("XZSFS_MOUNT_ATTEMPTED:                     no\n");
+	xzs_early_puts("PID1_STARTED:                              no\n");
+	xzs_early_puts("EXECVE_ATTEMPTED:                          no\n");
+	xzs_early_puts("ZERO_STORAGE_WRITES:                       yes\n");
+	xzs_early_puts("=== D5-M2-R6 TELEMETRY END ===\n\n");
+
+	xzs_early_puts("[XZS-RAMDISK] PHASE D5-M2-R6 COMPLETE & VERIFIED (PASS)\n");
 	xzs_early_puts("[XZS-RAMDISK] TERMINAL STATE — TRIGGERING WARM RESET TO FASTBOOT\n\n");
 	delay(50000);
 	xzs_spin_halt();
