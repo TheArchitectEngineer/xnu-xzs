@@ -490,8 +490,8 @@ bsd_init(void)
 
 #if CONFIG_XZS_BRINGUP
 	/* Phase D2-C2.7: Isolated Sony PHY Sequence Replay — VCO Trim + Reset/Power Ordering */
-	extern void xzs_rpm_phase_d2c27_probe(void);
-	xzs_rpm_phase_d2c27_probe();
+	extern void xzs_rpm_phase_d2c28_probe(void);
+	xzs_rpm_phase_d2c28_probe();
 #endif
 	struct uthread *ut;
 	vnode_t init_rootvnode = NULLVP;

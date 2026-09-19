@@ -1787,3 +1787,155 @@ rollback:
 	xzs_breadcrumb(0xD270, 0x01);
 	xzs_spin_halt();
 }
+
+/*
+ * xzs_rpm_phase_d2c28_probe:
+ * Phase D2-C2.8: Exact MSM8996 UFS Clock Graph + Pre-PHY Clock-State Replay
+ */
+void
+xzs_rpm_phase_d2c28_probe(void)
+{
+	xzs_early_puts("\n========================================================\n");
+	xzs_early_puts("  PHASE D2-C2.8: MSM8996 UFS CLOCK REPLAY + CANDIDATE EVALUATION\n");
+	xzs_early_puts("========================================================\n");
+
+	/* 1. Map RPM Message RAM & APCS Doorbell */
+	if (g_msgram_base == 0) {
+		g_msgram_base = (uintptr_t)ml_io_map(RPM_MSGRAM_PHYS_BASE, RPM_MSGRAM_SIZE);
+		if (g_msgram_base == 0) {
+			xzs_early_puts("[XZS-RPM] [FATAL] FAILED TO MAP RPM MESSAGE RAM\n");
+			xzs_spin_halt();
+			return;
+		}
+	}
+	if (g_apcs_ipc_base == 0) {
+		g_apcs_ipc_base = (uintptr_t)ml_io_map(RPM_APCS_IPC_PHYS_BASE, 0x1000);
+		if (g_apcs_ipc_base == 0) {
+			xzs_early_puts("[XZS-RPM] [FATAL] FAILED TO MAP APCS IPC DOORBELL\n");
+			xzs_spin_halt();
+			return;
+		}
+	}
+
+	uintptr_t toc_addr = g_msgram_base + RPM_MSGRAM_SIZE - RPM_TOC_SIZE;
+	struct rpm_toc *toc = (struct rpm_toc *)toc_addr;
+	if (toc->magic != RPM_TOC_MAGIC) {
+		xzs_early_puts("[XZS-RPM] [FAIL] INVALID TOC MAGIC\n");
+		xzs_spin_halt();
+		return;
+	}
+
+	uint32_t tx_offset = 0, tx_size = 0;
+	uint32_t rx_offset = 0, rx_size = 0;
+	bool tx_found = false, rx_found = false;
+	for (uint32_t i = 0; i < toc->count; i++) {
+		if (toc->entries[i].id == RPM_TX_FIFO_ID) {
+			tx_offset = toc->entries[i].offset;
+			tx_size = toc->entries[i].size;
+			tx_found = true;
+		} else if (toc->entries[i].id == RPM_RX_FIFO_ID) {
+			rx_offset = toc->entries[i].offset;
+			rx_size = toc->entries[i].size;
+			rx_found = true;
+		}
+	}
+	if (!tx_found || !rx_found) {
+		xzs_early_puts("[XZS-RPM] [FAIL] FIFOS NOT FOUND IN TOC\n");
+		xzs_spin_halt();
+		return;
+	}
+
+	g_tx_desc = (volatile struct channel_desc *)(g_msgram_base + tx_offset);
+	g_tx_fifo = (volatile uint8_t *)(g_msgram_base + tx_offset + 8U);
+	g_tx_fifo_size = tx_size;
+	g_rx_desc = (volatile struct channel_desc *)(g_msgram_base + rx_offset);
+	g_rx_fifo = (volatile uint8_t *)(g_msgram_base + rx_offset + 8U);
+	g_rx_fifo_size = rx_size;
+
+	g_tx_desc->write_index = 0;
+	g_rx_desc->read_index = 0;
+	xzs_rpm_wmb();
+
+	int h_rc = xzs_rpm_glink_handshake();
+	if (h_rc != 0) {
+		xzs_early_puts("[XZS-RPM] [FAIL] GLINK HANDSHAKE FAILED\n");
+		xzs_spin_halt();
+		return;
+	}
+	xzs_early_puts("[XZS-RPM] [PASS] RPM GLINK TRANSPORT CHANNEL VERIFIED\n");
+
+	bool l28_voted = false;
+	bool l12_voted = false;
+	bool ln_bb_voted = false;
+
+	/* 2. Vote L28 (0.925V, 18mA, SWEN=1) */
+	xzs_early_puts("\n[XZS-RPM] 2. VOTING L28 (0.925V, 18 mA, SWEN=1)...\n");
+	uint32_t l28_elapsed = 0;
+	int rc = xzs_rpm_send_request_and_wait_ack(QCOM_SMD_RPM_LDOA, 28, 925000U, 18U, true, &l28_elapsed);
+	if (rc != 0) {
+		xzs_early_puts("[XZS-RPM] [FAIL] L28 RPM VOTE FAILED\n");
+		goto rollback;
+	}
+	l28_voted = true;
+	delay(1000);
+
+	/* 3. Vote L12 (1.800V, 9mA, SWEN=1) */
+	xzs_early_puts("\n[XZS-RPM] 3. VOTING L12 (1.800V, 9 mA, SWEN=1)...\n");
+	uint32_t l12_elapsed = 0;
+	rc = xzs_rpm_send_request_and_wait_ack(QCOM_SMD_RPM_LDOA, 12, 1800000U, 9U, true, &l12_elapsed);
+	if (rc != 0) {
+		xzs_early_puts("[XZS-RPM] [FAIL] L12 RPM VOTE FAILED\n");
+		goto rollback;
+	}
+	l12_voted = true;
+	delay(1000);
+
+	/* 4. Vote LN_BB (clka/8, SWEN=1, ACTIVE + SLEEP) */
+	xzs_early_puts("\n[XZS-RPM] 4. VOTING LN_BB REF CLOCK (clka / ID 8, SWEN=1)...\n");
+	uint32_t ln_act_elapsed = 0, ln_slp_elapsed = 0;
+	rc = xzs_rpm_vote_clk_buffer(RPM_LN_BB_CLK_ID, MSM_RPM_CTX_ACTIVE_SET, true, &ln_act_elapsed);
+	if (rc != 0) {
+		xzs_early_puts("[XZS-RPM] [FAIL] LN_BB ACTIVE SET VOTE FAILED\n");
+		goto rollback;
+	}
+	rc = xzs_rpm_vote_clk_buffer(RPM_LN_BB_CLK_ID, MSM_RPM_CTX_SLEEP_SET, true, &ln_slp_elapsed);
+	if (rc != 0) {
+		xzs_early_puts("[XZS-RPM] [FAIL] LN_BB SLEEP SET VOTE FAILED\n");
+		goto rollback;
+	}
+	ln_bb_voted = true;
+	delay(1000);
+
+	/* 5. Execute Phase D2-C2.8 Probe */
+	extern void xzs_ufs_phase_d2c28_probe(void);
+	xzs_ufs_phase_d2c28_probe();
+
+rollback:
+	/* 6. Reverse Order Rollback */
+	xzs_early_puts("\n[XZS-RPM] 6. REVERSE ORDER ROLLBACK:\n");
+	if (ln_bb_voted) {
+		xzs_early_puts("  Releasing LN_BB (clka/8) in SLEEP set (SWEN=0)...\n");
+		uint32_t rb_ln_slp = 0;
+		(void)xzs_rpm_vote_clk_buffer(RPM_LN_BB_CLK_ID, MSM_RPM_CTX_SLEEP_SET, false, &rb_ln_slp);
+		xzs_early_puts("  Releasing LN_BB (clka/8) in ACTIVE set (SWEN=0)...\n");
+		uint32_t rb_ln_act = 0;
+		(void)xzs_rpm_vote_clk_buffer(RPM_LN_BB_CLK_ID, MSM_RPM_CTX_ACTIVE_SET, false, &rb_ln_act);
+	}
+	if (l12_voted) {
+		xzs_early_puts("  Releasing L12 in ACTIVE set (SWEN=0)...\n");
+		uint32_t rb_l12 = 0;
+		(void)xzs_rpm_send_request_and_wait_ack(QCOM_SMD_RPM_LDOA, 12, 1800000U, 9U, false, &rb_l12);
+	}
+	if (l28_voted) {
+		xzs_early_puts("  Releasing L28 in ACTIVE set (SWEN=0)...\n");
+		uint32_t rb_l28 = 0;
+		(void)xzs_rpm_send_request_and_wait_ack(QCOM_SMD_RPM_LDOA, 28, 925000U, 18U, false, &rb_l28);
+	}
+	xzs_breadcrumb(0xD280, 0x80);
+	xzs_early_puts("[XZS-RPM] ROLLBACK COMPLETE\n");
+
+	/* 7. Terminal Recovery Pipeline */
+	xzs_early_puts("\n[XZS-RPM] 7. EXPERIMENT COMPLETE — TRIGGERING WARM RESET TO FASTBOOT\n");
+	xzs_breadcrumb(0xD280, 0x01);
+	xzs_spin_halt();
+}

@@ -463,3 +463,52 @@ Disassembly of `artifacts/scratch/twrp-Image` (`ufs_qcom_power_up_sequence` @ `0
 - Hard Invariant: `HCE = 0`, `HCS = 0`, `UICCMD = 0`, DMA untouched.
 - Clean reverse RPM rollback: `LN_BB` (SLEEP -> ACTIVE release) -> `L12` (ACTIVE release) -> `L28` (ACTIVE release) all returned ACK.
 - Automated return to Fastboot via pshold in ~7s.
+
+---
+
+## 11. Phase D2-C2.8: MSM8996 UFS Clock Graph & Pre-PHY Clock Replay Telemetry
+
+### 11.1 Live MSM8996 PHY & Host Clock DT Audit
+- **Live PHY Node (`/soc/ufsphy@627000`):**
+  - `compatible`: `"qcom,ufs-phy-qmp-14nm"`
+  - `clock-names`: `"ref_clk_src"`, `"ref_clk"`
+  - `clocks`: `<&rpm_bus_clocks RPM_SMD_LN_BB_CLK>`, `<&gcc GCC_UFS_CLKREF_CLK>`
+  - `PHY_HAS_TX_IFACE_CLK = no`, `PHY_HAS_RX_IFACE_CLK = no`
+- **Sony PHY Driver Disassembly (`twrp-Image` @ `0xffffffc00049cb48`):**
+  - `ufs_qcom_phy_enable_iface_clk` executes `if (phy->tx_iface_clk == NULL) return 0;`.
+  - `SONY_CALLS_ENABLE_IFACE_CLK_ON_XZS = no`. Interface clocks are not required or used on MSM8996 XZs.
+- **Live Host Node (`/soc/ufshc@624000`):**
+  - Declares 11 clocks: `core_clk_src`, `core_clk`, `bus_clk`, `bus_aggr_clk`, `iface_clk`, `core_clk_unipro_src`, `core_clk_unipro`, `core_clk_ice`, `ref_clk`, `tx_lane0_sync_clk`, `rx_lane0_sync_clk`.
+  - Lane symbol clocks (`0x75018`, `0x7501c`) are derived downstream of the PHY PLL VCO: `LANE_CLOCKS_BEFORE_PHY_READY = no`.
+  - `TX_CFG` (`0x75010`) and `RX_CFG` (`0x75014`) have 0 consumers in DT and driver: `TX_CFG_REQUIRED_PRE_PHY = no`, `RX_CFG_REQUIRED_PRE_PHY = no`.
+
+### 11.2 RESET_SM_STATUS (+0x160) Semantic Audit
+- **Hardware Verified:** `QSERDES_COM_RESET_SM_STATUS @ PHY + 0x160 = 0x00` throughout observed sequences.
+- **Interpretation:** Complete audit of Qualcomm/Sony kernel sources confirms no register mask, enum, poll loop, or debug decode exists for `+0x160`.
+- **Classification:** `RESET_SM_STATUS_OFFSET=0x160`, `RESET_SM_STATUS_VALUE=0x00`, `RESET_SM_ZERO_SEMANTICS=unknown`.
+
+### 11.3 GCC 15-Register Pre-Test Snapshot & Clock Diff
+Hardware readback on MSM8996 silicon before controller bus bringup:
+- All UFS GCC branches gated (`CLK_OFF = 1`) except `UFS_CLKREF_CBCR` (`0x88008 = 0x00000001`, `CLK_OFF = 0`).
+- Differential comparison against Linux pre-PHY setup identified single missing host clock:
+  - `GCC_UFS_UNIPRO_CORE_CBCR` (`0x7600c`) — feeds UniPro controller layer.
+
+### 11.4 Candidate 1 Silicon Replay & Telemetry
+1. **Enablement:**
+   - Root enabled: `UFS_ICE_CORE_CMD_RCGR` (`0x76014`) `ROOT_EN`.
+   - Branch enabled: `GCC_UFS_UNIPRO_CORE_CBCR` (`0x7600c`) read back `raw = 0x00014221`, `CLK_OFF = 0`.
+2. **Execution:**
+   - Executed exact Sony v2.2.0 calibration sequence (76 Rate-A entries + Rate-B override, no 0x134 restore per `quirks = 0`).
+3. **Telemetry across 10ms, 100ms, 500ms, 1000ms:**
+   - `C_READY (+0x190) = 0` (timeout)
+   - `PCS_READY (+0xD68) = 0` (timeout)
+   - `LOCK_CMP_EN (+0x0C8) = 0x01`
+   - `PHY + 0x160 = 0x00`
+   - `CMN_CONFIG (+0x194) = 0x0E`
+   - `PHY_START (+0xC00) = 0x01`
+   - `POWER_DOWN_CONTROL (+0xC04) = 0x01`
+4. **Conclusion:**
+   - Enabling `GCC_UFS_UNIPRO_CORE_CLK` alone does not cause the QSERDES common PLL to lock (`C_READY = 0`).
+5. **Invariants & Reverse Rollback:**
+   - Hard invariants preserved: `HCE = 0`, `HCS = 0`, `UICCMD = 0`. DMA untouched.
+   - Reverse RPM rollback: `LN_BB` -> `L12` -> `L28` all acknowledged. Device returned to Fastboot at +6s.

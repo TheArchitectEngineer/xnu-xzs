@@ -149,6 +149,13 @@ void xzs_ufs_phy_write32(uint32_t offset, uint32_t val);
 uint32_t xzs_gcc_read32(uint32_t offset);
 #define GCC_REG_UFS_TX_CFG_CBCR         0x75010UL       /* UFS TX CFG Clock CBCR */
 #define GCC_REG_UFS_RX_CFG_CBCR         0x75014UL       /* UFS RX CFG Clock CBCR */
+#define GCC_REG_UFS_TX_SYMBOL_0_CBCR   0x75018UL       /* UFS TX Symbol 0 Clock CBCR */
+#define GCC_REG_UFS_RX_SYMBOL_0_CBCR   0x7501cUL       /* UFS RX Symbol 0 Clock CBCR */
+#define GCC_REG_SYS_NOC_UFS_AXI_CBCR_75040 0x75040UL   /* Sys NoC UFS AXI Clock CBCR (0x75040) */
+#define GCC_REG_UFS_UNIPRO_CORE_CBCR   0x7600cUL       /* UFS UniPro Core Clock CBCR */
+#define GCC_REG_UFS_ICE_CORE_CBCR      0x76010UL       /* UFS ICE Core Clock CBCR */
+#define GCC_REG_UFS_ICE_CORE_CMD_RCGR  0x76014UL       /* UFS ICE Core RCG CMD */
+#define GCC_REG_UFS_ICE_CORE_CFG_RCGR  0x76018UL       /* UFS ICE Core RCG CFG */
 
 void xzs_gcc_write32(uint32_t offset, uint32_t val);
 void xzs_ufs_phase_d2_probe(void);
@@ -168,6 +175,7 @@ int xzs_ufs_phy_retest_d2c25(uint32_t *out_c_ready, uint32_t *out_pcs_ready_d74,
                             int *out_pcs_ready_us);
 void xzs_ufs_phase_d2c26_audit(void);
 void xzs_ufs_phase_d2c27_probe(void);
+void xzs_ufs_phase_d2c28_probe(void);
 
 #endif /* _PEXPERT_ARM_XZS_UFS_H */
 
