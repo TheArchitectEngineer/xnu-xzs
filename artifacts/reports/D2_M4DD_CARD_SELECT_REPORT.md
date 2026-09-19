@@ -48,7 +48,10 @@ An exhaustive audit of the vendor register configuration was performed across so
      - `LIVE_HC_VENDOR_SPEC = 0x00000A1C` (exact match)
      - `LIVE_TIMEOUT_CONTROL = 0x0F` (exact match)
      - `LIVE_HC_MODE = 0x00000001`
-   - **Silicon Invariant**: On Qualcomm MSM8996 SDCC hardware, bit 13 (`FF_CLK_SW_RST_DIS` / `0x2000`) is a self-gating / write-only pulse configuration bit used by the clock and reset logic during `SDHCI_RESET_ALL`. It is not latched on MMIO readback; readback reflects `HC_MODE_EN` (bit 0 = 1).
+   - **Evidence Classification**:
+     - `SOURCE/BINARY VERIFIED: HC_MODE write requested = 0x00002001`
+     - `HARDWARE OBSERVED: later HC_MODE readback = 0x00000001`
+     - `BIT13_CLEAR_CAUSE = UNRESOLVED`
    - Decision Gate: `VENDOR_REG_CONFIG_VALID = yes`, `RERUN_M4DC_REQUIRED = no`.
 
 ---
@@ -275,7 +278,7 @@ The subsequent Phase `D2-M4E` (`CMD8 / SEND_EXT_CSD`) will provide operational p
 ## SOURCE-AUDITED FACTS
 
 - **JEDEC JESD84-B51 Section 6.13**: `CURRENT_STATE` in R1 reflects card state prior to executing the command (`stby` = 3); transition to `tran` (4) occurs upon completion of R1 response transmission.
-- **MSM8996 SDCC Hardware**: Bit 13 of `MSM_SDCC_HC_MODE` (`FF_CLK_SW_RST_DIS`) is a self-gating / write-only pulse configuration bit that does not latch on read. Readback reflects `HC_MODE_EN = 1` (`0x00000001`).
+- **MSM8996 SDCC Hardware**: `MSM_SDCC_HC_MODE` write requested is `0x00002001`, but later MMIO readback reflects `0x00000001` (`HC_MODE_EN = 1`); `BIT13_CLEAR_CAUSE = UNRESOLVED`.
 
 ---
 

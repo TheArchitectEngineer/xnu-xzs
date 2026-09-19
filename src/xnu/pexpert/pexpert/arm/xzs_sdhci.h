@@ -198,6 +198,16 @@
 #define SDHCI_MAKE_CMD(c, f)            ((uint16_t)(((c) << 8) | (f)))
 
 /*
+ * SDHCI Transfer Mode Bits (relative to HC offset 0x0C)
+ */
+#define SDHCI_TRNS_DMA                  0x01U
+#define SDHCI_TRNS_BLK_CNT_EN           0x02U
+#define SDHCI_TRNS_AUTO_CMD12           0x04U
+#define SDHCI_TRNS_AUTO_CMD23           0x08U
+#define SDHCI_TRNS_READ                 0x10U
+#define SDHCI_TRNS_MULTI                0x20U
+
+/*
  * SDHCI Interrupt Registers & Status Bits (relative to HC Base: 0x07464900)
  */
 #define SDHCI_INT_STATUS                0x30U
@@ -206,13 +216,22 @@
 
 #define SDHCI_INT_RESPONSE              (1U << 0)  /* Command Complete */
 #define SDHCI_INT_DATA_END              (1U << 1)  /* Transfer Complete */
+#define SDHCI_INT_BUF_WRITE_READY       (1U << 4)  /* Buffer Write Ready */
+#define SDHCI_INT_BUF_READ_READY        (1U << 5)  /* Buffer Read Ready */
 #define SDHCI_INT_ERROR                 (1U << 15) /* Error Interrupt */
 #define SDHCI_INT_TIMEOUT               (1U << 16) /* Command Timeout Error (CTO) */
 #define SDHCI_INT_CRC                   (1U << 17) /* Command CRC Error (CCRC) */
 #define SDHCI_INT_END_BIT               (1U << 18) /* Command End Bit Error (CEND) */
 #define SDHCI_INT_INDEX                 (1U << 19) /* Command Index Error (CINDEX) */
+#define SDHCI_INT_DATA_TIMEOUT          (1U << 20) /* Data Timeout Error (DTO) */
+#define SDHCI_INT_DATA_CRC              (1U << 21) /* Data CRC Error (DCRC) */
+#define SDHCI_INT_DATA_END_BIT          (1U << 22) /* Data End Bit Error (DEBE) */
 #define SDHCI_INT_BUS_POWER             (1U << 23) /* Bus Power Error */
+#define SDHCI_INT_AUTO_CMD_ERR          (1U << 24) /* Auto CMD Error */
+#define SDHCI_INT_ADMA_ERROR            (1U << 25) /* ADMA Error */
+
 #define SDHCI_INT_CMD_ERR_MASK          (SDHCI_INT_TIMEOUT | SDHCI_INT_CRC | SDHCI_INT_END_BIT | SDHCI_INT_INDEX | SDHCI_INT_BUS_POWER)
+#define SDHCI_INT_DATA_ERR_MASK         (SDHCI_INT_DATA_TIMEOUT | SDHCI_INT_DATA_CRC | SDHCI_INT_DATA_END_BIT | SDHCI_INT_ADMA_ERROR)
 #define SDHCI_INT_ALL_MASK              0xFFFFFFFFU
 
 /*
@@ -288,5 +307,6 @@ void xzs_sdhci_phase_d2m4da_probe(void);
 void xzs_sdhci_phase_d2m4db_probe(void);
 void xzs_sdhci_phase_d2m4dc_probe(void);
 void xzs_sdhci_phase_d2m4dd_probe(void);
+void xzs_sdhci_phase_d2m4e_probe(void);
 
 #endif /* _PEXPERT_ARM_XZS_SDHCI_H */
