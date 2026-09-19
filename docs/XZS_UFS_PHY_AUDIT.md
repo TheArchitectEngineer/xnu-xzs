@@ -357,4 +357,51 @@ Multi-byte bulk read (`+0x00..+0x07`) was compared against single-byte reads (`+
   - Direct SPMI regulator writes remain unauthorized.
   - RPM/GLINK is the platform-supported control path.
 
+---
 
+## 8. Phase D2-C2.5: MSM8996 UFS QMP 14nm v2.2.0 Calibration & Power/Clock Sequence Replay
+
+### 8.1 Findings & Hardware Telemetry
+- **Hardware Version:** `QCOM_HW_VER` @ `0x6240E4` = `0x20020000` (Qualcomm UFS Host v2.2.0).
+- **Calibration Replay:** Full Sony Tone v2.2.0 calibration table (76 Rate-A entries + Rate-B override) programmed and verified byte-for-byte on silicon.
+- **Clock Reference:** `GCC_UFS_CLKREF` (`0x88008`) confirmed running (`CBCR = 0x00000001`).
+- **Supplies:** L28 (1.200V / 300 mA), L12 (1.800V / 9 mA), LN_BB reference clock (ID 8) voted via RPM SMD V0 over GLINK.
+- **Outcome:** `C_READY_STATUS` (`0x0C8`) remained `0` throughout 1-second bounded polling window.
+- **Conclusion:** C_READY failure was not caused by missing power supplies or generic clock gates. A deeper differential audit between reference/firmware state and XNU was required.
+
+---
+
+## 9. Phase D2-C2.6: Read-Only Differential State Audit & Sony Lineage Discovery
+
+### 9.1 Oracle Re-evaluation: TWRP is ORACLE_B
+- Audited `artifacts/logs/twrp-dmesg-full.log` lines 1.628257 - 1.629609:
+  ```text
+  <3>[    1.628257] ufshcd 624000.ufshc: ufshcd_variant_hba_init: variant qcom init failed err -19
+  <3>[    1.629609] ufshcd 624000.ufshc: Intialization failed
+  ```
+- Error `-19` (`-ENODEV`) aborted the Qualcomm UFS driver probe before touching the PHY or host controller.
+- TWRP operates 100% from ramdisk. No live known-good Linux UFS oracle exists on target (`ORACLE_B`).
+
+### 9.2 Exact Sony Binary Write Sequence Audited
+Disassembly of `artifacts/scratch/twrp-Image` (`ufs_qcom_power_up_sequence` @ `0xffffffc0007262a0` and `phy_calibrate` @ `0xffffffc00049dd20`):
+1. **Assert Soft Reset:** `REG_UFS_CFG1` (`0x6240DC`) `|= 0x2` (`UFS_PHY_SOFT_RESET = 1`).
+2. **Hold Reset:** `usleep_range(1000, 1100)`.
+3. **Calibrate PHY with Soft Reset ASSERTED (`phy_calibrate`):**
+   - **Save Quirk:** Read `0x627134` (`QSERDES_COM_VCO_TUNE1_MODE1`) and save (`0x0A` on silicon).
+   - **Table Write:** Program 76 Rate-A entries.
+   - **Restore Quirk:** Restore saved value (`0x0A`) back to `0x627134` (`QSERDES_COM_VCO_TUNE1_MODE1`), overwriting table entry `0xD6`.
+4. **Deassert Soft Reset:** `REG_UFS_CFG1` (`0x6240DC`) `&= ~0x2`.
+5. **Settle Reset Release:** `usleep_range(1000, 1100)`.
+6. **Power-On PHY (`phy_power_on`):** Write `1` to `0x627C04` (`UFS_PHY_POWER_DOWN_CONTROL`).
+7. **Start SerDes (`phy_start`):** Write `1` to `0x627C00` (`UFS_PHY_PHY_START`).
+8. **Lock Poll:** Poll `0x627D68` (`UFS_PHY_PCS_READY_STATUS`) or `0x6270C8` (`QSERDES_COM_C_READY_STATUS`).
+
+### 9.3 Critical Sequence Deltas Identified in XNU D2-C2.5
+1. **Quirk `0x134` Clobbered:** Table entry 42 overwrote `0x134` with `0xD6`. Silicon bootloader handoff value was `0x0A`. Sony kernel explicitly restores `0x134` to `0x0A`.
+2. **`0xC04` Ordering Inverted:** XNU previously wrote `0xC04 = 1` BEFORE soft-reset assert and calibration. Sony kernel writes `0xC04 = 1` AFTER soft-reset deassert.
+3. **Soft Reset Duration:** Sony holds soft reset asserted DURING calibration; XNU deasserted it before calibration.
+
+### 9.4 Device Reference Clock (`REG_UFS_CFG1` Bit 26) Audit
+- `ufs_qcom_dev_ref_clk_ctrl` is ONLY called during dynamic bus scaling votes. It is NEVER called during initial PHY bring-up.
+- Bootloader already hands off with `REG_UFS_CFG1 = 0x1C00052C` (Bit 26 is already 1).
+- Neither `GCC_UFS_BCR` nor `REG_UFS_CFG1` soft reset destroys Bit 26.
