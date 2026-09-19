@@ -512,3 +512,56 @@ Hardware readback on MSM8996 silicon before controller bus bringup:
 5. **Invariants & Reverse Rollback:**
    - Hard invariants preserved: `HCE = 0`, `HCS = 0`, `UICCMD = 0`. DMA untouched.
    - Reverse RPM rollback: `LN_BB` -> `L12` -> `L28` all acknowledged. Device returned to Fastboot at +6s.
+
+---
+
+## 12. Phase D2-C2.9: Exact MSM8996 UFS RCG Rate Programming + Pre-PHY Replay
+
+### 12.1 Linux Rate Initialization & RCG Encoding Audit
+- **Linux Requested Rates (from DT `freq-table-hz`):**
+  - `core_clk_src` (`UFS_AXI_CLK_SRC` @ `0x75024`): `200,000,000 Hz` (200 MHz).
+  - `core_clk_unipro_src` (`UFS_ICE_CORE_CLK_SRC` @ `0x76014`): `300,000,000 Hz` (300 MHz).
+- **RCG2 Hardware Encodings (from genuine Sony kernel `twrp-Image`):**
+  - UFS AXI 200 MHz: GPLL0 (600 MHz) with pre-divider 3 -> `CFG_RCGR = 0x00000105`.
+  - UFS ICE/UniPro 300 MHz: GPLL0 (600 MHz) with pre-divider 2 -> `CFG_RCGR = 0x00000103`.
+  - Update sequence: Write `CFG_RCGR`, assert `ROOT_EN` (bit 1) and `UPDATE` (bit 0) in `CMD_RCGR`, poll `UPDATE == 0`.
+
+### 12.2 Pre-Test Snapshot (MSM8996 Silicon)
+- `UFS_AXI_CMD_RCGR` (`0x75024`) = `0x80000000` (`ROOT_OFF = 1, ROOT_EN = 0`).
+- `UFS_ICE_CMD_RCGR` (`0x76014`) = `0x80000000` (`ROOT_OFF = 1, ROOT_EN = 0`).
+- `GCC_REG_GPLL0_MODE` (`0x52000`) = `0x00000011` (`OUTCTRL = 1`, active).
+
+### 12.3 Stage A Silicon Replay — UFS_AXI 200 MHz Only
+1. **RCG Execution:**
+   - Programmed `CFG_RCGR = 0x00000105`, `CMD_RCGR |= 0x3`. Update completed (`rc = 0`).
+   - Readback: `CMD_RCGR = 0x00000002` (`ROOT_OFF = 0`, root running at 200 MHz).
+2. **Branches Enabled:**
+   - `UFS_AXI` (`0x00004221`), `SYS_NOC` (`0x00000001`), `AGGRE2` (`0x00000001`), `UFS_AHB` (`0x20008001`), `CLKREF` (`0x00000001`) all active (`CLK_OFF = 0`).
+   - `UNIPRO_CORE` kept gated.
+3. **PHY Sequence & Polling:**
+   - Replayed frozen Sony v2.2.0 sequence (76 Rate-A + Rate-B override, no 0x134 restore).
+   - Telemetry across 10ms..1000ms: `C_READY = 0`, `PCS_READY = 0`, `LOCK_CMP_EN = 0x01`, `0x160 = 0x00`, `CMN = 0x0E`.
+   - Classification: `C_READY = 0` after UFS_AXI 200 MHz.
+
+### 12.4 Stage B Silicon Replay — Exact UniPro Source Rate (300 MHz)
+1. **RCG Execution:**
+   - Programmed `UFS_ICE_CORE_CFG_RCGR = 0x00000103`, `CMD_RCGR |= 0x3`. Update completed (`rc = 0`).
+   - Readback: `CMD_RCGR = 0x00000002` (`ROOT_OFF = 0`, root running at 300 MHz).
+2. **Branches Enabled:**
+   - Enabled `GCC_UFS_UNIPRO_CORE_CBCR` (`0x7600c`) -> readback `0x00014221` (`CLK_OFF = 0`).
+   - All Stage A bus branches remained running.
+3. **PHY Sequence & Polling:**
+   - Replayed frozen Sony v2.2.0 sequence.
+   - Telemetry across 10ms..1000ms: `C_READY = 0`, `PCS_READY = 0`, `LOCK_CMP_EN = 0x01`, `0x160 = 0x00`, `CMN = 0x0E`.
+   - Classification: **B3** (`C_READY = 0` after exact UniPro source rate).
+
+### 12.5 External UFS_RESET Read-Only Audit
+- Complete audit of live Sony DT node `/soc/ufshc@624000`, `/soc/ufsphy@627000`, and `ufs_variant` confirmed:
+  - `EXTERNAL_UFS_RESET_EXISTS = no` (no `reset-gpios` or `pinctrl` properties).
+  - `CONTROLLED_BY = none`, `USED_BEFORE_PHY_READY = no`.
+  - External storage device reset is separate from internal QSERDES PLL lock.
+
+### 12.6 Invariants & Reverse Rollback
+- Hard Invariant: `HCE = 0, HCS = 0, UICCMD = 0`, DMA untouched.
+- Clean reverse RPM rollback: `LN_BB` (Sleep set) -> `LN_BB` (Active set) -> `L12` -> `L28` all acknowledged in 10 µs each.
+- Automated warm reset to Fastboot mode.

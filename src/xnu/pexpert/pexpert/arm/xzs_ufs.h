@@ -157,6 +157,14 @@ uint32_t xzs_gcc_read32(uint32_t offset);
 #define GCC_REG_UFS_ICE_CORE_CMD_RCGR  0x76014UL       /* UFS ICE Core RCG CMD */
 #define GCC_REG_UFS_ICE_CORE_CFG_RCGR  0x76018UL       /* UFS ICE Core RCG CFG */
 
+#define GCC_REG_GPLL0_MODE              0x52000UL       /* GPLL0 Mode / Status Register */
+#define GCC_REG_UFS_AXI_M               0x7502cUL       /* UFS AXI RCG M */
+#define GCC_REG_UFS_AXI_N               0x75030UL       /* UFS AXI RCG N */
+#define GCC_REG_UFS_AXI_D               0x75034UL       /* UFS AXI RCG D */
+#define GCC_REG_UFS_ICE_CORE_M          0x7601cUL       /* UFS ICE Core RCG M */
+#define GCC_REG_UFS_ICE_CORE_N          0x76020UL       /* UFS ICE Core RCG N */
+#define GCC_REG_UFS_ICE_CORE_D          0x76024UL       /* UFS ICE Core RCG D */
+
 void xzs_gcc_write32(uint32_t offset, uint32_t val);
 void xzs_ufs_phase_d2_probe(void);
 void xzs_ufs_phase_d2a1_probe(void);
@@ -176,6 +184,7 @@ int xzs_ufs_phy_retest_d2c25(uint32_t *out_c_ready, uint32_t *out_pcs_ready_d74,
 void xzs_ufs_phase_d2c26_audit(void);
 void xzs_ufs_phase_d2c27_probe(void);
 void xzs_ufs_phase_d2c28_probe(void);
+void xzs_ufs_phase_d2c29_probe(void);
 
 #endif /* _PEXPERT_ARM_XZS_UFS_H */
 

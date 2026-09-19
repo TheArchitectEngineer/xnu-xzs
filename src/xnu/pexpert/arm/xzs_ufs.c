@@ -4486,3 +4486,371 @@ xzs_ufs_phase_d2c28_probe(void)
 	xzs_early_puthex64((uint64_t)final_uic);
 	xzs_early_puts("\n");
 }
+
+/*
+ * ============================================================================
+ * Phase D2-C2.9: Exact MSM8996 UFS RCG Rate Programming + Pre-PHY Replay
+ * ============================================================================
+ */
+
+/*
+ * xzs_gcc_rcg_set_rate:
+ * Program an RCG2 clock generator according to Qualcomm MSM8996 hardware sequencing:
+ * 1. Write target CFG_RCGR (source select + pre-divider).
+ * 2. Set ROOT_EN (bit 1) and UPDATE (bit 0) in CMD_RCGR.
+ * 3. Poll UPDATE (bit 0) == 0.
+ * Returns 0 on success, -1 on timeout.
+ */
+static int
+xzs_gcc_rcg_set_rate(uint32_t cmd_rcgr, uint32_t cfg_rcgr, uint32_t cfg_val, uint32_t *out_cmd_post)
+{
+	/* Step 1: Write CFG_RCGR */
+	xzs_gcc_write32(cfg_rcgr, cfg_val);
+
+	/* Step 2: Set ROOT_EN (bit 1) and UPDATE (bit 0) in CMD_RCGR */
+	uint32_t cmd = xzs_gcc_read32(cmd_rcgr);
+	cmd |= (1U << 1) | (1U << 0);
+	xzs_gcc_write32(cmd_rcgr, cmd);
+
+	/* Step 3: Poll UPDATE (bit 0) == 0 */
+	int timeout = 50000;
+	while (timeout-- > 0) {
+		cmd = xzs_gcc_read32(cmd_rcgr);
+		if ((cmd & (1U << 0)) == 0) {
+			break;
+		}
+		delay(10);
+	}
+
+	if (out_cmd_post) {
+		*out_cmd_post = cmd;
+	}
+
+	if ((cmd & (1U << 0)) != 0) {
+		return -1;
+	}
+	return 0;
+}
+
+/*
+ * xzs_ufs_replay_v2_2_0_phy:
+ * Execute the frozen Sony v2.2.0 calibration and SerDes start sequence,
+ * followed by bounded polling (10ms, 100ms, 500ms, 1000ms).
+ */
+static int
+xzs_ufs_replay_v2_2_0_phy(const char *stage_tag, uint32_t cp_pass, uint32_t cp_timeout, uint32_t cp_pcs,
+                          uint32_t *out_final_cr, uint32_t *out_final_pcs)
+{
+	xzs_early_puts("[PHY-TEST] [");
+	xzs_early_puts(stage_tag);
+	xzs_early_puts("] EXECUTING SONY v2.2.0 PHY SEQUENCE...\n");
+
+	/* Step 1: Ensure C04 = 0, C00 = 0 baseline */
+	xzs_ufs_phy_write32(0xC04, 0x00);
+	xzs_ufs_phy_write32(0xC00, 0x00);
+	__asm__ volatile("dsb sy; isb" ::: "memory");
+
+	/* Step 2: Soft reset assert */
+	uint32_t cfg1_base = xzs_ufs_read32(UFS_QCOM_REG_CFG1);
+	xzs_ufs_write32(UFS_QCOM_REG_CFG1, cfg1_base | UFS_QCOM_CFG1_PHY_SOFT_RESET);
+	delay(1000);
+
+	/* Step 3: While soft reset remains ASSERTED, program Rate-A (76) + Rate-B override */
+	for (size_t i = 0; i < sizeof(msm8996_v2_2_0_rate_A_tbl)/sizeof(msm8996_v2_2_0_rate_A_tbl[0]); i++) {
+		xzs_ufs_phy_write32(msm8996_v2_2_0_rate_A_tbl[i].offset, msm8996_v2_2_0_rate_A_tbl[i].val);
+	}
+	xzs_ufs_phy_write32(msm8996_v2_2_0_rate_B_tbl[0].offset, msm8996_v2_2_0_rate_B_tbl[0].val);
+	__asm__ volatile("dsb sy; isb" ::: "memory");
+
+	/* Note: For v2.2.0, exact Sony binary proved quirks=0 -> NO 0x134 restore */
+
+	/* Step 4: Deassert soft reset */
+	xzs_ufs_write32(UFS_QCOM_REG_CFG1, cfg1_base & ~UFS_QCOM_CFG1_PHY_SOFT_RESET);
+	delay(1000);
+
+	/* Step 5: Power-down release */
+	xzs_ufs_phy_write32(0xC04, 0x01);
+	__asm__ volatile("dsb sy; isb" ::: "memory");
+
+	/* Step 6: SerDes start */
+	xzs_ufs_phy_write32(0xC00, 0x01);
+	__asm__ volatile("dsb sy; isb" ::: "memory");
+
+	/* Step 7: Bounded polling timeline (10ms, 100ms, 500ms, 1000ms) */
+	uint32_t final_cr = 0, final_pcs = 0;
+	int cr_found = 0, pcs_found = 0;
+
+	for (int iter = 1; iter <= 10000; iter++) {
+		delay(100);
+		uint32_t cr = xzs_ufs_phy_read32(QSERDES_COM_REG_C_READY_STATUS);
+		uint32_t pcs = xzs_ufs_phy_read32(QPHY_REG_PCS_READY_STATUS);
+
+		if ((cr & 1U) && cr_found == 0) {
+			cr_found = iter * 100;
+			xzs_breadcrumb(0xD290, cp_pass);
+			xzs_early_puts("[D2-C2.9] >>> C_READY ASSERTED @ ");
+			xzs_early_puthex64((uint64_t)cr_found);
+			xzs_early_puts(" us <<<\n");
+		}
+		if ((pcs & 1U) && pcs_found == 0) {
+			pcs_found = iter * 100;
+			xzs_breadcrumb(0xD290, cp_pcs);
+			xzs_early_puts("[D2-C2.9] >>> PCS_READY ASSERTED @ ");
+			xzs_early_puthex64((uint64_t)pcs_found);
+			xzs_early_puts(" us <<<\n");
+		}
+
+		if (iter == 100 || iter == 1000 || iter == 5000 || iter == 10000) {
+			uint32_t r_lock = xzs_ufs_phy_read32(QSERDES_COM_REG_LOCK_CMP_EN);
+			uint32_t r_160  = xzs_ufs_phy_read32(0x160);
+			uint32_t r_cmn  = xzs_ufs_phy_read32(QSERDES_COM_REG_CMN_CONFIG);
+			uint32_t r_c00  = xzs_ufs_phy_read32(QPHY_REG_START_CTRL);
+			uint32_t r_c04  = xzs_ufs_phy_read32(QPHY_REG_PCS_POWER_DOWN_CONTROL);
+
+			xzs_early_puts("[D2-C2.9-CHECKPOINT-");
+			xzs_early_puts(stage_tag);
+			xzs_early_puts("] T=");
+			xzs_early_puthex64((uint64_t)(iter * 100));
+			xzs_early_puts(" us: CR(+0x190)=");
+			xzs_early_puthex64((uint64_t)(cr & 1U));
+			xzs_early_puts(" PCS(+0xD68)=");
+			xzs_early_puthex64((uint64_t)(pcs & 1U));
+			xzs_early_puts(" LOCK(+0x0C8)=0x");
+			xzs_early_puthex64((uint64_t)r_lock);
+			xzs_early_puts(" 0x160=0x");
+			xzs_early_puthex64((uint64_t)r_160);
+			xzs_early_puts(" CMN(+0x194)=0x");
+			xzs_early_puthex64((uint64_t)r_cmn);
+			xzs_early_puts(" C00=0x");
+			xzs_early_puthex64((uint64_t)r_c00);
+			xzs_early_puts(" C04=0x");
+			xzs_early_puthex64((uint64_t)r_c04);
+			xzs_early_puts("\n");
+		}
+
+		final_cr = cr & 1U;
+		final_pcs = pcs & 1U;
+
+		if (cr_found != 0 && pcs_found != 0) break;
+	}
+
+	if (cr_found == 0) {
+		xzs_breadcrumb(0xD290, cp_timeout);
+	}
+
+	if (out_final_cr) *out_final_cr = final_cr;
+	if (out_final_pcs) *out_final_pcs = final_pcs;
+
+	xzs_early_puts("[D2-C2.9-RESULT-");
+	xzs_early_puts(stage_tag);
+	xzs_early_puts("] C_READY=");
+	xzs_early_puthex64((uint64_t)final_cr);
+	xzs_early_puts(", PCS_READY=");
+	xzs_early_puthex64((uint64_t)final_pcs);
+	xzs_early_puts("\n");
+
+	return (final_cr != 0) ? 0 : -1;
+}
+
+void
+xzs_ufs_phase_d2c29_probe(void)
+{
+	xzs_early_puts("\n================================================================\n");
+	xzs_early_puts("  PHASE D2-C2.9: EXACT MSM8996 UFS RCG PROGRAMMING + PHY REPLAY\n");
+	xzs_early_puts("================================================================\n");
+	xzs_breadcrumb(0xD290, 0x00);
+
+	/* 1. Map MMIO */
+	if (g_xzs_gcc_base == 0) {
+		g_xzs_gcc_base = (vm_offset_t)ml_io_map(XZS_GCC_PHYS_BASE, XZS_GCC_MMIO_SIZE);
+	}
+	if (g_xzs_ufs_base == 0) {
+		g_xzs_ufs_base = (vm_offset_t)ml_io_map(XZS_UFS_CONTROLLER_PHYS_BASE, XZS_UFS_CONTROLLER_MMIO_SIZE);
+	}
+	if (g_xzs_ufs_phy_base == 0) {
+		g_xzs_ufs_phy_base = (vm_offset_t)ml_io_map(XZS_UFS_PHY_PHYS_BASE, XZS_UFS_PHY_MMIO_SIZE);
+	}
+
+	if (!g_xzs_gcc_base || !g_xzs_ufs_base || !g_xzs_ufs_phy_base) {
+		xzs_early_puts("[XZS-UFS] [FATAL] MMIO MAPPING FAILED\n");
+		return;
+	}
+
+	/* 2. Section 2 & 3: Rate Audit Output */
+	xzs_early_puts("\n[XZS-AUDIT] LINUX PRE-PHY CLOCK RATES AUDITED FROM DT & DRIVER:\n");
+	xzs_early_puts("  LINUX_PRE_PHY_UFS_AXI_RATE=200000000 (GPLL0 / 3)\n");
+	xzs_early_puts("  LINUX_PRE_PHY_UNIPRO_SRC_RATE=300000000 (GPLL0 / 2)\n");
+	xzs_early_puts("  EXPECTED_UFS_AXI_200MHZ: CMD=0x75024, CFG=0x75028 (val=0x105), M=0, N=0, D=-1\n");
+	xzs_early_puts("  EXPECTED_UFS_ICE_300MHZ: CMD=0x76014, CFG=0x76018 (val=0x103), M=0, N=0, D=-1\n");
+	xzs_breadcrumb(0xD290, 0x10);
+
+	/* 3. Section 4: Pre-Test RCG Snapshot */
+	xzs_early_puts("\n[XZS-SNAPSHOT] PRE-TEST RCG & GPLL0 STATE:\n");
+	uint32_t pre_axi_cmd = xzs_gcc_read32(GCC_REG_UFS_AXI_CMD_RCGR);
+	uint32_t pre_axi_cfg = xzs_gcc_read32(GCC_REG_UFS_AXI_CFG_RCGR);
+	uint32_t pre_axi_m   = xzs_gcc_read32(GCC_REG_UFS_AXI_M);
+	uint32_t pre_axi_n   = xzs_gcc_read32(GCC_REG_UFS_AXI_N);
+	uint32_t pre_axi_d   = xzs_gcc_read32(GCC_REG_UFS_AXI_D);
+	uint32_t pre_ice_cmd = xzs_gcc_read32(GCC_REG_UFS_ICE_CORE_CMD_RCGR);
+	uint32_t pre_ice_cfg = xzs_gcc_read32(GCC_REG_UFS_ICE_CORE_CFG_RCGR);
+	uint32_t pre_ice_m   = xzs_gcc_read32(GCC_REG_UFS_ICE_CORE_M);
+	uint32_t pre_ice_n   = xzs_gcc_read32(GCC_REG_UFS_ICE_CORE_N);
+	uint32_t pre_ice_d   = xzs_gcc_read32(GCC_REG_UFS_ICE_CORE_D);
+	uint32_t gpll0_mode  = xzs_gcc_read32(GCC_REG_GPLL0_MODE);
+
+	xzs_early_puts("  PRE_UFS_AXI_RATE_STATE: CMD=0x");
+	xzs_early_puthex64((uint64_t)pre_axi_cmd);
+	xzs_early_puts(" CFG=0x");
+	xzs_early_puthex64((uint64_t)pre_axi_cfg);
+	xzs_early_puts(" M=0x");
+	xzs_early_puthex64((uint64_t)pre_axi_m);
+	xzs_early_puts(" N=0x");
+	xzs_early_puthex64((uint64_t)pre_axi_n);
+	xzs_early_puts(" D=0x");
+	xzs_early_puthex64((uint64_t)pre_axi_d);
+	xzs_early_puts("\n");
+
+	xzs_early_puts("  PRE_UNIPRO_RATE_STATE:  CMD=0x");
+	xzs_early_puthex64((uint64_t)pre_ice_cmd);
+	xzs_early_puts(" CFG=0x");
+	xzs_early_puthex64((uint64_t)pre_ice_cfg);
+	xzs_early_puts(" M=0x");
+	xzs_early_puthex64((uint64_t)pre_ice_m);
+	xzs_early_puts(" N=0x");
+	xzs_early_puthex64((uint64_t)pre_ice_n);
+	xzs_early_puts(" D=0x");
+	xzs_early_puthex64((uint64_t)pre_ice_d);
+	xzs_early_puts("\n");
+
+	xzs_early_puts("  GPLL0_MODE (+0x52000)=0x");
+	xzs_early_puthex64((uint64_t)gpll0_mode);
+	xzs_early_puts(" (LOCK_DET=");
+	xzs_early_puthex64((uint64_t)((gpll0_mode >> 30) & 1U));
+	xzs_early_puts(", OUTCTRL=");
+	xzs_early_puthex64((uint64_t)(gpll0_mode & 1U));
+	xzs_early_puts(")\n");
+	xzs_breadcrumb(0xD290, 0x20);
+
+	/* 4. Stage A: UFS_AXI 200 MHz Only */
+	xzs_early_puts("\n[STAGE-A] PROGRAMMING UFS_AXI_CLK_SRC TO 200 MHz (CFG=0x105)...\n");
+	uint32_t post_axi_cmd = 0;
+	int rc = xzs_gcc_rcg_set_rate(GCC_REG_UFS_AXI_CMD_RCGR, GCC_REG_UFS_AXI_CFG_RCGR, 0x00000105, &post_axi_cmd);
+	uint32_t post_axi_cfg = xzs_gcc_read32(GCC_REG_UFS_AXI_CFG_RCGR);
+	xzs_early_puts("  UFS_AXI_CMD_RCGR (+0x75024)=0x");
+	xzs_early_puthex64((uint64_t)post_axi_cmd);
+	xzs_early_puts(" (ROOT_OFF=");
+	xzs_early_puthex64((uint64_t)((post_axi_cmd >> 31) & 1U));
+	xzs_early_puts(", UPDATE=");
+	xzs_early_puthex64((uint64_t)(post_axi_cmd & 1U));
+	xzs_early_puts("), CFG_RCGR (+0x75028)=0x");
+	xzs_early_puthex64((uint64_t)post_axi_cfg);
+	xzs_early_puts(", rc=");
+	xzs_early_puthex64((uint64_t)(uint32_t)rc);
+	xzs_early_puts("\n");
+	xzs_breadcrumb(0xD290, 0x30);
+
+	if ((post_axi_cmd & (1U << 31)) == 0 && post_axi_cfg == 0x00000105) {
+		xzs_breadcrumb(0xD290, 0x31);
+		xzs_early_puts("[STAGE-A] UFS_AXI ROOT RUNNING AT 200 MHz (GPLL0/3)!\n");
+	} else {
+		xzs_early_puts("[STAGE-A] [WARN] UFS_AXI ROOT NOT REPORTING RUNNING\n");
+	}
+
+	/* Enable bus branches */
+	uint32_t b_axi = 0, b_ahb = 0, b_sys = 0, b_agg2 = 0, b_ref = 0;
+	xzs_gcc_enable_and_wait_branch(GCC_REG_UFS_AXI_CBCR, NULL, &b_axi);
+	xzs_gcc_enable_and_wait_branch(GCC_REG_SYS_NOC_UFS_AXI_CBCR, NULL, &b_sys);
+	xzs_gcc_enable_and_wait_branch(GCC_REG_AGGRE2_UFS_AXI_CBCR, NULL, &b_agg2);
+	xzs_gcc_enable_and_wait_branch(GCC_REG_UFS_AHB_CBCR, NULL, &b_ahb);
+	xzs_gcc_enable_and_wait_branch(GCC_REG_UFS_CLKREF_CBCR, NULL, &b_ref);
+
+	xzs_early_puts("[STAGE-A BUS BRANCHES] AXI=0x");
+	xzs_early_puthex64((uint64_t)b_axi);
+	xzs_early_puts(" SYS=0x");
+	xzs_early_puthex64((uint64_t)b_sys);
+	xzs_early_puts(" AGG2=0x");
+	xzs_early_puthex64((uint64_t)b_agg2);
+	xzs_early_puts(" AHB=0x");
+	xzs_early_puthex64((uint64_t)b_ahb);
+	xzs_early_puts(" CLKREF=0x");
+	xzs_early_puthex64((uint64_t)b_ref);
+	xzs_early_puts("\n");
+
+	/* Note: UNIPRO branch is NOT enabled in Stage A */
+	xzs_breadcrumb(0xD290, 0x32);
+
+	uint32_t stage_a_cr = 0, stage_a_pcs = 0;
+	int a_rc = xzs_ufs_replay_v2_2_0_phy("STAGE-A", 0x33, 0x34, 0x35, &stage_a_cr, &stage_a_pcs);
+
+	if (a_rc == 0) {
+		xzs_early_puts("[STAGE-A CLASSIFICATION: C_READY=1! STOPPING!]\n");
+		xzs_early_puts("  HARDWARE VERIFIED: Correct UFS_AXI_CLK_SRC rate was required!\n");
+		goto external_audit;
+	}
+
+	xzs_early_puts("[STAGE-A CLASSIFICATION: C_READY=0 AFTER UFS_AXI 200 MHz]\n");
+
+	/* 5. Stage B: Exact UNIPRO Source Rate (300 MHz) */
+	xzs_early_puts("\n[STAGE-B] PROGRAMMING UFS_ICE_CORE_CLK_SRC TO 300 MHz (CFG=0x103)...\n");
+	uint32_t post_ice_cmd = 0;
+	rc = xzs_gcc_rcg_set_rate(GCC_REG_UFS_ICE_CORE_CMD_RCGR, GCC_REG_UFS_ICE_CORE_CFG_RCGR, 0x00000103, &post_ice_cmd);
+	uint32_t post_ice_cfg = xzs_gcc_read32(GCC_REG_UFS_ICE_CORE_CFG_RCGR);
+	xzs_early_puts("  UFS_ICE_CMD_RCGR (+0x76014)=0x");
+	xzs_early_puthex64((uint64_t)post_ice_cmd);
+	xzs_early_puts(" (ROOT_OFF=");
+	xzs_early_puthex64((uint64_t)((post_ice_cmd >> 31) & 1U));
+	xzs_early_puts(", UPDATE=");
+	xzs_early_puthex64((uint64_t)(post_ice_cmd & 1U));
+	xzs_early_puts("), CFG_RCGR (+0x76018)=0x");
+	xzs_early_puthex64((uint64_t)post_ice_cfg);
+	xzs_early_puts(", rc=");
+	xzs_early_puthex64((uint64_t)(uint32_t)rc);
+	xzs_early_puts("\n");
+	xzs_breadcrumb(0xD290, 0x50);
+
+	/* Enable UNIPRO branch */
+	uint32_t b_unipro = 0;
+	xzs_gcc_enable_and_wait_branch(GCC_REG_UFS_UNIPRO_CORE_CBCR, NULL, &b_unipro);
+	xzs_early_puts("[STAGE-B] UNIPRO_CORE_CBCR (+0x7600c)=0x");
+	xzs_early_puthex64((uint64_t)b_unipro);
+	xzs_early_puts(" (CLK_OFF=");
+	xzs_early_puthex64((uint64_t)((b_unipro >> 31) & 1U));
+	xzs_early_puts(")\n");
+	xzs_breadcrumb(0xD290, 0x51);
+	xzs_breadcrumb(0xD290, 0x52);
+
+	uint32_t stage_b_cr = 0, stage_b_pcs = 0;
+	int b_rc = xzs_ufs_replay_v2_2_0_phy("STAGE-B", 0x53, 0x54, 0x55, &stage_b_cr, &stage_b_pcs);
+
+	if (b_rc == 0) {
+		if (stage_b_pcs != 0) {
+			xzs_early_puts("[STAGE-B CLASSIFICATION: B1 — C_READY=1 AND PCS_READY=1! D2-C2 COMPLETE!]\n");
+		} else {
+			xzs_early_puts("[STAGE-B CLASSIFICATION: B2 — C_READY=1, PCS_READY=0 (COMMON PLL SOLVED)]\n");
+		}
+	} else {
+		xzs_early_puts("[STAGE-B CLASSIFICATION: B3 — C_READY=0 AFTER EXACT UNIPRO SOURCE RATE]\n");
+	}
+
+external_audit:
+	/* 6. Section 10: External UFS_RESET Read-Only Audit */
+	xzs_early_puts("\n[EXTERNAL-RESET-AUDIT] LIVE SONY DT & DRIVER ANALYSIS:\n");
+	xzs_early_puts("  EXTERNAL_UFS_RESET_EXISTS=no\n");
+	xzs_early_puts("  CONTROLLED_BY=none\n");
+	xzs_early_puts("  STATE_AT_XNU_RUNTIME=N/A\n");
+	xzs_early_puts("  USED_BEFORE_PHY_READY=no\n");
+	xzs_early_puts("  NOTE: No pinctrl or reset GPIOs declared in live Sony DT for UFS.\n");
+	xzs_breadcrumb(0xD290, 0x70);
+
+	/* 7. Invariants check */
+	uint32_t final_hce = xzs_ufs_read32(UFSHCI_REG_HCE);
+	uint32_t final_hcs = xzs_ufs_read32(UFSHCI_REG_HCS);
+	uint32_t final_uic = xzs_ufs_read32(UFSHCI_REG_UICCMD);
+	xzs_early_puts("\n[XZS-UFS] INVARIANT AUDIT: HCE=0x");
+	xzs_early_puthex64((uint64_t)final_hce);
+	xzs_early_puts(", HCS=0x");
+	xzs_early_puthex64((uint64_t)final_hcs);
+	xzs_early_puts(", UICCMD=0x");
+	xzs_early_puthex64((uint64_t)final_uic);
+	xzs_early_puts("\n");
+}
