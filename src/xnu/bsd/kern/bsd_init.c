@@ -489,9 +489,9 @@ bsd_init(void)
 	xzs_early_puts("[XZS-BOOT] [D30] bsd_init ENTERED\n");
 
 #if CONFIG_XZS_BRINGUP
-	/* Phase D2-M4B: MSM8996 SDC1 — First Physical eMMC Response / CMD1 SEND_OP_COND */
-	extern void xzs_sdhci_phase_d2m4b_probe(void);
-	xzs_sdhci_phase_d2m4b_probe();
+	/* Phase D2-M4C: MSM8996 SDC1 — Complete eMMC Power-Up Negotiation via CMD1 Polling */
+	extern void xzs_sdhci_phase_d2m4c_probe(void);
+	xzs_sdhci_phase_d2m4c_probe();
 #endif
 	struct uthread *ut;
 	vnode_t init_rootvnode = NULLVP;
