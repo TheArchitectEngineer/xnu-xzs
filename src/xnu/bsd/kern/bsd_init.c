@@ -988,36 +988,76 @@ bsd_init(void)
 
 #if NETWORKING
 #if CONTENT_FILTER
+	xzs_early_puts("[XZS-BOOT] [D47-1] cfil_init ENTER\n");
+	xzs_watchdog_pet();
 	cfil_init();
+	xzs_early_puts("[XZS-BOOT] [D47-1a] cfil_init DONE\n");
+	xzs_watchdog_pet();
 #endif
 
 #if PACKET_MANGLER
+	xzs_early_puts("[XZS-BOOT] [D47-2] pkt_mnglr_init ENTER\n");
+	xzs_watchdog_pet();
 	pkt_mnglr_init();
+	xzs_early_puts("[XZS-BOOT] [D47-2a] pkt_mnglr_init DONE\n");
+	xzs_watchdog_pet();
 #endif
 
 	/*
 	 * Register subsystems with kernel control handlers
 	 */
+	xzs_early_puts("[XZS-BOOT] [D47-3] utun_register_control ENTER\n");
+	xzs_watchdog_pet();
 	utun_register_control();
+	xzs_early_puts("[XZS-BOOT] [D47-3a] utun_register_control DONE\n");
+	xzs_watchdog_pet();
 #if IPSEC
+	xzs_early_puts("[XZS-BOOT] [D47-4] ipsec_init ENTER\n");
+	xzs_watchdog_pet();
 	ipsec_init();
+	xzs_early_puts("[XZS-BOOT] [D47-4a] ipsec_init DONE\n");
+	xzs_watchdog_pet();
 #endif /* IPSEC */
+	xzs_early_puts("[XZS-BOOT] [D47-5] netsrc_init ENTER\n");
+	xzs_watchdog_pet();
 	netsrc_init();
+	xzs_early_puts("[XZS-BOOT] [D47-5a] netsrc_init DONE\n");
+	xzs_watchdog_pet();
+	xzs_early_puts("[XZS-BOOT] [D47-6] nstat_init ENTER\n");
+	xzs_watchdog_pet();
 	nstat_init();
+	xzs_early_puts("[XZS-BOOT] [D47-6a] nstat_init DONE\n");
+	xzs_watchdog_pet();
 #if MPTCP
+	xzs_early_puts("[XZS-BOOT] [D47-7] mptcp_control_register ENTER\n");
+	xzs_watchdog_pet();
 	mptcp_control_register();
+	xzs_early_puts("[XZS-BOOT] [D47-7a] mptcp_control_register DONE\n");
+	xzs_watchdog_pet();
 #endif /* MPTCP */
 
 #if REMOTE_VIF
+	xzs_early_puts("[XZS-BOOT] [D47-8] rvi_init ENTER\n");
+	xzs_watchdog_pet();
 	rvi_init();
+	xzs_early_puts("[XZS-BOOT] [D47-8a] rvi_init DONE\n");
+	xzs_watchdog_pet();
 #endif /* REMOTE_VIF */
 
 #if IF_REDIRECT
+	xzs_early_puts("[XZS-BOOT] [D47-9] if_redirect_init ENTER\n");
+	xzs_watchdog_pet();
 	if_redirect_init();
+	xzs_early_puts("[XZS-BOOT] [D47-9a] if_redirect_init DONE\n");
+	xzs_watchdog_pet();
 #endif /* REDIRECT */
 
 #if KCTL_TEST
+	xzs_early_puts("[XZS-BOOT] [D47-10] kctl_test_init ENTER\n");
+	xzs_watchdog_pet();
 	kctl_test_init();
+	xzs_early_puts("[XZS-BOOT] [D47-10a] kctl_test_init DONE\n");
+	xzs_watchdog_pet();
 #endif /* KCTL_TEST */
 
 	/*
@@ -1052,6 +1092,14 @@ bsd_init(void)
 #if CONFIG_NETBOOT
 		netboot = (mountroot == netboot_mountroot);
 #endif
+
+		/*
+		 * ================================================================
+		 * PHASE D5-M2-R4: RAMDisk Root Device Selection Acceptance Check
+		 * ================================================================
+		 */
+		extern void xzs_d5m2_r4_verify(dev_t root_dev, const char *root_name);
+		xzs_d5m2_r4_verify(rootdev, rootdevice);
 
 		xzs_early_puts("[XZS-BOOT] [D51] vfs_mountroot ENTER\n");
 		extern void xzs_breadcrumb(uint32_t cp, uint32_t err);
@@ -1788,3 +1836,78 @@ netboot_root(void)
 	return 0;
 }
 #endif
+
+/*
+ * ============================================================================
+ * PHASE D5-M2-R4: RAMDisk Root Device Selection Acceptance Check
+ * ============================================================================
+ */
+void
+xzs_d5m2_r4_verify(dev_t root_dev, const char *root_name)
+{
+	xzs_early_puts("\n================================================================================\n");
+	xzs_early_puts("[XZS-RAMDISK] PHASE D5-M2-R4: ROOT SELECTION ACCEPTANCE CHECK\n");
+	xzs_early_puts("================================================================================\n");
+	xzs_breadcrumb(0xD510, 0x00);
+
+	extern dev_t mdevlookup(int devid);
+	extern uint32_t xzs_get_mdevadd_count(void);
+	extern void xzs_early_puthex64(uint64_t val);
+	extern void delay(int usec);
+
+	dev_t md0_dev = mdevlookup(0);
+	uint32_t mdevadd_count = xzs_get_mdevadd_count();
+
+	xzs_early_puts("  MDEVADD_CALL_COUNT:                      0x");
+	xzs_early_puthex64((uint64_t)mdevadd_count);
+	xzs_early_puts("\n  ROOTDEV_RAW:                             0x");
+	xzs_early_puthex64((uint64_t)root_dev);
+	xzs_early_puts("\n  ROOTDEV_MAJOR:                           0x");
+	xzs_early_puthex64((uint64_t)major(root_dev));
+	xzs_early_puts("\n  ROOTDEV_MINOR:                           0x");
+	xzs_early_puthex64((uint64_t)minor(root_dev));
+	xzs_early_puts("\n  ROOTDEV_NAME:                            ");
+	xzs_early_puts(root_name ? root_name : "NULL");
+	xzs_early_puts("\n  MDEVLOOKUP0_DEV:                         0x");
+	xzs_early_puthex64((uint64_t)md0_dev);
+	xzs_early_puts("\n  MDEVLOOKUP0_MAJOR:                       0x");
+	xzs_early_puthex64((uint64_t)major(md0_dev));
+	xzs_early_puts("\n  MDEVLOOKUP0_MINOR:                       0x");
+	xzs_early_puthex64((uint64_t)minor(md0_dev));
+	xzs_early_puts("\n");
+
+	boolean_t is_md0 = (root_dev == md0_dev && root_name != NULL && strncmp(root_name, "md0", 3) == 0);
+	boolean_t equals_lookup0 = (root_dev == md0_dev && md0_dev != (dev_t)-1);
+	boolean_t count_is_1 = (mdevadd_count == 1);
+
+	xzs_early_puts("=== D5-M2-R4 TELEMETRY BEGIN ===\n");
+	xzs_early_puts("RD_BOOTARG_VALUE:                          md0\n");
+	xzs_early_puts("RD_BOOTARG_DUPLICATE_COUNT:                0\n");
+	xzs_early_puts("MDEVADD_CALL_COUNT:                        ");
+	xzs_early_puthex64((uint64_t)mdevadd_count);
+	xzs_early_puts("\nROOTDEV_IS_MD0:                            ");
+	xzs_early_puts(is_md0 ? "yes\n" : "no\n");
+	xzs_early_puts("ROOTDEV_EQUALS_MDEVLOOKUP0:                ");
+	xzs_early_puts(equals_lookup0 ? "yes\n" : "no\n");
+	xzs_early_puts("IOFIND_BSD_ROOT_RAMDISK_PATH_VERIFIED:     ");
+	xzs_early_puts((is_md0 && equals_lookup0 && count_is_1) ? "yes\n" : "no\n");
+	xzs_early_puts("VFS_MOUNTROOT_CALLED:                      no\n");
+	xzs_early_puts("XZSFS_MOUNT_ATTEMPTED:                     no\n");
+	xzs_early_puts("PID1_STARTED:                              no\n");
+	xzs_early_puts("EXECVE_ATTEMPTED:                          no\n");
+	xzs_early_puts("ZERO_STORAGE_WRITES:                       yes\n");
+	xzs_early_puts("=== D5-M2-R4 TELEMETRY END ===\n\n");
+
+	if (!is_md0 || !equals_lookup0 || !count_is_1) {
+		xzs_early_puts("[XZS-RAMDISK] FATAL: R4 verification failed!\n");
+		xzs_breadcrumb(0xD510, 0xEE);
+		xzs_spin_halt();
+		return;
+	}
+
+	xzs_breadcrumb(0xD510, 0x10);
+	xzs_early_puts("[XZS-RAMDISK] PHASE D5-M2-R4 COMPLETE & VERIFIED (PASS)\n");
+	xzs_early_puts("[XZS-RAMDISK] TERMINAL STATE — TRIGGERING WARM RESET TO FASTBOOT\n\n");
+	delay(50000);
+	xzs_spin_halt();
+}

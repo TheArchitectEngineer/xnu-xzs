@@ -454,7 +454,7 @@ void bootshim_main(uint64_t dtb_phys, uint64_t current_el, uint64_t mpidr) {
     ba->deviceTreeP = (void *)ADT_BASE_ADDR;
     ba->deviceTreeLength = adt_len;
 
-    copy_string(ba->CommandLine, "console=ttyMSM0,115200 debug=0x14e serial=2 -v keepends=1", sizeof(ba->CommandLine));
+    copy_string(ba->CommandLine, "console=ttyMSM0,115200 debug=0x14e serial=2 -v keepends=1 rd=md0", sizeof(ba->CommandLine));
 
     ba->machineType = 0;
     ba->bootFlags = 0;

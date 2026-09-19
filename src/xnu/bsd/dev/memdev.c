@@ -631,10 +631,18 @@ cvtnum(char *pos, char *end, uint64_t *num)                     /* Convert to a 
 
 #endif /* CONFIG_MEMDEV_INSECURE */
 
+volatile uint32_t g_xzs_mdevadd_call_count = 0;
+uint32_t
+xzs_get_mdevadd_count(void)
+{
+	return g_xzs_mdevadd_call_count;
+}
+
 dev_t
 mdevadd(int devid, uint64_t base, unsigned int size, int phys)
 {
 	int i;
+	g_xzs_mdevadd_call_count++;
 
 	if (devid < 0) {
 		devid = -1;

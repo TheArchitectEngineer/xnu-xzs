@@ -677,7 +677,7 @@ IOFindBSDRoot( char * rootName, unsigned int rootNameSize,
     dev_t * root, u_int32_t * oflags )
 {
 	mach_timespec_t     t;
-	IOService *         service;
+	IOService *         service = NULL;
 	IORegistryEntry *   regEntry;
 	OSDictionary *      matching = NULL;
 	OSString *          iostr;
@@ -1033,8 +1033,11 @@ IOFindBSDRoot( char * rootName, unsigned int rootNameSize,
 	*oflags = flags;
 
 iofrootx:
-
-	IOService::setRootMedia(service);
+	xzs_early_puts("[XZS-BOOT] [D50-IOKIT] iofrootx reached\n");
+	if (service) {
+		IOService::setRootMedia(service);
+	}
+	xzs_early_puts("[XZS-BOOT] [D50-IOKIT] iofrootx complete\n");
 
 	if ((gIOKitDebug & (kIOLogDTree | kIOLogServiceTree | kIOLogMemory)) && !debugInfoPrintedOnce) {
 		IOService::getPlatform()->waitQuiet();
