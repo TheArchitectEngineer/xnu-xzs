@@ -5201,7 +5201,7 @@ xzs_d6m3_user_vm_probe(proc_t p, task_t t, thread_t th)
 	xzs_early_puts("[XZS-D6M3] D620/01 D6-M3 complete — handoff to D6-M4\n\n");
 
 	xzs_d6m4_first_el0(p, t, th);
-	__builtin_unreachable();
+	return;
 }
 
 static void
@@ -5257,8 +5257,12 @@ xzs_d6m4_first_el0(proc_t p, task_t t, thread_t th)
 		delay(50000);
 		xzs_spin_halt();
 	}
-	for (;;) {
-		delay(1000);
-	}
+
+	/*
+	 * Let bsd_utaskbootstrap() return through the native bootstrap path.
+	 * The newly runnable PID1 main thread completes task_wait_to_return()
+	 * and reaches thread_bootstrap_return(), which performs the EL0 return.
+	 */
+	return;
 }
 #endif
