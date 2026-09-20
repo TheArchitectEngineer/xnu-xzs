@@ -7,10 +7,23 @@ CFLAGS := -target aarch64-none-elf -ffreestanding -fno-builtin -fno-stack-protec
 ASFLAGS := -target aarch64-none-elf -ffreestanding
 LDFLAGS := -T linker.ld -nostdlib
 
-OBJS := start.o main.o uart.o adt.o fb.o
+ROOTFS_IMG := ../../artifacts/builds/xzs-rootfs.img
+ROOTFS_EXPECTED_SHA256 := d1e62eaf60d261b00e3bbc8075b0944663c4dbaf573ad2989e8010fe66cb0707
+
+OBJS := start.o main.o uart.o adt.o fb.o rootfs_blob.o
 TARGET := bootshim
 
 all: $(TARGET).bin $(TARGET).dis
+
+rootfs_blob.o: rootfs_blob.S $(ROOTFS_IMG)
+	@if [ ! -f $(ROOTFS_IMG) ]; then \
+		echo "ERROR: $(ROOTFS_IMG) missing!"; exit 1; \
+	fi
+	@ACTUAL_SHA=$$(shasum -a 256 $(ROOTFS_IMG) | awk '{print $$1}'); \
+	if [ "$$ACTUAL_SHA" != "$(ROOTFS_EXPECTED_SHA256)" ]; then \
+		echo "ERROR: $(ROOTFS_IMG) SHA256 mismatch! Expected $(ROOTFS_EXPECTED_SHA256), got $$ACTUAL_SHA"; exit 1; \
+	fi
+	$(CC) $(ASFLAGS) -c $< -o $@
 
 %.o: %.S
 	$(CC) $(ASFLAGS) -c $< -o $@

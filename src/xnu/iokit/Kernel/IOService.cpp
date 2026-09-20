@@ -1051,6 +1051,7 @@ IOService::detach( IOService * provider )
 void
 IOService::registerService( IOOptionBits options )
 {
+	xzs_early_puts("          [regServ] ENTER\n");
 	OSDataAllocation<char> pathBuf;
 	const char *        path;
 	const char *        skip;
@@ -1101,12 +1102,15 @@ IOService::registerService( IOOptionBits options )
 		IOLog( "%s\n", path );
 	}
 
+	xzs_early_puts("          [regServ] calling startMatching\n");
 	startMatching( options );
+	xzs_early_puts("          [regServ] startMatching RETURN\n");
 }
 
 void
 IOService::startMatching( IOOptionBits options )
 {
+	xzs_early_puts("            [startMatch] 1 ENTER\n");
 	IOService * provider;
 	UInt32      prevBusy = 0;
 	bool        needConfig;
@@ -1123,7 +1127,9 @@ IOService::startMatching( IOOptionBits options )
 		releaseAssertion = true;
 	}
 
+	xzs_early_puts("            [startMatch] 2 lockForArbitration\n");
 	lockForArbitration();
+	xzs_early_puts("            [startMatch] 3 lockForArbitration DONE\n");
 
 	sync = (options & kIOServiceSynchronous)
 	    || ((provider = getProvider())
@@ -1158,20 +1164,27 @@ IOService::startMatching( IOOptionBits options )
 	}
 
 	unlockForArbitration();
+	xzs_early_puts("            [startMatch] 4 unlockForArbitration DONE\n");
 
 	if (needConfig) {
 		if (needWake) {
+			xzs_early_puts("            [startMatch] 5 needWake\n");
 			IOLockLock( gIOServiceBusyLock );
 			thread_wakeup((event_t) this /*&__state[1]*/ );
 			IOLockUnlock( gIOServiceBusyLock );
 		} else if (!sync || (kIOServiceAsynchronous & options)) {
+			xzs_early_puts("            [startMatch] 5 startJob async\n");
 			// assertion will be released when matching job is complete
 			releaseAssertion = false;
 			_IOServiceJob::startJob( this, kMatchNubJob, options );
+			xzs_early_puts("            [startMatch] 5 startJob async DONE\n");
 		} else {
+			xzs_early_puts("            [startMatch] 5 synchronous match loop\n");
 			do {
 				if ((__state[1] & kIOServiceNeedConfigState)) {
+					xzs_early_puts("            [startMatch] 5a doServiceMatch\n");
 					doServiceMatch( options );
+					xzs_early_puts("            [startMatch] 5b doServiceMatch DONE\n");
 				}
 
 				lockForArbitration();
@@ -1203,6 +1216,7 @@ IOService::startMatching( IOOptionBits options )
 	if (releaseAssertion) {
 		gIOPMRootDomain->releaseDriverKitMatchingAssertion();
 	}
+	xzs_early_puts("            [startMatch] 6 RETURN\n");
 }
 
 
@@ -5425,17 +5439,23 @@ IOService::publishHiddenMedia(IOService * parent)
 void
 IOService::setRootMedia(IOService * root)
 {
+	if (!root) {
+		return;
+	}
+
 	const OSMetaClass * ioblockstoragedriverClass;
 	bool unhide;
 
 	ioblockstoragedriverClass = OSMetaClass::getMetaClassWithName(gIOBlockStorageDriverKey);
-	assert(ioblockstoragedriverClass);
-
-	while (root) {
-		if (root->metaCast(ioblockstoragedriverClass)) {
-			break;
+	if (ioblockstoragedriverClass) {
+		while (root) {
+			if (root->metaCast(ioblockstoragedriverClass)) {
+				break;
+			}
+			root = root->getProvider();
 		}
-		root = root->getProvider();
+	} else {
+		root = NULL;
 	}
 
 	LOCKWRITENOTIFY();
@@ -6025,10 +6045,13 @@ _IOConfigThread::main(void * arg, wait_result_t result)
 		IOLog("thread_policy_set(%d)\n", kr);
 	}
 
+	xzs_early_puts("                [_IOConfigThread::main] thread started\n");
 	do {
 //	randomDelay();
 
+		xzs_early_puts("                [_IOConfigThread::main] semaphore_wait ENTER\n");
 		semaphore_wait( gJobsSemaphore );
+		xzs_early_puts("                [_IOConfigThread::main] semaphore_wait RETURN\n");
 
 		IOTakeLock( gJobsLock );
 		job = (_IOServiceJob *) gJobs->getFirstObject();
@@ -6170,13 +6193,17 @@ _IOServiceJob::pingConfig( _IOServiceJob * job )
 	job->release();
 
 	if (create) {
+		xzs_early_puts("              [pingConfig] creating configThread\n");
 		if (gIOKitDebug & kIOLogConfig) {
 			LOG("config(%d): creating\n", gNumConfigThreads - 1);
 		}
 		_IOConfigThread::configThread(nub->getName());
+		xzs_early_puts("              [pingConfig] configThread CREATED\n");
 	}
 
+	xzs_early_puts("              [pingConfig] semaphore_signal\n");
 	semaphore_signal( gJobsSemaphore );
+	xzs_early_puts("              [pingConfig] semaphore_signal DONE\n");
 }
 
 struct IOServiceMatchContext {

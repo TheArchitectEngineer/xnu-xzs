@@ -159,6 +159,12 @@ bsd/miscfs/mockfs/mockfs_vnops.c	optional mockfs
 
 bsd/miscfs/routefs/routefs_ops.c	optional routefs
 
+bsd/xzsfs/xzsfs_core.c			standard
+bsd/xzsfs/xzsfs_parser.c		standard
+bsd/xzsfs/xzsfs_node.c			standard
+bsd/xzsfs/xzsfs_vnops.c			standard
+bsd/xzsfs/xzsfs_vfsops.c		standard
+
 bsd/kern/decmpfs.c			standard
 
 bsd/net/net_stubs.c			standard bound-checks

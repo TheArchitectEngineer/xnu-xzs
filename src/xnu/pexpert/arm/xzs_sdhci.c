@@ -10841,9 +10841,6 @@ xzs_sdhci_phase_d4_probe(void)
 	xzs_breadcrumb(0xD420, 0x90);
 	xzs_early_puts("[XZS-SDHCI] 7. PHASE D4 COMPLETE & VERIFIED (PASS)\n");
 
-	/* 0x01: Terminal State -> Warm Reset to Fastboot */
-	xzs_breadcrumb(0xD420, 0x01);
-	xzs_early_puts("[XZS-SDHCI] 8. TERMINAL STATE — TRIGGERING WARM RESET TO FASTBOOT\n\n");
-	delay(50000);
-	xzs_spin_halt();
+	xzs_early_puts("[XZS-SDHCI] D5-M2-R4: D4 acceptance complete, proceeding to setconf() / RAMDisk...\n\n");
+	return;
 }

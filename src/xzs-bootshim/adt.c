@@ -109,8 +109,16 @@ uint32_t adt_build_tree_at(uint64_t base_addr) {
     adt_put_prop("random-seed", random_seed, sizeof(random_seed));
 
     /* Child 1.1: /chosen/memory-map -> 0 children */
-    adt_put_node(1, 0);
+    adt_put_node(2, 0);
     adt_put_str("name", "memory-map");
+    static const struct {
+        uint64_t paddr;
+        uint64_t length;
+    } ramdisk_range = {
+        .paddr = 0x81700000ULL,
+        .length = 0x9000ULL,     /* 36864 bytes (9 pages of 4KB) backing */
+    };
+    adt_put_prop("RAMDisk", &ramdisk_range, sizeof(ramdisk_range));
 
     /* Child 2: /defaults -> 0 children */
     adt_put_node(2, 0);
