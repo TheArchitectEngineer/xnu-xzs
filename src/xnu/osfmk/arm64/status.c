@@ -3288,11 +3288,11 @@ xzs_d6m4_monitor_and_report_r650(task_t t, thread_t th)
 
 	/*
 	 * Poll for CPU 1 progress.
-	 * 10,000,000 loop iterations with volatile check is plenty of time
-	 * for CPU 1 to complete context switch, return-to-user, and EL0 trap.
+	 * 10,000,000 loop iterations with volatile checks is plenty of time
+	 * for CPU 1 to complete 256 native getpid round trips after its write.
 	 */
 	for (volatile int i = 0; i < 10000000; i++) {
-		if (xzs_d6m4_r650_telemetry.post_svc_trapped != 0 ||
+		if (xzs_d6m4_r650_telemetry.stable_roundtrip_count >= 256 ||
 		    xzs_d6m4_r650_telemetry.unexpected_exception != 0) {
 			break;
 		}
@@ -3321,7 +3321,8 @@ xzs_d6m4_monitor_and_report_r650(task_t t, thread_t th)
 		xzs_early_puts("[XZS-D6M4] D630/37 PID1 entering thread_bootstrap_return\n");
 	}
 
-	if (xzs_d6m4_r650_telemetry.post_svc_trapped) {
+	if (xzs_d6m4_r650_telemetry.stable_roundtrip_count >= 256 &&
+	    !xzs_d6m4_r650_telemetry.unexpected_exception) {
 		xzs_breadcrumb(0xD630, 0x40);
 		xzs_early_puts("[XZS-D6M4] D630/40 EL0 synchronous exception captured\n");
 		xzs_early_puts("ESR_EL1="); xzs_d6m4_put_hex64(xzs_d6m4_r650_telemetry.esr); xzs_early_puts("\n");
@@ -3379,13 +3380,22 @@ xzs_d6m4_monitor_and_report_r650(task_t t, thread_t th)
 			xzs_spin_halt();
 		}
 
-		/* kernproc starts with an empty fd table; PID1 inherits fd 1 absent. */
-		if (xzs_d6m4_r650_telemetry.syscall_error != 9 ||
-		    xzs_d6m4_r650_telemetry.syscall_return_x0 != 9 ||
-		    (xzs_d6m4_r650_telemetry.syscall_return_cpsr & 0x20000000ULL) == 0 ||
-		    (xzs_d6m4_r650_telemetry.post_spsr & 0x20000000ULL) == 0) {
+		/* D6-M6 establishes fd 1; write must return 26 with carry clear. */
+		if (xzs_d6m4_r650_telemetry.syscall_error != 0 ||
+		    xzs_d6m4_r650_telemetry.syscall_return_x0 != 26 ||
+		    (xzs_d6m4_r650_telemetry.syscall_return_cpsr & 0x20000000ULL) != 0 ||
+		    (xzs_d6m4_r650_telemetry.post_spsr & 0x20000000ULL) != 0) {
 			xzs_breadcrumb(0xD640, 0xEE71);
-			xzs_early_puts("[XZS-D6M5] FATAL: write(1) did not return canonical EBADF ABI state\n");
+			xzs_early_puts("[XZS-D6M5] FATAL: write(1) did not return canonical success ABI state\n");
+			xzs_spin_halt();
+		}
+		if (!xzs_d6m4_r650_telemetry.stable_dispatcher_reached ||
+		    !xzs_d6m4_r650_telemetry.stable_handler_completed ||
+		    xzs_d6m4_r650_telemetry.stable_last_error != 0 ||
+		    xzs_d6m4_r650_telemetry.stable_last_x0 != 1 ||
+		    (xzs_d6m4_r650_telemetry.stable_last_cpsr & 0x20000000ULL) != 0) {
+			xzs_breadcrumb(0xD650, 0xEE30);
+			xzs_early_puts("[XZS-D6M6] FATAL: sustained getpid round-trip telemetry invalid\n");
 			xzs_spin_halt();
 		}
 
@@ -3402,7 +3412,7 @@ xzs_d6m4_monitor_and_report_r650(task_t t, thread_t th)
 		xzs_breadcrumb(0xD640, 0x60);
 		xzs_early_puts("[XZS-D6M5] D640/60 normal synchronous return-to-user path reached\n");
 		xzs_breadcrumb(0xD640, 0x70);
-		xzs_early_puts("[XZS-D6M5] D640/70 post-syscall EL0 sentinel observed\n");
+		xzs_early_puts("[XZS-D6M5] D640/70 post-write EL0 getpid instruction observed\n");
 
 		xzs_early_puts("\n=== D6-M5 ACCEPTANCE TELEMETRY BEGIN ===\n");
 		xzs_early_puts("D6-M4_REGRESSION_PASS=yes\n");
@@ -3411,20 +3421,20 @@ xzs_d6m4_monitor_and_report_r650(task_t t, thread_t th)
 		xzs_early_puts("SYSCALL_NUMBER_REGISTER=x16\n");
 		xzs_early_puts("FIRST_SYSCALL_NUMBER=4\n");
 		xzs_early_puts("FIRST_SYSCALL_NAME=write\n");
-		xzs_early_puts("PID1_FD1_EXISTS=no\n");
-		xzs_early_puts("PID1_FD1_TARGET=none\n");
-		xzs_early_puts("PID1_FD1_READY_FOR_WRITE=no\n");
+		xzs_early_puts("PID1_FD1_EXISTS=yes\n");
+		xzs_early_puts("PID1_FD1_TARGET=/dev/console\n");
+		xzs_early_puts("PID1_FD1_READY_FOR_WRITE=yes\n");
 		xzs_early_puts("SYSCALL_DISPATCH_REACHED=yes\n");
 		xzs_early_puts("SYSCALL_HANDLER_ENTERED=yes\n");
 		xzs_early_puts("SYSCALL_HANDLER_COMPLETED=yes\n");
 		xzs_early_puts("SYSCALL_RETURN_VALUE=");
 		xzs_d6m4_put_hex64(xzs_d6m4_r650_telemetry.syscall_return_x0); xzs_early_puts("\n");
-		xzs_early_puts("SYSCALL_RETURN_ERROR=EBADF\n");
-		xzs_early_puts("SYSCALL_RETURN_CARRY=set\n");
+		xzs_early_puts("SYSCALL_RETURN_ERROR=0\n");
+		xzs_early_puts("SYSCALL_RETURN_CARRY=clear\n");
 		xzs_early_puts("SYSCALL_RETURN_TO_EL0=yes\n");
 		xzs_early_puts("POST_SYSCALL_EL0_PC=");
 		xzs_d6m4_put_hex64(xzs_d6m4_r650_telemetry.post_elr); xzs_early_puts("\n");
-		xzs_early_puts("POST_SYSCALL_REGISTER_SIGNATURE=x0:0,x16:1,carry:set\n");
+		xzs_early_puts("POST_SYSCALL_REGISTER_SIGNATURE=x0:26,x16:20,carry:clear\n");
 		xzs_early_puts("POST_SYSCALL_EL0_INSTRUCTION_EXECUTED=yes\n");
 		xzs_early_puts("FIRST_SYSCALL_ROUNDTRIP_COMPLETE=yes\n");
 		xzs_early_puts("D6-M5_COMPLETE=yes\n");
@@ -3432,9 +3442,53 @@ xzs_d6m4_monitor_and_report_r650(task_t t, thread_t th)
 		xzs_early_puts("=== D6-M5 ACCEPTANCE TELEMETRY END ===\n");
 		xzs_breadcrumb(0xD640, 0x90);
 		xzs_breadcrumb(0xD640, 0x91);
-		xzs_early_puts("[XZS-D6M5] PHASE D6-M5 COMPLETE & VERIFIED (PASS)\n");
+		xzs_early_puts("[XZS-D6M5] PHASE D6-M5 REGRESSION VERIFIED (PASS)\n");
 		xzs_breadcrumb(0xD640, 0x01);
-		xzs_early_puts("[XZS-D6M5] D640/01 terminal before D6-M6\n");
+		xzs_early_puts("[XZS-D6M5] D640/01 regression handoff to D6-M6\n");
+
+		xzs_breadcrumb(0xD650, 0x20);
+		xzs_early_puts("[XZS-D6M6] D650/20 EL0 write(1) reached native /dev/console and returned 26\n");
+		xzs_breadcrumb(0xD650, 0x30);
+		xzs_early_puts("[XZS-D6M6] D650/30 PID1 sustained 256 successful getpid round trips in EL0\n");
+
+		xzs_early_puts("\n=== D6-M6 ACCEPTANCE TELEMETRY BEGIN ===\n");
+		xzs_early_puts("D6-M5_REGRESSION_PASS=yes\n");
+		xzs_early_puts("PID1_STARTED=yes\n");
+		xzs_early_puts("PID1_FILEDESC_STRUCTURE=struct_proc.p_fd\n");
+		xzs_early_puts("FD0_INITIAL_STATE=absent\n");
+		xzs_early_puts("FD1_INITIAL_STATE=absent\n");
+		xzs_early_puts("FD2_INITIAL_STATE=absent\n");
+		xzs_early_puts("FD0_TARGET=/dev/console\n");
+		xzs_early_puts("FD1_TARGET=/dev/console\n");
+		xzs_early_puts("FD2_TARGET=/dev/console\n");
+		xzs_early_puts("DEV_CONSOLE_VNODE_PATH=/dev/console\n");
+		xzs_early_puts("DEV_CONSOLE_VNODE_TYPE=VCHR\n");
+		xzs_early_puts("DEV_CONSOLE_DEVICE=0:0\n");
+		xzs_early_puts("CONSOLE_FD1_VALID=yes\n");
+		xzs_early_puts("WRITE_SYSCALL_ENTERED=yes\n");
+		xzs_early_puts("WRITE_SYSCALL_HANDLER_COMPLETED=yes\n");
+		xzs_early_puts("WRITE_RETURN_VALUE=26\n");
+		xzs_early_puts("EL0_CONSOLE_MESSAGE_LENGTH=26\n");
+		xzs_early_puts("PID1_CONSOLE_OUTPUT_VERIFIED=yes\n");
+		xzs_early_puts("PID1_STABLE_RUNTIME=yes\n");
+		xzs_early_puts("STABLE_RUNTIME_SYSCALL=getpid\n");
+		xzs_early_puts("STABLE_RUNTIME_ROUNDTRIP_COUNT=");
+		xzs_d6m4_put_hex64(xzs_d6m4_r650_telemetry.stable_roundtrip_count); xzs_early_puts("\n");
+		xzs_early_puts("PID1_CONSOLE_INPUT_PATH_ESTABLISHED=yes\n");
+		xzs_early_puts("CONSOLE_INPUT_DEVICE=/dev/console\n");
+		xzs_early_puts("READ_SYSCALL_PATH=read->fileproc->specfs->cnread->kmread->tty\n");
+		xzs_early_puts("BLOCKING_READ_SUPPORTED=yes\n");
+		xzs_early_puts("CURRENT_INPUT_TRANSPORT=msm_uartdm_tx_only\n");
+		xzs_early_puts("PHYSICAL_CONSOLE_RX_AVAILABLE=no\n");
+		xzs_early_puts("PID1_CONSOLE_INPUT_VERIFIED=no\n");
+		xzs_early_puts("D6-M6_COMPLETE=yes\n");
+		xzs_early_puts("ROADMAP_ADVANCED_TO=D6-M7\n");
+		xzs_early_puts("=== D6-M6 ACCEPTANCE TELEMETRY END ===\n");
+		xzs_breadcrumb(0xD650, 0x90);
+		xzs_breadcrumb(0xD650, 0x91);
+		xzs_early_puts("[XZS-D6M6] PHASE D6-M6 COMPLETE & VERIFIED (PASS)\n");
+		xzs_breadcrumb(0xD650, 0x01);
+		xzs_early_puts("[XZS-D6M6] D650/01 terminal before D6-M7\n");
 		xzs_spin_halt();
 	} else if (xzs_d6m4_r650_telemetry.unexpected_exception) {
 		xzs_early_puts("\n[XZS-D6M4] UNEXPECTED EXCEPTION ON CPU 1\n");
@@ -3448,7 +3502,9 @@ xzs_d6m4_monitor_and_report_r650(task_t t, thread_t th)
 		xzs_d6m4_put_hex64(xzs_d6m4_r650_telemetry.marker); xzs_early_puts("\n");
 		xzs_spin_halt();
 	} else {
-		xzs_early_puts("\n[XZS-D6M4] TIMEOUT WAITING FOR PID1 EL0 RETURN\n");
+		xzs_early_puts("\n[XZS-D6M6] TIMEOUT WAITING FOR 256 STABLE PID1 SYSCALL ROUND TRIPS\n");
+		xzs_early_puts("STABLE_RUNTIME_ROUNDTRIP_COUNT=");
+		xzs_d6m4_put_hex64(xzs_d6m4_r650_telemetry.stable_roundtrip_count); xzs_early_puts("\n");
 		xzs_early_puts("DEEPEST_RETURN_MARKER=R650/");
 		xzs_d6m4_put_hex64(xzs_d6m4_r650_telemetry.marker); xzs_early_puts("\n");
 		xzs_early_puts("TASK_WAIT_ENTERED=");

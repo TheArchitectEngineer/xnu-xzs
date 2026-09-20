@@ -808,12 +808,13 @@ sleh_synchronous(arm_context_t *context, uint64_t esr, vm_offset_t far, __unused
 				goto xzs_d6m5_dispatch_first_svc;
 			}
 		} else if (is_user && class == ESR_EC_SVC_64 &&
-		    xzs_d6m4_r650_telemetry.syscall_return_prepared != 0) {
+		    xzs_d6m4_r650_telemetry.syscall_return_prepared != 0 &&
+		    xzs_d6m4_r650_telemetry.post_svc_trapped == 0) {
 			boolean_t post_signature_valid =
 			    ESR_ISS(esr) == 0x80 &&
-			    elr == 0x0000000100000310ULL &&
-			    ss64->x[0] == 0 &&
-			    ss64->x[16] == 1;
+			    elr == 0x000000010000030cULL &&
+			    ss64->x[0] == 26 &&
+			    ss64->x[16] == 20;
 
 			xzs_d6m4_r650_telemetry.post_esr = esr;
 			xzs_d6m4_r650_telemetry.post_elr = elr;
@@ -824,6 +825,17 @@ sleh_synchronous(arm_context_t *context, uint64_t esr, vm_offset_t far, __unused
 			xzs_d6m4_r650_telemetry.post_signature_valid = post_signature_valid ? 1 : 0;
 			xzs_d6m4_r650_telemetry.post_svc_trapped = 1;
 			__asm__ volatile("dmb ish" ::: "memory");
+
+			/* The first post-write SVC is now the stable PID1 getpid loop. */
+			if (post_signature_valid) {
+				goto xzs_d6m5_dispatch_first_svc;
+			}
+		} else if (is_user && class == ESR_EC_SVC_64 &&
+		    xzs_d6m4_r650_telemetry.post_signature_valid != 0 &&
+		    ESR_ISS(esr) == 0x80 &&
+		    elr == 0x000000010000030cULL && ss64->x[16] == 20) {
+			/* Subsequent known-safe getpid calls remain on the native path. */
+			goto xzs_d6m5_dispatch_first_svc;
 		} else {
 			xzs_d6m4_r650_telemetry.unexpected_exception = 1;
 			__asm__ volatile("dmb ish" ::: "memory");

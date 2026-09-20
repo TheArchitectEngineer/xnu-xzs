@@ -258,12 +258,26 @@ To ensure engineering rigor and prevent technical debt conflation, every non-ups
 
 ---
 
+### 18. Synthetic PID1 Console Descriptor Bootstrap
+* **Name**: `pid1_console_stdio_bootstrap`
+* **File / Function**: [`src/xnu/bsd/kern/mach_loader.c`](../src/xnu/bsd/kern/mach_loader.c) — `xzs_d6m6_setup_console_stdio()`
+* **Reason**: The project-specific PID1 is constructed directly from `kernproc` and does not yet run the normal userspace launchd initialization that opens `/dev/console`; the inherited fd 0/1/2 slots are therefore empty.
+* **Classification**: `XZS-WORKAROUND`
+* **What canonical behavior is being bypassed**: Userspace init opening and assigning its own standard descriptors.
+* **Why acceptable for current Phase**: Uses unmodified native `open1()`, VFS, fileproc, vnode, and device mechanisms with PID1's thread/credential context. It does not special-case `read()` or `write()` and gives PID1 ordinary descriptor ownership/cleanup semantics.
+* **Dependency**: A fuller PID1 capable of issuing `open()`/`dup2()` before starting the shell.
+* **Removal condition**: PID1 or `/bin/sh` establishes fd 0/1/2 itself through verified userspace syscalls.
+* **Future phase where it must be revisited**: D7 shell hardening.
+* **Hardware evidence**: Pending D6-M6 physical verification.
+
+---
+
 ## 3. Summary of Workaround Distribution
 
 ```text
-Total Active Items: 17
+Total Active Items: 18
 ├── XZS-COMPAT:     1 (CTRR absence handling)
-├── XZS-WORKAROUND: 14 (Subsystem defers, sizing caps, priming, error propagation)
+├── XZS-WORKAROUND: 15 (Subsystem defers, sizing caps, priming, error propagation, PID1 stdio bootstrap)
 └── XZS-SELFTEST:   2 (Bounded IOMedia wait, synthetic sd0a rootdev)
 ```
 
