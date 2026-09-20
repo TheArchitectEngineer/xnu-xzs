@@ -1155,7 +1155,16 @@ bsd_init(void)
 		printf("cannot mount root, errno = %d\n", err);
 	}
 
+#if CONFIG_XZS_BRINGUP
+	/*
+	 * The minimal XZS device tree does not publish Apple's IOPlatformExpert
+	 * service.  IOSecureBSDRoot waits 30 seconds for that service and then
+	 * asserts, even though the read-only md0 root has already mounted.
+	 */
+	xzs_early_puts("[XZS-WORKAROUND] IOSecureBSDRoot skipped: no IOPlatformExpert service\n");
+#else
 	IOSecureBSDRoot(rootdevice);
+#endif
 
 	mountlist.tqh_first->mnt_flag |= MNT_ROOTFS;
 
@@ -2807,4 +2816,3 @@ xzs_d5m2_r8_seal(dev_t root_dev, const char *root_name)
 
 	xzs_early_puts("[XZS-RAMDISK] PHASE D5-M2-R8 FINAL SEAL COMPLETE & VERIFIED (PASS)\n\n");
 }
-
