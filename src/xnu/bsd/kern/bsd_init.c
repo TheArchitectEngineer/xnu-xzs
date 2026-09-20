@@ -1182,9 +1182,16 @@ bsd_init(void)
 	init_rootvnode = NULLVP;  /* use rootvnode after this point */
 
 #if CONFIG_XZS_BRINGUP
-	/* Phase D5-M4: Real XZSFS Mount & Root Vnode Probe */
+	/* Phase D5-M4: Real XZSFS Mount & Root Vnode verification. */
 	extern int xzsfs_d5m4_probe(dev_t rootdev);
 	xzsfs_d5m4_probe(rootdev);
+
+	/*
+	 * Phase D5-M5 pre-devfs probe: exercise canonical namei against the
+	 * installed root.  The devfs half runs at the normal bsd_init mount site.
+	 */
+	extern int xzsfs_d5m5_predevfs_probe(void);
+	xzsfs_d5m5_predevfs_probe();
 #endif
 
 
@@ -1258,7 +1265,17 @@ bsd_init(void)
 		char mounthere[] = "/dev"; /* !const because of internal casting */
 
 		bsd_init_kprintf("calling devfs_kernel_mount\n");
+#if CONFIG_XZS_BRINGUP
+		/* D5-M5 uses the canonical devfs mount site, then halts before PID 1. */
+		extern void xzs_breadcrumb(uint32_t cp, uint32_t err);
+		extern int xzsfs_d5m5_postdevfs_probe(int devfs_mount_error);
+		xzs_breadcrumb(0xD540, 0x30);
+		xzs_early_puts("[XZSFS] canonical devfs_kernel_mount('/dev') ENTER\n");
+		int devfs_mount_error = devfs_kernel_mount(mounthere);
+		xzsfs_d5m5_postdevfs_probe(devfs_mount_error);
+#else
 		devfs_kernel_mount(mounthere);
+#endif
 	}
 #endif /* DEVFS */
 

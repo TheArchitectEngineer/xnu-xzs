@@ -89,4 +89,12 @@ int xzsfs_d5m3_probe(dev_t rootdev);
 /* D5-M4 Silicon Diagnostic Probe */
 int xzsfs_d5m4_probe(dev_t rootdev);
 
+/* D5-M5 Namespace + devfs/console Silicon Diagnostic Probes */
+int xzsfs_d5m5_predevfs_probe(void);
+int xzsfs_d5m5_postdevfs_probe(int devfs_mount_error);
+
+/* D5-M6 Final Seal Diagnostic Probe */
+int xzsfs_d5m6_probe(void);
+
 #endif /* _XZSFS_H_ */
+
