@@ -15214,6 +15214,21 @@ xzs_audit_user_text_pte(pmap_t pmap, vm_map_address_t va, const char *tag)
 	pt_entry_t *pte_p = pmap_pte(pmap, va);
 	if (pte_p != PT_ENTRY_NULL) {
 		uint64_t pte = *pte_p;
+		if (tag != NULL) {
+			if (tag[0] == 'B') {
+				xzs_early_puts("TEXT_L3_PTE_BEFORE=");
+				xzs_d6m4_put_hex64(pte);
+				xzs_early_puts("\n");
+			} else if (tag[0] == 'A') {
+				xzs_early_puts("TEXT_L3_PTE_AFTER_NATIVE_AF=");
+				xzs_d6m4_put_hex64(pte);
+				xzs_early_puts("\n");
+			} else if (tag[0] == 'F') {
+				xzs_early_puts("TEXT_L3_PTE_FINAL=");
+				xzs_d6m4_put_hex64(pte);
+				xzs_early_puts("\n");
+			}
+		}
 		xzs_early_puts("TEXT_L3_PTE_RAW=");
 		xzs_d6m4_put_hex64(pte);
 		xzs_early_puts("\n");
@@ -15245,6 +15260,17 @@ xzs_audit_user_text_pte(pmap_t pmap, vm_map_address_t va, const char *tag)
 		xzs_early_puts(uxn ? "1\n" : "0\n");
 		xzs_early_puts("TEXT_PXN=");
 		xzs_early_puts(pxn ? "1\n" : "0\n");
+
+		pmap_paddr_t pa = pte_to_pa(pte);
+		if (pa_valid(pa)) {
+			unsigned int pai = pa_index(pa);
+			boolean_t pp_ref = ppattr_test_bits(pai, PP_ATTR_REFERENCED);
+			boolean_t pp_reffault = ppattr_test_reffault(pai);
+			xzs_early_puts("PP_ATTR_REFERENCED=");
+			xzs_early_puts(pp_ref ? "1\n" : "0\n");
+			xzs_early_puts("PP_ATTR_REFFAULT=");
+			xzs_early_puts(pp_reffault ? "1\n" : "0\n");
+		}
 
 		boolean_t el0_read = (ap_bits == AP_RORO || ap_bits == AP_RWRW);
 		boolean_t el0_write = (ap_bits == AP_RWRW);

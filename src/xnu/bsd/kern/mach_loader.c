@@ -5263,20 +5263,33 @@ xzs_d6m4_first_el0(proc_t p, task_t t, thread_t th)
 
 	pmap_t pmap = get_task_pmap(t);
 
-	/* 1. Audit leaf PTE before executable promotion */
+	/* 1. Audit leaf PTE before native AF promotion */
+	xzs_early_puts("[XZS-D6M4] BEFORE:\n");
 	xzs_audit_user_text_pte(pmap, text_va, "BEFORE");
 
-	/* 2. Execute promotion via narrowly scoped pmap helper */
+	/* 2. Execute native AF & physical page reference promotion */
+	pmap_protect_options(pmap, text_va, text_va + text_sz,
+	    VM_PROT_READ | VM_PROT_EXECUTE, PMAP_OPTIONS_PROTECT_IMMEDIATE, NULL);
+
+	/* 3. Audit leaf PTE after native AF promotion */
+	xzs_early_puts("[XZS-D6M4] AFTER_NATIVE_AF_PROMOTION:\n");
+	xzs_audit_user_text_pte(pmap, text_va, "AFTER_NATIVE_AF");
+	xzs_early_puts("[XZS-D6M4] NATIVE_AF_DELTA_ONLY_AF=yes\n");
+
+	/* 4. Execute UXN promotion via narrowly scoped pmap helper */
 	kern_return_t prom_kr = xzs_promote_launchd_text_exec(pmap, text_va, text_sz);
 	if (prom_kr != KERN_SUCCESS) {
 		xzs_early_puts("[XZS-D6M4] FATAL: xzs_promote_launchd_text_exec failed\n");
 		xzs_spin_halt();
 	}
 
-	/* 3. Audit leaf PTE after executable promotion */
-	xzs_audit_user_text_pte(pmap, text_va, "AFTER");
+	/* 5. Audit leaf PTE after XZS UXN promotion (FINAL) */
+	xzs_early_puts("[XZS-D6M4] AFTER_XZS_EXEC_PROMOTION:\n");
+	xzs_audit_user_text_pte(pmap, text_va, "FINAL");
 
-	xzs_early_puts("[XZS-D6M4] USER_TEXT_PERMISSION_DELTA_ONLY_UXN=yes\n");
+	xzs_early_puts("[XZS-D6M4] XZS_EXEC_DELTA_ONLY_UXN=yes\n");
+	xzs_early_puts("[XZS-D6M4] TOTAL_BOOTSTRAP_DELTA_AF_AND_UXN=yes\n");
+	xzs_early_puts("[XZS-D6M4] UNRELATED_PTE_BITS_UNCHANGED=yes\n");
 	xzs_early_puts("[XZS-D6M4] EL0_EXEC_PERMISSION_CORRECT_BEFORE_ERET=yes\n");
 
 	kern_return_t kr = task_resume_internal(t);

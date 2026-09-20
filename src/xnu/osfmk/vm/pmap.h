@@ -1088,6 +1088,7 @@ pmap_txm_allocate_page(void);
 #endif /* CONFIG_SPTM */
 
 #if CONFIG_XZS_BRINGUP
+extern void pmap_protect_options(pmap_t map, vm_map_offset_t s, vm_map_offset_t e, vm_prot_t prot, unsigned int options, void *arg);
 extern void xzs_audit_user_text_pte(pmap_t pmap, vm_map_address_t va, const char *tag);
 extern kern_return_t xzs_promote_launchd_text_exec(pmap_t pmap, vm_map_address_t va, vm_map_size_t size);
 #endif
