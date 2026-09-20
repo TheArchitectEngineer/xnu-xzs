@@ -178,6 +178,11 @@ int     vttoif_tab[9] = {
 	S_IFSOCK, S_IFIFO, S_IFMT,
 };
 
+#if CONFIG_XZS_BRINGUP
+extern volatile int xzs_d6m6_stdio_probe_active;
+extern void xzs_breadcrumb(uint32_t cp, uint32_t err);
+#endif
+
 extern int paniclog_append_noflush(const char *format, ...);
 
 /* XXX next prototytype should be from libsa/stdlib.h> but conflicts libkern */
@@ -8356,6 +8361,11 @@ vn_authorize_unlink(vnode_t dvp, vnode_t vp, struct componentname *cnp, vfs_cont
 int
 vn_authorize_open_existing(vnode_t vp, struct componentname *cnp, int fmode, vfs_context_t ctx, void *reserved)
 {
+#if CONFIG_XZS_BRINGUP
+	if (xzs_d6m6_stdio_probe_active) {
+		xzs_breadcrumb(0xD651, 0x60);
+	}
+#endif
 	/* Open of existing case */
 	kauth_action_t action;
 	int error = 0;
@@ -8410,7 +8420,17 @@ vn_authorize_open_existing(vnode_t vp, struct componentname *cnp, int fmode, vfs
 	 * be allowed.
 	 */
 	if (!(vnode_isshadow(vp) && vnode_isnamedstream(vp))) {
+#if CONFIG_XZS_BRINGUP
+		if (xzs_d6m6_stdio_probe_active) {
+			xzs_breadcrumb(0xD651, 0x61);
+		}
+#endif
 		error = mac_vnode_check_open(ctx, vp, fmode);
+#if CONFIG_XZS_BRINGUP
+		if (xzs_d6m6_stdio_probe_active) {
+			xzs_breadcrumb(0xD651, 0x62);
+		}
+#endif
 		if (error) {
 			return error;
 		}
@@ -8483,7 +8503,17 @@ vn_authorize_open_existing(vnode_t vp, struct componentname *cnp, int fmode, vfs
 			action |= KAUTH_VNODE_EXECUTE;
 		}
 	}
+#if CONFIG_XZS_BRINGUP
+	if (xzs_d6m6_stdio_probe_active) {
+		xzs_breadcrumb(0xD651, 0x63);
+	}
+#endif
 	error = vnode_authorize(vp, NULL, action, ctx);
+#if CONFIG_XZS_BRINGUP
+	if (xzs_d6m6_stdio_probe_active) {
+		xzs_breadcrumb(0xD651, 0x6B);
+	}
+#endif
 #if NAMEDSTREAMS
 	if (error == EACCES) {
 		/*
@@ -8498,6 +8528,11 @@ vn_authorize_open_existing(vnode_t vp, struct componentname *cnp, int fmode, vfs
 	}
 #endif
 
+#if CONFIG_XZS_BRINGUP
+	if (xzs_d6m6_stdio_probe_active) {
+		xzs_breadcrumb(0xD651, 0x6C);
+	}
+#endif
 	return error;
 }
 
@@ -9023,9 +9058,19 @@ vnode_authorize(vnode_t vp, vnode_t dvp, kauth_action_t action, vfs_context_t ct
 		return 0;
 	}
 
+#if CONFIG_XZS_BRINGUP
+	if (xzs_d6m6_stdio_probe_active) {
+		xzs_breadcrumb(0xD651, 0x64);
+	}
+#endif
 	error = 0;
 	result = kauth_authorize_action(vnode_scope, vfs_context_ucred(ctx), action,
 	    (uintptr_t)ctx, (uintptr_t)vp, (uintptr_t)dvp, (uintptr_t)&error);
+#if CONFIG_XZS_BRINGUP
+	if (xzs_d6m6_stdio_probe_active) {
+		xzs_breadcrumb(0xD651, 0x65);
+	}
+#endif
 	if (result == EPERM) {          /* traditional behaviour */
 		result = EACCES;
 	}
@@ -10139,7 +10184,17 @@ vnode_authorize_callback(__unused kauth_cred_t cred, __unused void *idata,
 		goto out;
 	}
 defer:
+#if CONFIG_XZS_BRINGUP
+	if (xzs_d6m6_stdio_probe_active) {
+		xzs_breadcrumb(0xD651, 0x66);
+	}
+#endif
 	result = vnode_authorize_callback_int(action, ctx, vp, dvp, (int *)arg3);
+#if CONFIG_XZS_BRINGUP
+	if (xzs_d6m6_stdio_probe_active) {
+		xzs_breadcrumb(0xD651, 0x67);
+	}
+#endif
 
 	if (result == KAUTH_RESULT_ALLOW && cvp != NULLVP) {
 		KAUTH_DEBUG("%p - caching action = %x", cvp, action);
@@ -10396,10 +10451,20 @@ vnode_authorize_callback_int(kauth_action_t action, vfs_context_t ctx,
 		VATTR_WANTED(&va, va_gid);
 		VATTR_WANTED(&va, va_acl);
 	}
+#if CONFIG_XZS_BRINGUP
+	if (xzs_d6m6_stdio_probe_active) {
+		xzs_breadcrumb(0xD651, 0x68);
+	}
+#endif
 	if ((result = vnode_getattr(vp, &va, ctx)) != 0) {
 		KAUTH_DEBUG("%p    ERROR - failed to get vnode attributes - %d", vp, result);
 		goto out;
 	}
+#if CONFIG_XZS_BRINGUP
+	if (xzs_d6m6_stdio_probe_active) {
+		xzs_breadcrumb(0xD651, 0x69);
+	}
+#endif
 	VATTR_WANTED(&va, va_type);
 	VATTR_RETURN(&va, va_type, vnode_vtype(vp));
 
@@ -10419,6 +10484,11 @@ vnode_authorize_callback_int(kauth_action_t action, vfs_context_t ctx,
 		VATTR_RETURN(&dva, va_type, vnode_vtype(vcp->dvp));
 	}
 
+#if CONFIG_XZS_BRINGUP
+	if (xzs_d6m6_stdio_probe_active) {
+		xzs_breadcrumb(0xD651, 0x6A);
+	}
+#endif
 	result = vnode_attr_authorize_internal(vcp, vp->v_mount, rights, is_suser,
 	    &found_deny, noimmutable, parent_authorized_for_delete_child);
 out:

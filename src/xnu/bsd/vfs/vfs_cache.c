@@ -1639,7 +1639,19 @@ vnode_cache_authorized_action(vnode_t vp, vfs_context_t ctx, kauth_action_t acti
 
 		microuptime(&tv);
 	}
+#if CONFIG_XZS_BRINGUP
+	extern volatile int xzs_d6m6_stdio_probe_active;
+	extern void xzs_breadcrumb(uint32_t cp, uint32_t err);
+	if (xzs_d6m6_stdio_probe_active) {
+		xzs_breadcrumb(0xD651, 0x78);
+	}
+#endif
 	NAME_CACHE_LOCK();
+#if CONFIG_XZS_BRINGUP
+	if (xzs_d6m6_stdio_probe_active) {
+		xzs_breadcrumb(0xD651, 0x79);
+	}
+#endif
 
 	tcred = vnode_cred(vp);
 	if (tcred == ucred) {
@@ -1666,6 +1678,11 @@ vnode_cache_authorized_action(vnode_t vp, vfs_context_t ctx, kauth_action_t acti
 	vp->v_authorized_actions |= action;
 
 	NAME_CACHE_UNLOCK();
+#if CONFIG_XZS_BRINGUP
+	if (xzs_d6m6_stdio_probe_active) {
+		xzs_breadcrumb(0xD651, 0x7A);
+	}
+#endif
 
 	if (IS_VALID_CRED(tcred)) {
 		kauth_cred_unref(&tcred);
