@@ -18,7 +18,7 @@ Progress is strictly gated by physical hardware verification. Speculative percen
 | **Phase D3** | GUID Partition Table (GPT) discovery & partition enumeration | **COMPLETE** |
 | **Phase D4** | Block-storage driver integration (`bdevsw` / `disk0`) | **COMPLETE** |
 | **Phase D5** | Real root filesystem mount (RAMDisk XZSFS) | **COMPLETE / SEALED** |
-| **Phase D6** | PID 1 / First EL0 userspace (`initproc` / launchd) | **BLOCKED AT D6-M4 (`D630/32`); THREE-FIX HARD STOP** |
+| **Phase D6** | PID 1 / First EL0 userspace (`initproc` / launchd) | **IN PROGRESS — D6-M1..M5 COMPLETE / SEALED; D6-M6 NEXT** |
 | **Phase D7** | Interactive serial shell (`/bin/sh` or micro-shell) | **NOT STARTED** |
 | **Phase G** | Restore deferred subsystems (Skywalk, DTrace, jetsam buffer) | **NOT STARTED** |
 | **Phase H** | Networking and platform device drivers | **NOT STARTED** |
@@ -225,13 +225,13 @@ Progress is strictly gated by physical hardware verification. Speculative percen
 
 ### Phase D6 — PID 1 / First EL0 Userspace
 * **Goal**: Bootstrap the first Mach/BSD userspace process (`initproc` / PID 1) from the root filesystem and transition from EL1 to EL0.
-* **Status**: **IN PROGRESS — D6-M1, D6-M2, D6-M3, D6-M4 COMPLETE / SEALED ON HARDWARE; D6-M5 NOT STARTED**
+* **Status**: **IN PROGRESS — D6-M1 THROUGH D6-M5 COMPLETE / SEALED ON HARDWARE; D6-M6 NOT STARTED**
 * **Milestones**:
   - **D6-M1 (PID1 Skeleton)**: **COMPLETE / SEALED** (Created and validated BSD `initproc` (PID 1, PPID 0), Mach task (non-kernel), Mach thread, and embedded uthread; zero userspace execution; full D5 regression prefix).
   - **D6-M2 (Minimal Mach-O Loader)**: **COMPLETE / SEALED** (Opened `/sbin/launchd`, validated ARM64 Mach-O header/load commands, enumerated segments, resolved entry PC `0x1000002f0`; verified static/no-dyld contract; no VM mapping; zero EL0 entry).
   - **D6-M3 (User VM + Initial Stack)**: **COMPLETE / SEALED** (Mapped and content-verified `__TEXT`, finalized current and maximum protection to RX, preserved hard PAGEZERO, left `__LINKEDIT` unmapped, constructed a native Darwin initial frame on an RW/NX stack, installed and read back PC/SP, and verified zero unexpected RWX mappings while PID1 remained suspended).
   - **D6-M4 (First EL0 Transition)**: **COMPLETE / SEALED** (Released PID1 task/thread holds, verified full return-to-user path `D630/33`..`37` -> `eret`, executed canonical 5-instruction `/sbin/launchd` EL0 sequence on hardware, captured canonical `svc #0x80` before dispatch with full register signature; `FIRST_REAL_EL0_INSTRUCTION_HARDWARE_VERIFIED=yes`, `CANONICAL_SVC64_SIGNATURE_HARDWARE_VERIFIED=yes`).
-  - **D6-M5 (First Syscall Round-Trip)**: **NOT STARTED** (Issue userspace `svc`, trap into XNU syscall dispatcher, execute kernel handler, and return to EL0).
+  - **D6-M5 (First Syscall Round-Trip)**: **COMPLETE / SEALED** (Routed canonical `svc #0x80`, `x16=4` through normal `handle_svc()` and `unix_syscall()` dispatch to the real `sysent[4]` `write()` handler; hardware verified deterministic `EBADF=9` error ABI, normal return to EL0, and a post-return instruction signature at `ELR=0x100000310`).
   - **D6-M6 (Minimal Stable PID1 Runtime)**: **NOT STARTED** (Execute minimal deterministic `/sbin/launchd` userspace runtime loop/exit).
   - **D6-M7 (Final D6 Seal)**: **NOT STARTED** (Regression verification, independent verifier, evidence archive, and roadmap seal).
 * **D6-M1 Hardware Evidence**:
@@ -264,9 +264,18 @@ Progress is strictly gated by physical hardware verification. Speculative percen
   - Hardware-verified first EL0 execution: `FIRST_REAL_EL0_INSTRUCTION_HARDWARE_VERIFIED=yes`, `CANONICAL_SVC64_SIGNATURE_HARDWARE_VERIFIED=yes`.
   - Register state at `svc #0x80`: `ESR_EL1=0x56000080` (SVC64, imm=0x80), `ELR_EL1=0x100000304`, `SPSR_EL1=0x0`, `SP_EL0=0x16fdfffb0`, `x0=1`, `x1=0x100000320`, `x2=0x1a`, `x16=4` (SYS_write).
   - Boundaries strictly preserved: `SYSCALL_DISPATCH_REACHED=no`, `FIRST_SYSCALL_ROUNDTRIP_COMPLETE=no`.
-* **Hardware Acceptance Criteria**: **SATISFIED FOR D6-M4**. Full return-to-user path, first 5 EL0 instructions of `/sbin/launchd`, and canonical SVC64 entry verified on physical silicon.
-* **Known Blockers**: None for D6-M4. D6-M5 (First Syscall Round-Trip) not yet started.
-* **Dependencies**: Phase D5 (COMPLETE / SEALED), Phase D6-M1 through D6-M4 (COMPLETE / SEALED).
+* **D6-M5 Hardware Evidence**:
+  - Hardware-tested source commit: `6669437fbe9d4c9a5f33bb87fc1a443a4346b703`.
+  - Boot image SHA-256: `87d2b6c609f3b7348e347d53db7de6655eef849dffe51054c71ba2887098ccac`.
+  - Raw console log SHA-256: `dd084c9e3901b86fb4513fc0aadafc3dd7d4ef88917134cd05b09adb49f51747`.
+  - Checkpoint sequence: `D640/00`, `/10`, `/20`, `/30`, `/40`, `/50`, `/60`, `/70`, `/90`, `/91`, `/01` (PASS; automated return to Fastboot at +7s).
+  - `scripts/verify_d6m5_acceptance.py`: **PASS**, including full D5/D6-M1/D6-M2/D6-M3 prefix and D6-M4 regression mode.
+  - Real path: `sleh_synchronous` -> `handle_svc` -> `unix_syscall` -> `sysent[4]` -> `write` -> `arm_prepare_syscall_return` -> EL0.
+  - Hardware return: `SYSCALL_RETURN_VALUE=9`, `SYSCALL_RETURN_ERROR=EBADF`, carry set. PID1 fd 1 is not yet bound to `/dev/console`.
+  - Post-return proof: second SVC at `ELR=0x100000310`, `x0=0`, `x16=1`, carry set; `POST_SYSCALL_EL0_INSTRUCTION_EXECUTED=yes`.
+* **Hardware Acceptance Criteria**: **SATISFIED THROUGH D6-M5**. First real BSD syscall dispatcher/handler/return round-trip and subsequent EL0 execution verified on physical silicon.
+* **Known Blockers**: None for D6-M5. D6-M6 (Minimal Stable PID1 Runtime) is not started.
+* **Dependencies**: Phase D5 (COMPLETE / SEALED), Phase D6-M1 through D6-M5 (COMPLETE / SEALED).
 
 ---
 
