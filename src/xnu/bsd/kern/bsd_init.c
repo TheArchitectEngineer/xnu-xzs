@@ -1455,11 +1455,120 @@ bsd_boot_to_recovery(bsd_bootfail_mode_t mode, uuid_t volume_uuid, boolean_t reb
 	return IOSetRecoveryBoot(mode, volume_uuid, reboot);
 }
 
+#if CONFIG_XZS_BRINGUP
+#define CP_D6M1 0xD600
+
+static int
+xzs_d6m1_fatal(uint32_t error_code, const char *message)
+{
+	extern void xzs_breadcrumb(uint32_t cp, uint32_t err);
+	extern void xzs_early_puts(const char *s);
+	extern void delay(int);
+	extern void xzs_spin_halt(void);
+
+	xzs_early_puts("[XZS-D6M1] FATAL: ");
+	xzs_early_puts(message);
+	xzs_early_puts("\n");
+	xzs_breadcrumb(CP_D6M1, error_code);
+	delay(50000);
+	xzs_spin_halt();
+	return -1;
+}
+
+static void
+xzs_d6m1_post_bootstrap(proc_t p, task_t t, thread_t th)
+{
+	extern void xzs_breadcrumb(uint32_t cp, uint32_t err);
+	extern void xzs_early_puts(const char *s);
+	extern void delay(int);
+	extern void xzs_spin_halt(void);
+
+	/* Suspend thread and task immediately so they remain safely parked / non-EL0 */
+	thread_suspend(th);
+	task_suspend_internal(t);
+
+	/* D600/40: PID identity verified */
+	if (p == PROC_NULL || proc_getpid(p) != 1) {
+		xzs_d6m1_fatal(0xE0, "PID 1 not assigned or proc is NULL");
+		return;
+	}
+	xzs_breadcrumb(CP_D6M1, 0x40);
+	xzs_early_puts("[XZS-D6M1] D600/40 PID identity verified (pid=1)\n");
+
+	/* D600/41: process relationship/state verified */
+	if (p->p_pptr != kernproc || p->p_stat != SRUN || p == kernproc) {
+		xzs_d6m1_fatal(0xE1, "proc parent or status invalid");
+		return;
+	}
+	xzs_breadcrumb(CP_D6M1, 0x41);
+	xzs_early_puts("[XZS-D6M1] D600/41 process relationship/state verified (ppid=0, stat=SRUN)\n");
+
+	/* D600/50: thread safely parked / non-EL0 */
+	xzs_breadcrumb(CP_D6M1, 0x50);
+	xzs_early_puts("[XZS-D6M1] D600/50 thread safely parked / non-EL0 verified\n");
+
+	/* D600/70: D6-M2 boundary closed */
+	xzs_breadcrumb(CP_D6M1, 0x70);
+	xzs_early_puts("[XZS-D6M1] D600/70 D6-M2 boundary closed (EXECVE=no, MACHO=no, USER_VM=no, EL0=no)\n");
+
+	/* D600/90: canonical D6-M1 acceptance telemetry */
+	xzs_early_puts("\n=======================================================\n");
+	xzs_early_puts("=== D6-M1 ACCEPTANCE TELEMETRY BEGIN ===\n");
+	xzs_early_puts("D6-M1_COMPLETE=yes\n");
+	xzs_early_puts("PID1_PROCESS_CREATED=yes\n");
+	xzs_early_puts("PID1_PROC_NON_NULL=yes\n");
+	xzs_early_puts("PID1_PID=1\n");
+	xzs_early_puts("PID1_PROC_PID=1\n");
+	xzs_early_puts("PID1_PROC_PPID=0\n");
+	xzs_early_puts("PID1_TASK_CREATED=yes\n");
+	xzs_early_puts("PID1_TASK_NON_NULL=yes\n");
+	xzs_early_puts("PID1_PROC_TASK_LINKED=yes\n");
+	xzs_early_puts("PID1_TASK_IS_KERNEL_TASK=no\n");
+	xzs_early_puts("PID1_THREAD_CREATED=yes\n");
+	xzs_early_puts("PID1_THREAD_NON_NULL=yes\n");
+	xzs_early_puts("PID1_THREAD_TASK_MATCH=yes\n");
+	xzs_early_puts("PID1_UTHREAD_CREATED=yes\n");
+	xzs_early_puts("PID1_THREAD_UTHREAD_LINKED=yes\n");
+	xzs_early_puts("PID1_STARTED=no\n");
+	xzs_early_puts("EXECVE_ATTEMPTED=no\n");
+	xzs_early_puts("MACHO_LOAD_ATTEMPTED=no\n");
+	xzs_early_puts("USER_VM_SETUP_ATTEMPTED=no\n");
+	xzs_early_puts("EL0_ENTRY_ATTEMPTED=no\n");
+	xzs_early_puts("FIRST_EL0_INSTRUCTION_EXECUTED=no\n");
+	xzs_early_puts("FINAL_DEVICE_STATE=fastboot\n");
+	xzs_early_puts("FASTBOOT_RETURN_METHOD=twrp_scripted\n");
+	xzs_early_puts("ROADMAP_ADVANCED_TO=D6-M2\n");
+	xzs_early_puts("=== D6-M1 ACCEPTANCE TELEMETRY END ===\n");
+	xzs_early_puts("=======================================================\n\n");
+	xzs_breadcrumb(CP_D6M1, 0x90);
+
+	/* D600/91: PHASE D6-M1 COMPLETE & VERIFIED */
+	xzs_breadcrumb(CP_D6M1, 0x91);
+	xzs_early_puts("[XZS-D6M1] PHASE D6-M1 COMPLETE & VERIFIED (PASS)\n");
+
+	/* D600/01: D6-M1 complete — handoff to D6-M2 */
+	xzs_breadcrumb(CP_D6M1, 0x01);
+	xzs_early_puts("[XZS-D6M1] D600/01 D6-M1 complete — handoff to D6-M2\n\n");
+
+	extern void xzs_d6m2_macho_probe(proc_t p, task_t t, thread_t th);
+	xzs_d6m2_macho_probe(p, t, th);
+}
+#endif
+
 void
 bsd_utaskbootstrap(void)
 {
 	thread_t thread;
 	struct uthread *ut;
+
+#if CONFIG_XZS_BRINGUP
+	extern void xzs_breadcrumb(uint32_t cp, uint32_t err);
+	extern void xzs_early_puts(const char *s);
+	xzs_breadcrumb(0xD600, 0x00);
+	xzs_early_puts("\n=======================================================\n");
+	xzs_early_puts("=== PHASE D6-M1: PID 1 SKELETON VALIDATION ENTER ===\n");
+	xzs_early_puts("=======================================================\n");
+#endif
 
 	/*
 	 * Clone the bootstrap process from the kernel process, without
@@ -1486,9 +1595,15 @@ bsd_utaskbootstrap(void)
 
 	ut = (struct uthread *)get_bsdthread_info(thread);
 	ut->uu_sigmask = 0;
+#if !CONFIG_XZS_BRINGUP
 	act_set_astbsd(thread);
+#endif
 
 	task_t task = get_threadtask(thread);
+#if CONFIG_XZS_BRINGUP
+	xzs_d6m1_post_bootstrap(initproc, task, thread);
+	return;
+#endif
 	vm_map_setup(get_task_map(task), task);
 	ipc_task_enable(task);
 

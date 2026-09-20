@@ -1391,6 +1391,16 @@ LEXT(return_to_kernel)
 	.globl EXT(thread_bootstrap_return)
 LEXT(thread_bootstrap_return)
 	ARM64_PROLOG
+#if CONFIG_XZS_BRINGUP
+	// R650/30: thread_bootstrap_return reached
+	adrp	x0, EXT(xzs_d6m4_r650_telemetry)@page
+	add		x0, x0, EXT(xzs_d6m4_r650_telemetry)@pageoff
+	mov		x1, #0x30
+	str		x1, [x0, #0]
+	mov		x1, #1
+	str		x1, [x0, #40]		// bootstrap_ret_entry = 1
+	dmb		ish
+#endif
 #if CONFIG_DTRACE
 	bl		EXT(dtrace_thread_bootstrap)
 #endif
@@ -1405,6 +1415,16 @@ LEXT(thread_bootstrap_return)
 	.globl EXT(arm64_thread_exception_return)
 LEXT(arm64_thread_exception_return)
 	ARM64_PROLOG
+#if CONFIG_XZS_BRINGUP
+	// R650/40: arm64_thread_exception_return entered
+	adrp	x0, EXT(xzs_d6m4_r650_telemetry)@page
+	add		x0, x0, EXT(xzs_d6m4_r650_telemetry)@pageoff
+	mov		x1, #0x40
+	str		x1, [x0, #0]
+	mov		x1, #1
+	str		x1, [x0, #48]		// exc_return_entry = 1
+	dmb		ish
+#endif
 	mrs		x0, TPIDR_EL1
 	LOAD_USER_PCB	dst=x21, src=x0, tmp=x28
 	mov		x28, xzr
@@ -1436,7 +1456,12 @@ check_user_asts:
 
 	msr		DAIFSet, #DAIFSC_ALL				// Disable exceptions
 	ldr		x4, [x3, ACT_CPUDATAP]				// Get current CPU data pointer
+#if CONFIG_XZS_BRINGUP
+	str		wzr, [x4, CPU_PENDING_AST]
+	mov		w0, #0
+#else
 	ldr		w0, [x4, CPU_PENDING_AST]			// Get ASTs
+#endif
 	cbz		w0, no_asts							// If no asts, skip ahead
 
 	cbz		x28, user_take_ast					// If we don't need to check PFZ, just handle asts
@@ -1668,6 +1693,16 @@ Lskip_eret_isb:
 #endif /* ERET_NEEDS_ISB */
 
 	/* Restore arm_saved_state64 */
+#if CONFIG_XZS_BRINGUP
+	// R650/50: immediately before user GPR restore and eret
+	adrp	x1, EXT(xzs_d6m4_r650_telemetry)@page
+	add		x1, x1, EXT(xzs_d6m4_r650_telemetry)@pageoff
+	mov		x2, #0x50
+	str		x2, [x1, #0]
+	mov		x2, #1
+	str		x2, [x1, #56]		// before_eret = 1
+	dmb		ish
+#endif
 
 	// Skip x0, x1 - we're using them
 	ldp		x2, x3, [x0, SS64_X2]

@@ -1613,6 +1613,39 @@ const char *task_best_name(task_t task);
 kern_return_t task_set_cs_auxiliary_info(task_t task, uint64_t info);
 uint64_t      task_get_cs_auxiliary_info_kdp(task_t task);
 #endif /* KERNEL_PRIVATE */
+#if CONFIG_XZS_BRINGUP
+struct xzs_d6m4_r650_telemetry {
+	volatile uint64_t marker;               /* 0x00: R650 marker (0x10, 0x20, 0x30, 0x40, 0x50) */
+	volatile uint64_t task_wait_entered;    /* 0x08: R650/10 */
+	volatile uint64_t returnwait_cleared;   /* 0x10 */
+	volatile uint64_t post_sig_complete;    /* 0x18 */
+	volatile uint64_t before_bootstrap_ret; /* 0x20: R650/20 */
+	volatile uint64_t bootstrap_ret_entry;  /* 0x28: R650/30 */
+	volatile uint64_t exc_return_entry;     /* 0x30: R650/40 */
+	volatile uint64_t before_eret;          /* 0x38: R650/50 */
+	volatile uint64_t sp_task_wait;         /* 0x40 */
+	volatile uint64_t cpu_id;               /* 0x48 */
+
+	/* Exception telemetry captured in SLEH hook */
+	volatile uint64_t svc_trapped;          /* 0x50 */
+	volatile uint64_t signature_valid;      /* 0x58 */
+	volatile uint64_t unexpected_exception; /* 0x60 */
+	volatile uint64_t esr;                  /* 0x68 */
+	volatile uint64_t elr;                  /* 0x70 */
+	volatile uint64_t far;                  /* 0x78 */
+	volatile uint64_t spsr;                 /* 0x80 */
+	volatile uint64_t sp_el0;               /* 0x88 */
+	volatile uint64_t x0;                   /* 0x90 */
+	volatile uint64_t x1;                   /* 0x98 */
+	volatile uint64_t x2;                   /* 0xA0 */
+	volatile uint64_t x16;                  /* 0xA8 */
+	volatile uint64_t svc_imm;              /* 0xB0 */
+	volatile uint64_t exc_cpu;              /* 0xB8 */
+} __attribute__((aligned(128)));
+
+extern struct xzs_d6m4_r650_telemetry xzs_d6m4_r650_telemetry;
+void xzs_clear_thread_asts(thread_t thread);
+#endif
 
 __END_DECLS
 

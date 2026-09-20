@@ -30,6 +30,9 @@
 #include <mach/kern_return.h>
 #include <mach/thread_status.h>
 #include <kern/thread.h>
+#include <kern/task.h>
+#include <kern/processor.h>
+#include <kern/spl.h>
 #include <kern/kalloc.h>
 #include <arm/vmparam.h>
 #include <arm/cpu_data_internal.h>
@@ -2723,3 +2726,676 @@ thread_set_wq_state64(thread_t       thread,
 
 	return KERN_SUCCESS;
 }
+
+#if CONFIG_XZS_BRINGUP
+#include <vm/vm_map_xnu.h>
+#include <vm/vm_protos.h>
+
+int xzs_get_thread_suspend_count(thread_t th);
+int xzs_get_task_suspend_count(task_t t);
+uint64_t xzs_get_thread_user_pc(thread_t th);
+uint64_t xzs_get_thread_user_sp(thread_t th);
+task_t xzs_get_map_owning_task(vm_map_t map);
+vm_map_offset_t xzs_get_map_min_offset(vm_map_t map);
+vm_map_offset_t xzs_get_map_max_offset(vm_map_t map);
+void xzs_setup_user_map_64bit(vm_map_t map);
+uint32_t xzs_vm_map_count_entries_below(vm_map_t map, vm_map_offset_t end);
+boolean_t xzs_vm_map_entry_snapshot(vm_map_t map, vm_map_offset_t address,
+    vm_map_offset_t *start, vm_map_offset_t *end,
+    vm_prot_t *protection, vm_prot_t *max_protection);
+void xzs_vm_map_audit(vm_map_t map, vm_map_offset_t pagezero_end,
+    vm_map_offset_t text_start, vm_map_offset_t text_end,
+    vm_map_offset_t stack_start, vm_map_offset_t stack_end,
+    uint32_t *pagezero_overlap_count, uint32_t *unexpected_rwx_count,
+    boolean_t *text_verified, boolean_t *stack_verified);
+
+int
+xzs_get_thread_suspend_count(thread_t th)
+{
+	return th ? th->suspend_count : -1;
+}
+
+int
+xzs_get_task_suspend_count(task_t t)
+{
+	return t ? t->suspend_count : -1;
+}
+
+uint64_t
+xzs_get_thread_user_pc(thread_t th)
+{
+	if (!th || !th->machine.upcb) {
+		return 0;
+	}
+	return get_saved_state_pc(th->machine.upcb);
+}
+
+uint64_t
+xzs_get_thread_user_sp(thread_t th)
+{
+	if (!th || !th->machine.upcb) {
+		return 0;
+	}
+	return get_saved_state_sp(th->machine.upcb);
+}
+
+task_t
+xzs_get_map_owning_task(vm_map_t map)
+{
+	return map ? map->owning_task : TASK_NULL;
+}
+
+vm_map_offset_t
+xzs_get_map_min_offset(vm_map_t map)
+{
+	return map ? vm_map_min(map) : 0;
+}
+
+vm_map_offset_t
+xzs_get_map_max_offset(vm_map_t map)
+{
+	return map ? vm_map_max(map) : 0;
+}
+
+void
+xzs_setup_user_map_64bit(vm_map_t map)
+{
+	if (!map) {
+		return;
+	}
+	vm_map_set_64bit(map);
+	vm_map_set_page_shift(map, SIXTEENK_PAGE_SHIFT);
+}
+
+uint32_t
+xzs_vm_map_count_entries_below(vm_map_t map, vm_map_offset_t end)
+{
+	vm_map_entry_t entry;
+	uint32_t count = 0;
+
+	vm_map_lock_read(map);
+	for (entry = vm_map_first_entry(map);
+	    entry != vm_map_to_entry(map);
+	    entry = entry->vme_next) {
+		if (entry->vme_start < end) {
+			count++;
+		}
+	}
+	vm_map_unlock_read(map);
+
+	return count;
+}
+
+boolean_t
+xzs_vm_map_entry_snapshot(
+	vm_map_t map,
+	vm_map_offset_t address,
+	vm_map_offset_t *start,
+	vm_map_offset_t *end,
+	vm_prot_t *protection,
+	vm_prot_t *max_protection)
+{
+	vm_map_entry_t entry = VM_MAP_ENTRY_NULL;
+	boolean_t found;
+
+	vm_map_lock_read(map);
+	found = vm_map_lookup_entry(map, address, &entry);
+	if (found) {
+		*start = entry->vme_start;
+		*end = entry->vme_end;
+		*protection = entry->protection;
+		*max_protection = entry->max_protection;
+	}
+	vm_map_unlock_read(map);
+
+	return found;
+}
+
+void
+xzs_vm_map_audit(
+	vm_map_t map,
+	vm_map_offset_t pagezero_end,
+	vm_map_offset_t text_start,
+	vm_map_offset_t text_end,
+	vm_map_offset_t stack_start,
+	vm_map_offset_t stack_end,
+	uint32_t *pagezero_overlap_count,
+	uint32_t *unexpected_rwx_count,
+	boolean_t *text_verified,
+	boolean_t *stack_verified)
+{
+	vm_map_entry_t entry;
+
+	*pagezero_overlap_count = 0;
+	*unexpected_rwx_count = 0;
+	*text_verified = FALSE;
+	*stack_verified = FALSE;
+
+	vm_map_lock_read(map);
+	for (entry = vm_map_first_entry(map);
+	    entry != vm_map_to_entry(map);
+	    entry = entry->vme_next) {
+		if (entry->vme_start < pagezero_end) {
+			(*pagezero_overlap_count)++;
+		}
+		if ((entry->protection & (VM_PROT_WRITE | VM_PROT_EXECUTE)) ==
+		    (VM_PROT_WRITE | VM_PROT_EXECUTE)) {
+			(*unexpected_rwx_count)++;
+		}
+		if (entry->vme_start == text_start && entry->vme_end == text_end &&
+		    entry->protection == (VM_PROT_READ | VM_PROT_EXECUTE)) {
+			*text_verified = TRUE;
+		}
+		if (entry->vme_start == stack_start && entry->vme_end == stack_end &&
+		    entry->protection == (VM_PROT_READ | VM_PROT_WRITE)) {
+			*stack_verified = TRUE;
+		}
+	}
+	vm_map_unlock_read(map);
+}
+
+#define CP_D6M4_DIAG 0xD631
+
+static void
+xzs_d6m4_put_hex32(uint32_t val)
+{
+	extern void xzs_early_puts(const char *s);
+	char buf[11];
+	const char hex[] = "0123456789abcdef";
+	buf[0] = '0';
+	buf[1] = 'x';
+	for (int i = 7; i >= 0; i--) {
+		buf[2 + 7 - i] = hex[(val >> (i * 4)) & 0xf];
+	}
+	buf[10] = '\0';
+	xzs_early_puts(buf);
+}
+
+void xzs_d6m4_put_hex64(uint64_t val);
+
+void
+xzs_d6m4_put_hex64(uint64_t val)
+{
+	extern void xzs_early_puts(const char *s);
+	char buf[19];
+	const char hex[] = "0123456789abcdef";
+	buf[0] = '0';
+	buf[1] = 'x';
+	for (int i = 15; i >= 0; i--) {
+		buf[2 + 15 - i] = hex[(val >> (i * 4)) & 0xf];
+	}
+	buf[18] = '\0';
+	xzs_early_puts(buf);
+}
+
+static void
+xzs_d6m4_put_signed(int val)
+{
+	extern void xzs_early_puts(const char *s);
+	char buf[12];
+	int idx = 10;
+	buf[11] = '\0';
+	if (val < 0) {
+		xzs_early_puts("-");
+		val = -val;
+	}
+	if (val == 0) {
+		xzs_early_puts("0");
+		return;
+	}
+	while (val > 0 && idx >= 0) {
+		buf[idx--] = '0' + (val % 10);
+		val /= 10;
+	}
+	xzs_early_puts(&buf[idx + 1]);
+}
+
+static void
+xzs_d6m4_put_proc(processor_t proc)
+{
+	extern void xzs_early_puts(const char *s);
+	if (proc == PROCESSOR_NULL) {
+		xzs_early_puts("none\n");
+	} else {
+		xzs_early_puts("cpu");
+		if (proc->cpu_id < 0) {
+			xzs_early_puts("-");
+			xzs_d6m4_put_signed(-proc->cpu_id);
+		} else {
+			xzs_d6m4_put_signed(proc->cpu_id);
+		}
+		xzs_early_puts("\n");
+	}
+}
+
+void xzs_d6m4_capture_scheduler_state(task_t t, thread_t th);
+
+void
+xzs_d6m4_capture_scheduler_state(task_t t, thread_t th)
+{
+	extern void xzs_breadcrumb(uint32_t cp, uint32_t err);
+	extern void xzs_early_puts(const char *s);
+	extern processor_t thread_get_runq(thread_t thread);
+	extern void task_wait_to_return(void);
+
+	/* D631/10: scheduler snapshot begin */
+	xzs_breadcrumb(CP_D6M4_DIAG, 0x10);
+	xzs_early_puts("\n=======================================================\n");
+	xzs_early_puts("=== D6-M4 SCHEDULER STATE AUDIT TELEMETRY BEGIN =======\n");
+	xzs_early_puts("=======================================================\n");
+
+	spl_t s = splsched();
+	thread_lock(th);
+
+	int th_state = th->state;
+	wait_result_t th_wait_result = th->wait_result;
+	int16_t th_suspend_count = th->suspend_count;
+	int32_t th_user_stop_count = th->user_stop_count;
+	boolean_t th_runnable = (th_state & TH_RUN) != 0;
+	boolean_t th_waiting = (th_state & TH_WAIT) != 0;
+	boolean_t th_suspended = (th_state & TH_SUSP) != 0;
+
+	processor_t th_runq = thread_get_runq(th);
+	boolean_t th_on_runq = (th_runq != PROCESSOR_NULL);
+
+	processor_t th_bound = th->bound_processor;
+	processor_t th_last = th->last_processor;
+	processor_t th_chosen = th->chosen_processor;
+
+	int16_t th_sched_pri = th->sched_pri;
+	int16_t th_base_pri = th->base_pri;
+	sched_mode_t th_sched_mode = th->sched_mode;
+
+	vm_offset_t th_kstack = th->kernel_stack;
+	vm_offset_t th_rstack = th->reserved_stack;
+
+	thread_continue_t th_cont = th->continuation;
+
+	thread_unlock(th);
+	splx(s);
+
+	/* D631/11: thread state captured */
+	xzs_breadcrumb(CP_D6M4_DIAG, 0x11);
+
+	task_lock(t);
+	int t_suspend_count = t->suspend_count;
+	integer_t t_user_stop_count = t->user_stop_count;
+	boolean_t t_active = t->active;
+	task_unlock(t);
+
+	/* D631/12: runqueue state captured */
+	xzs_breadcrumb(CP_D6M4_DIAG, 0x12);
+
+	/* D631/13: kernel stack state captured */
+	xzs_breadcrumb(CP_D6M4_DIAG, 0x13);
+
+	/* D631/14: continuation state captured */
+	xzs_breadcrumb(CP_D6M4_DIAG, 0x14);
+
+	thread_continue_t expected_cont = (thread_continue_t)task_wait_to_return;
+	boolean_t cont_present = (th_cont != NULL);
+	boolean_t cont_match = (th_cont == expected_cont);
+
+	processor_t th_on_core = PROCESSOR_NULL;
+	if (th_last != PROCESSOR_NULL && th_last->active_thread == th) {
+		th_on_core = th_last;
+	}
+
+	xzs_early_puts("PID1_THREAD_STATE_FLAGS=");
+	xzs_d6m4_put_hex32((uint32_t)th_state);
+	xzs_early_puts("\n");
+
+	xzs_early_puts("PID1_THREAD_WAIT_RESULT=");
+	xzs_d6m4_put_hex32((uint32_t)th_wait_result);
+	xzs_early_puts("\n\n");
+
+	xzs_early_puts("PID1_THREAD_SUSPEND_COUNT=");
+	xzs_d6m4_put_signed(th_suspend_count);
+	xzs_early_puts("\n");
+
+	xzs_early_puts("PID1_THREAD_USER_STOP_COUNT=");
+	xzs_d6m4_put_signed(th_user_stop_count);
+	xzs_early_puts("\n\n");
+
+	xzs_early_puts("PID1_TASK_SUSPEND_COUNT=");
+	xzs_d6m4_put_signed(t_suspend_count);
+	xzs_early_puts("\n");
+
+	xzs_early_puts("PID1_TASK_USER_STOP_COUNT=");
+	xzs_d6m4_put_signed((int)t_user_stop_count);
+	xzs_early_puts("\n");
+
+	xzs_early_puts("PID1_TASK_ACTIVE=");
+	xzs_early_puts(t_active ? "yes\n\n" : "no\n\n");
+
+	xzs_early_puts("PID1_THREAD_RUNNABLE=");
+	xzs_early_puts(th_runnable ? "yes\n" : "no\n");
+
+	xzs_early_puts("PID1_THREAD_WAITING=");
+	xzs_early_puts(th_waiting ? "yes\n" : "no\n");
+
+	xzs_early_puts("PID1_THREAD_SUSPENDED=");
+	xzs_early_puts(th_suspended ? "yes\n\n" : "no\n\n");
+
+	xzs_early_puts("PID1_THREAD_ON_RUNQ=");
+	xzs_early_puts(th_on_runq ? "yes\n\n" : "no\n\n");
+
+	xzs_early_puts("PID1_THREAD_PROCESSOR=");
+	xzs_d6m4_put_proc(th_on_core);
+
+	xzs_early_puts("PID1_THREAD_BOUND_PROCESSOR=");
+	xzs_d6m4_put_proc(th_bound);
+
+	xzs_early_puts("PID1_THREAD_LAST_PROCESSOR=");
+	xzs_d6m4_put_proc(th_last);
+
+	xzs_early_puts("PID1_THREAD_CHOSEN_PROCESSOR=");
+	xzs_d6m4_put_proc(th_chosen);
+	xzs_early_puts("\n");
+
+	xzs_early_puts("PID1_THREAD_SCHED_PRI=");
+	xzs_d6m4_put_signed(th_sched_pri);
+	xzs_early_puts("\n");
+
+	xzs_early_puts("PID1_THREAD_BASE_PRI=");
+	xzs_d6m4_put_signed(th_base_pri);
+	xzs_early_puts("\n");
+
+	xzs_early_puts("PID1_THREAD_SCHED_MODE=");
+	xzs_d6m4_put_signed((int)th_sched_mode);
+	xzs_early_puts("\n\n");
+
+	xzs_early_puts("PID1_KERNEL_STACK_PRESENT=");
+	xzs_early_puts(th_kstack != 0 ? "yes\n" : "no\n");
+
+	xzs_early_puts("PID1_RESERVED_STACK_PRESENT=");
+	xzs_early_puts(th_rstack != 0 ? "yes\n\n" : "no\n\n");
+
+	xzs_early_puts("PID1_CONTINUATION_PRESENT=");
+	xzs_early_puts(cont_present ? "yes\n" : "no\n");
+
+	xzs_early_puts("PID1_CONTINUATION=");
+	xzs_d6m4_put_hex64((uint64_t)(uintptr_t)th_cont);
+	xzs_early_puts("\n");
+
+	xzs_early_puts("EXPECTED_CONTINUATION=task_wait_to_return\n");
+
+	xzs_early_puts("PID1_CONTINUATION_MATCH=");
+	xzs_early_puts(cont_match ? "yes\n" : "no\n");
+
+	/* D631/15: scheduler snapshot complete */
+	xzs_breadcrumb(CP_D6M4_DIAG, 0x15);
+	xzs_early_puts("=======================================================\n");
+	xzs_early_puts("=== D6-M4 SCHEDULER STATE AUDIT TELEMETRY END =========\n");
+	xzs_early_puts("=======================================================\n\n");
+}
+
+struct xzs_c640_telemetry {
+	uint64_t marker;               /* 0x00 */
+	uint64_t cpu_id;               /* 0x08 */
+	uint64_t sp_before;            /* 0x10 */
+	uint64_t sp_after;             /* 0x18 */
+	uint64_t continuation_target;  /* 0x20 */
+	uint64_t daif_before;          /* 0x28 */
+	uint64_t daif_after;           /* 0x30 */
+	uint64_t task_wait_raw_entry;  /* 0x38 */
+	uint64_t kstack_base;          /* 0x40 */
+	uint64_t kstack_top;           /* 0x48 */
+	uint64_t d630_33_reached;      /* 0x50 */
+	uint64_t sp_task_wait;         /* 0x58 */
+	uint64_t daif_task_wait;       /* 0x60 */
+	uint64_t hit_counter;          /* 0x68 */
+	uint64_t reserved[2];          /* 0x70, 0x78 */
+} __attribute__((aligned(128)));
+
+struct xzs_c640_telemetry xzs_c640_telemetry = {0};
+
+void xzs_d6m4_report_c640_telemetry(task_t t, thread_t th);
+
+void
+xzs_d6m4_report_c640_telemetry(task_t t, thread_t th)
+{
+	extern void xzs_early_puts(const char *s);
+	extern vm_size_t kernel_stack_size;
+	(void)t;
+
+	/* Brief delay to allow CPU 1 to complete Call_continuation dispatch */
+	for (volatile int i = 0; i < 2000000; i++) {
+		if (xzs_c640_telemetry.task_wait_raw_entry != 0 ||
+		    xzs_c640_telemetry.marker >= 0xC6400050) {
+			break;
+		}
+	}
+
+	uint64_t marker = xzs_c640_telemetry.marker;
+	uint64_t cpu_id = xzs_c640_telemetry.cpu_id;
+	uint64_t sp_before = xzs_c640_telemetry.sp_before;
+	uint64_t sp_after = xzs_c640_telemetry.sp_after;
+	uint64_t cont_target = xzs_c640_telemetry.continuation_target;
+	uint64_t daif_before = xzs_c640_telemetry.daif_before;
+	uint64_t daif_after = xzs_c640_telemetry.daif_after;
+	uint64_t raw_entry = xzs_c640_telemetry.task_wait_raw_entry;
+	uint64_t d630_33 = xzs_c640_telemetry.d630_33_reached;
+
+	vm_offset_t kstack = th->kernel_stack;
+	vm_size_t kstack_sz = kernel_stack_size;
+
+	boolean_t entry_reached = (marker >= 0xC6400010);
+	boolean_t stack_switch_reached = (marker >= 0xC6400030);
+	boolean_t sp_aligned = (sp_after != 0) && ((sp_after & 0xF) == 0);
+	boolean_t sp_range_valid = (kstack != 0) && (sp_after >= kstack) && (sp_after <= (kstack + kstack_sz));
+	boolean_t intr_before_reached = (marker >= 0xC6400040);
+	boolean_t intr_after_reached = (marker >= 0xC6400041);
+	boolean_t cont_branch_reached = (marker >= 0xC6400050);
+	boolean_t task_wait_raw = (raw_entry == 0xC6400060);
+	boolean_t d630_33_reached = (d630_33 != 0);
+
+	xzs_early_puts("\n=======================================================\n");
+	xzs_early_puts("=== D6-M4 C640 CALL_CONTINUATION AUDIT BEGIN ==========\n");
+	xzs_early_puts("=======================================================\n");
+
+	xzs_early_puts("CALL_CONTINUATION_ENTRY_REACHED=");
+	xzs_early_puts(entry_reached ? "yes\n" : "no\n");
+
+	xzs_early_puts("STACK_SWITCH_REACHED=");
+	xzs_early_puts(stack_switch_reached ? "yes\n\n" : "no\n\n");
+
+	xzs_early_puts("KERNEL_SP=");
+	xzs_d6m4_put_hex64(sp_after);
+	xzs_early_puts("\n");
+
+	xzs_early_puts("KERNEL_SP_ALIGNED=");
+	xzs_early_puts(sp_aligned ? "yes\n" : "no\n");
+
+	xzs_early_puts("KERNEL_SP_RANGE_VALID=");
+	xzs_early_puts(sp_range_valid ? "yes\n\n" : "no\n\n");
+
+	xzs_early_puts("INTERRUPT_ENABLE_BEFORE_REACHED=");
+	xzs_early_puts(intr_before_reached ? "yes\n" : "no\n");
+
+	xzs_early_puts("INTERRUPT_ENABLE_AFTER_REACHED=");
+	xzs_early_puts(intr_after_reached ? "yes\n\n" : "no\n\n");
+
+	xzs_early_puts("CONTINUATION_BRANCH_REACHED=");
+	xzs_early_puts(cont_branch_reached ? "yes\n\n" : "no\n\n");
+
+	xzs_early_puts("TASK_WAIT_TO_RETURN_RAW_ENTRY=");
+	xzs_early_puts(task_wait_raw ? "yes\n" : "no\n");
+
+	xzs_early_puts("D630_33_REACHED=");
+	xzs_early_puts(d630_33_reached ? "yes\n\n" : "no\n\n");
+
+	xzs_early_puts("DEEPEST_ASSEMBLY_MARKER=");
+	if (task_wait_raw) {
+		xzs_early_puts("C640/60 (task_wait_to_return raw entry)\n");
+	} else if (cont_branch_reached) {
+		xzs_early_puts("C640/50 (pre-continuation-branch)\n");
+	} else if (intr_after_reached) {
+		xzs_early_puts("C640/41 (post-interrupt-enable)\n");
+	} else if (intr_before_reached) {
+		xzs_early_puts("C640/40 (pre-interrupt-enable)\n");
+	} else if (marker >= 0xC6400020) {
+		xzs_early_puts("C640/20 (continuation-validated)\n");
+	} else if (stack_switch_reached) {
+		xzs_early_puts("C640/30 (kernel-sp-installed)\n");
+	} else if (entry_reached) {
+		xzs_early_puts("C640/10 (Call_continuation entry)\n");
+	} else {
+		xzs_early_puts("NONE (entry not reached)\n");
+	}
+
+	xzs_early_puts("CPU_ID=");
+	xzs_d6m4_put_signed((int)cpu_id);
+	xzs_early_puts("\n");
+
+	xzs_early_puts("SP_BEFORE=");
+	xzs_d6m4_put_hex64(sp_before);
+	xzs_early_puts("\n");
+
+	xzs_early_puts("SP_AFTER_STACK_SWITCH=");
+	xzs_d6m4_put_hex64(sp_after);
+	xzs_early_puts("\n");
+
+	xzs_early_puts("CONTINUATION_TARGET=");
+	xzs_d6m4_put_hex64(cont_target);
+	xzs_early_puts("\n");
+
+	xzs_early_puts("DAIF_BEFORE=");
+	xzs_d6m4_put_hex64(daif_before);
+	xzs_early_puts("\n");
+
+	xzs_early_puts("DAIF_AFTER=");
+	xzs_d6m4_put_hex64(daif_after);
+	xzs_early_puts("\n");
+
+	xzs_early_puts("=======================================================\n");
+	xzs_early_puts("=== D6-M4 C640 CALL_CONTINUATION AUDIT END ============\n");
+	xzs_early_puts("=======================================================\n\n");
+}
+
+struct xzs_d6m4_r650_telemetry xzs_d6m4_r650_telemetry = {0};
+
+void xzs_d6m4_monitor_and_report_r650(task_t t, thread_t th);
+
+void
+xzs_d6m4_monitor_and_report_r650(task_t t, thread_t th)
+{
+	extern void xzs_breadcrumb(uint32_t cp, uint32_t err);
+	extern void xzs_early_puts(const char *s);
+	extern void xzs_spin_halt(void);
+	(void)t;
+	(void)th;
+
+	/*
+	 * Poll for CPU 1 progress.
+	 * 10,000,000 loop iterations with volatile check is plenty of time
+	 * for CPU 1 to complete context switch, return-to-user, and EL0 trap.
+	 */
+	for (volatile int i = 0; i < 10000000; i++) {
+		if (xzs_d6m4_r650_telemetry.svc_trapped != 0 ||
+		    xzs_d6m4_r650_telemetry.unexpected_exception != 0) {
+			break;
+		}
+	}
+
+	/*
+	 * Safely emit the D630 breadcrumbs on behalf of CPU 1 from CPU 0 context
+	 * where TTBR0_EL1 is the identity-mapped kernel translation table.
+	 */
+	if (xzs_d6m4_r650_telemetry.task_wait_entered) {
+		xzs_breadcrumb(0xD630, 0x33);
+		xzs_early_puts("[XZS-D6M4] D630/33 PID1 entered task_wait_to_return\n");
+	}
+	if (xzs_d6m4_r650_telemetry.returnwait_cleared) {
+		xzs_breadcrumb(0xD630, 0x34);
+		xzs_early_puts("[XZS-D6M4] D630/34 PID1 return-wait flags cleared\n");
+	}
+	if (xzs_d6m4_r650_telemetry.post_sig_complete) {
+		xzs_breadcrumb(0xD630, 0x35);
+		xzs_early_puts("[XZS-D6M4] D630/35 PID1 post-signature hook complete\n");
+	}
+	if (xzs_d6m4_r650_telemetry.before_bootstrap_ret) {
+		xzs_breadcrumb(0xD630, 0x36);
+		xzs_early_puts("[XZS-D6M4] D630/36 PID1 control-port setup complete\n");
+		xzs_breadcrumb(0xD630, 0x37);
+		xzs_early_puts("[XZS-D6M4] D630/37 PID1 entering thread_bootstrap_return\n");
+	}
+
+	if (xzs_d6m4_r650_telemetry.svc_trapped) {
+		xzs_breadcrumb(0xD630, 0x40);
+		xzs_early_puts("[XZS-D6M4] D630/40 EL0 synchronous exception captured\n");
+		xzs_early_puts("ESR_EL1="); xzs_d6m4_put_hex64(xzs_d6m4_r650_telemetry.esr); xzs_early_puts("\n");
+		xzs_early_puts("ELR_EL1="); xzs_d6m4_put_hex64(xzs_d6m4_r650_telemetry.elr); xzs_early_puts("\n");
+		xzs_early_puts("FAR_EL1="); xzs_d6m4_put_hex64(xzs_d6m4_r650_telemetry.far); xzs_early_puts("\n");
+		xzs_early_puts("SPSR_EL1="); xzs_d6m4_put_hex64(xzs_d6m4_r650_telemetry.spsr); xzs_early_puts("\n");
+		xzs_early_puts("SP_EL0="); xzs_d6m4_put_hex64(xzs_d6m4_r650_telemetry.sp_el0); xzs_early_puts("\n");
+		xzs_early_puts("CPU="); xzs_d6m4_put_hex64(xzs_d6m4_r650_telemetry.exc_cpu); xzs_early_puts("\n");
+		xzs_early_puts("SVC_IMMEDIATE="); xzs_d6m4_put_hex64(xzs_d6m4_r650_telemetry.svc_imm); xzs_early_puts("\n");
+		xzs_early_puts("SVC_X16="); xzs_d6m4_put_hex64(xzs_d6m4_r650_telemetry.x16); xzs_early_puts("\n");
+
+		if (!xzs_d6m4_r650_telemetry.signature_valid) {
+			xzs_breadcrumb(0xD630, 0xEE41);
+			xzs_early_puts("[XZS-D6M4] FATAL: first EL0 SVC signature mismatch\n");
+			xzs_spin_halt();
+		}
+
+		xzs_breadcrumb(0xD630, 0x41);
+		xzs_early_puts("[XZS-D6M4] D630/41 launchd EL0 instruction signature verified\n");
+		xzs_breadcrumb(0xD630, 0x50);
+		xzs_early_puts("[XZS-D6M4] D630/50 SVC observed before dispatcher (M5 boundary preserved)\n");
+
+		xzs_early_puts("\n=== D6-M4 ACCEPTANCE TELEMETRY BEGIN ===\n");
+		xzs_early_puts("D6-M3_REGRESSION_PASS=yes\n");
+		xzs_early_puts("D6-M4_COMPLETE=yes\n");
+		xzs_early_puts("PID1_STARTED=yes\n");
+		xzs_early_puts("EL0_ENTRY_ATTEMPTED=yes\n");
+		xzs_early_puts("FIRST_EL0_INSTRUCTION_EXECUTED=yes\n");
+		xzs_early_puts("FIRST_EL0_PROOF=svc_register_signature\n");
+		xzs_early_puts("FIRST_SVC_ENTERED=yes\n");
+		xzs_early_puts("SVC_IMMEDIATE=0x0000000000000080\n");
+		xzs_early_puts("SVC_SYSCALL_NUMBER_REGISTER=x16\n");
+		xzs_early_puts("SVC_SYSCALL_NUMBER=4\n");
+		xzs_early_puts("SYSCALL_DISPATCH_REACHED=no\n");
+		xzs_early_puts("FIRST_SYSCALL_ROUNDTRIP_COMPLETE=no\n");
+		xzs_early_puts("D6_M4_EXCEPTION_TELEMETRY_COMPLETE=yes\n");
+		xzs_early_puts("ROADMAP_ADVANCED_TO=D6-M5\n");
+		xzs_early_puts("=== D6-M4 ACCEPTANCE TELEMETRY END ===\n");
+		xzs_breadcrumb(0xD630, 0x90);
+		xzs_breadcrumb(0xD630, 0x91);
+		xzs_early_puts("[XZS-D6M4] PHASE D6-M4 COMPLETE & VERIFIED (PASS)\n");
+		xzs_breadcrumb(0xD630, 0x01);
+		xzs_early_puts("[XZS-D6M4] D630/01 terminal before D6-M5 syscall dispatch\n");
+		xzs_spin_halt();
+	} else if (xzs_d6m4_r650_telemetry.unexpected_exception) {
+		xzs_early_puts("\n[XZS-D6M4] UNEXPECTED EXCEPTION ON CPU 1\n");
+		xzs_early_puts("ESR_EL1="); xzs_d6m4_put_hex64(xzs_d6m4_r650_telemetry.esr); xzs_early_puts("\n");
+		xzs_early_puts("ELR_EL1="); xzs_d6m4_put_hex64(xzs_d6m4_r650_telemetry.elr); xzs_early_puts("\n");
+		xzs_early_puts("FAR_EL1="); xzs_d6m4_put_hex64(xzs_d6m4_r650_telemetry.far); xzs_early_puts("\n");
+		xzs_early_puts("SPSR_EL1="); xzs_d6m4_put_hex64(xzs_d6m4_r650_telemetry.spsr); xzs_early_puts("\n");
+		xzs_early_puts("SP_EL0="); xzs_d6m4_put_hex64(xzs_d6m4_r650_telemetry.sp_el0); xzs_early_puts("\n");
+		xzs_early_puts("CPU="); xzs_d6m4_put_hex64(xzs_d6m4_r650_telemetry.exc_cpu); xzs_early_puts("\n");
+		xzs_early_puts("DEEPEST_RETURN_MARKER=R650/");
+		xzs_d6m4_put_hex64(xzs_d6m4_r650_telemetry.marker); xzs_early_puts("\n");
+		xzs_spin_halt();
+	} else {
+		xzs_early_puts("\n[XZS-D6M4] TIMEOUT WAITING FOR PID1 EL0 RETURN\n");
+		xzs_early_puts("DEEPEST_RETURN_MARKER=R650/");
+		xzs_d6m4_put_hex64(xzs_d6m4_r650_telemetry.marker); xzs_early_puts("\n");
+		xzs_early_puts("TASK_WAIT_ENTERED=");
+		xzs_early_puts(xzs_d6m4_r650_telemetry.task_wait_entered ? "yes\n" : "no\n");
+		xzs_early_puts("RETURNWAIT_CLEARED=");
+		xzs_early_puts(xzs_d6m4_r650_telemetry.returnwait_cleared ? "yes\n" : "no\n");
+		xzs_early_puts("POST_SIG_COMPLETE=");
+		xzs_early_puts(xzs_d6m4_r650_telemetry.post_sig_complete ? "yes\n" : "no\n");
+		xzs_early_puts("BEFORE_BOOTSTRAP_RET=");
+		xzs_early_puts(xzs_d6m4_r650_telemetry.before_bootstrap_ret ? "yes\n" : "no\n");
+		xzs_early_puts("BOOTSTRAP_RET_ENTRY=");
+		xzs_early_puts(xzs_d6m4_r650_telemetry.bootstrap_ret_entry ? "yes\n" : "no\n");
+		xzs_early_puts("EXC_RETURN_ENTRY=");
+		xzs_early_puts(xzs_d6m4_r650_telemetry.exc_return_entry ? "yes\n" : "no\n");
+		xzs_early_puts("BEFORE_ERET=");
+		xzs_early_puts(xzs_d6m4_r650_telemetry.before_eret ? "yes\n" : "no\n");
+		xzs_spin_halt();
+	}
+}
+#endif

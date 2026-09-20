@@ -1188,12 +1188,10 @@ xzsfs_d5m6_probe(void)
     xzs_breadcrumb(CP_D5M6, 0x91);
     xzs_early_puts("[XZSFS] PHASE D5 COMPLETE & SEALED (PASS)\n");
 
-    /* D550/01: terminal halt before D6 */
+    /* D550/01: D5-M6 verified — handoff to Phase D6-M1 */
     xzs_breadcrumb(CP_D5M6, 0x01);
-    xzs_early_puts("[XZSFS] D5-M6 TERMINAL STATE — BEFORE D6 USERSPACE BOOTSTRAP\n\n");
+    xzs_early_puts("[XZSFS] D5-M6 COMPLETE — HANDING OFF TO PHASE D6-M1 (PID 1 SKELETON)\n\n");
 
-    delay(50000);
-    xzs_spin_halt();
     return 0;
 }
 

@@ -469,6 +469,15 @@ fork_create_child(task_t parent_task,
 	 * Create a new task for the child process, IPC access to the new task will
 	 * be set up after task has been fully initialized.
 	 */
+#if CONFIG_XZS_BRINGUP
+	bool cloning_initproc = !!(clone_flags & CLONEPROC_INITPROC);
+	if (cloning_initproc) {
+		extern void xzs_breadcrumb(uint32_t cp, uint32_t err);
+		extern void xzs_early_puts(const char *s);
+		xzs_breadcrumb(0xD600, 0x20);
+		xzs_early_puts("[XZS-D6M1] D600/20 PID1 task acquire/create ENTER\n");
+	}
+#endif
 	result = task_create_internal(parent_task,
 	    proc_ro,
 	    parent_coalitions,
@@ -486,11 +495,35 @@ fork_create_child(task_t parent_task,
 		goto bad;
 	}
 
+#if CONFIG_XZS_BRINGUP
+	if (cloning_initproc) {
+		extern void xzs_breadcrumb(uint32_t cp, uint32_t err);
+		extern void xzs_early_puts(const char *s);
+		xzs_breadcrumb(0xD600, 0x21);
+		xzs_early_puts("[XZS-D6M1] D600/21 PID1 task ready\n");
+	}
+#endif
+
 	/* Set the child proc process to child task */
 	proc_set_task(child_proc, child_task);
 
 	/* Set child task process to child proc */
 	set_bsdtask_info(child_task, child_proc);
+
+#if CONFIG_XZS_BRINGUP
+	if (cloning_initproc) {
+		extern void xzs_breadcrumb(uint32_t cp, uint32_t err);
+		extern void xzs_early_puts(const char *s);
+		if (proc_task(child_proc) == child_task &&
+		    get_bsdtask_info(child_task) == child_proc &&
+		    child_task != kernel_task) {
+			xzs_breadcrumb(0xD600, 0x22);
+			xzs_early_puts("[XZS-D6M1] D600/22 proc<->task linkage verified\n");
+		}
+		xzs_breadcrumb(0xD600, 0x30);
+		xzs_early_puts("[XZS-D6M1] D600/30 PID1 thread create ENTER\n");
+	}
+#endif
 
 	/* Propagate CPU limit timer from parent */
 	if (timerisset(&child_proc->p_rlim_cpu)) {
@@ -521,6 +554,27 @@ fork_create_child(task_t parent_task,
 		task_deallocate(child_task);
 		child_task = NULL;
 	}
+
+#if CONFIG_XZS_BRINGUP
+	if (cloning_initproc && child_thread != NULL) {
+		extern void xzs_breadcrumb(uint32_t cp, uint32_t err);
+		extern void xzs_early_puts(const char *s);
+		extern thread_t get_machthread(struct uthread *);
+		xzs_breadcrumb(0xD600, 0x31);
+		xzs_early_puts("[XZS-D6M1] D600/31 PID1 thread created\n");
+
+		if (get_threadtask(child_thread) == child_task) {
+			xzs_breadcrumb(0xD600, 0x32);
+			xzs_early_puts("[XZS-D6M1] D600/32 thread<->task linkage verified\n");
+		}
+
+		struct uthread *ut = (struct uthread *)get_bsdthread_info(child_thread);
+		if (ut != NULL && get_machthread(ut) == child_thread) {
+			xzs_breadcrumb(0xD600, 0x33);
+			xzs_early_puts("[XZS-D6M1] D600/33 uthread linkage verified\n");
+		}
+	}
+#endif
 
 	/*
 	 * Tag thread as being the first thread in its task.
@@ -680,10 +734,28 @@ cloneproc(task_t parent_task, coalition_t *parent_coalitions, proc_t parent_proc
 	bool cloning_initproc = !!(clone_flags & CLONEPROC_INITPROC);
 	bool in_exec = !!(clone_flags & CLONEPROC_EXEC);
 
+#if CONFIG_XZS_BRINGUP
+	if (cloning_initproc) {
+		extern void xzs_breadcrumb(uint32_t cp, uint32_t err);
+		extern void xzs_early_puts(const char *s);
+		xzs_breadcrumb(0xD600, 0x10);
+		xzs_early_puts("[XZS-D6M1] D600/10 PID1 proc create ENTER\n");
+	}
+#endif
+
 	if ((child_proc = forkproc(parent_proc, clone_flags)) == NULL) {
 		/* Failed to allocate new process */
 		goto bad;
 	}
+
+#if CONFIG_XZS_BRINGUP
+	if (cloning_initproc) {
+		extern void xzs_breadcrumb(uint32_t cp, uint32_t err);
+		extern void xzs_early_puts(const char *s);
+		xzs_breadcrumb(0xD600, 0x11);
+		xzs_early_puts("[XZS-D6M1] D600/11 PID1 proc created\n");
+	}
+#endif
 
 	/*
 	 * In the case where the parent_task is TASK_NULL (during the init path)

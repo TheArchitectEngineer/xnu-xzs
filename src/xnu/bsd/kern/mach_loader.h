@@ -145,4 +145,26 @@ validate_potential_simulator_binary(
 #define LOAD_BADMACHO_UPX       11      /* malformed mach-o file */
 #define LOAD_BADARCH_X86        12      /* -no32exec boot-arg + attempted load of 32bit x86 binary */
 
+#if CONFIG_XZS_BRINGUP
+int xzs_get_thread_suspend_count(thread_t th);
+int xzs_get_task_suspend_count(task_t t);
+uint64_t xzs_get_thread_user_pc(thread_t th);
+uint64_t xzs_get_thread_user_sp(thread_t th);
+task_t xzs_get_map_owning_task(vm_map_t map);
+vm_map_offset_t xzs_get_map_min_offset(vm_map_t map);
+vm_map_offset_t xzs_get_map_max_offset(vm_map_t map);
+void xzs_setup_user_map_64bit(vm_map_t map);
+uint32_t xzs_vm_map_count_entries_below(vm_map_t map, vm_map_offset_t end);
+boolean_t xzs_vm_map_entry_snapshot(vm_map_t map, vm_map_offset_t address,
+    vm_map_offset_t *start, vm_map_offset_t *end,
+    vm_prot_t *protection, vm_prot_t *max_protection);
+void xzs_vm_map_audit(vm_map_t map, vm_map_offset_t pagezero_end,
+    vm_map_offset_t text_start, vm_map_offset_t text_end,
+    vm_map_offset_t stack_start, vm_map_offset_t stack_end,
+    uint32_t *pagezero_overlap_count, uint32_t *unexpected_rwx_count,
+    boolean_t *text_verified, boolean_t *stack_verified);
+void xzs_d6m2_macho_probe(proc_t p, task_t t, thread_t th);
+void xzs_d6m3_user_vm_probe(proc_t p, task_t t, thread_t th);
+#endif
+
 #endif  /* _BSD_KERN_MACH_LOADER_H_ */

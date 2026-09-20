@@ -288,10 +288,78 @@ LEXT(Call_continuation)
 	ARM64_PROLOG
 	mrs		x4, TPIDR_EL1						// Get the current thread pointer
 
+#if CONFIG_XZS_BRINGUP
+	/*
+	 * C640 Diagnostics: Non-intrusive lock-free assembly characterization.
+	 * Check if current thread is the PID1 target thread or continuation is task_wait_to_return.
+	 */
+	adrp	x8, EXT(xzs_d6m4_target_thread)@page
+	ldr		x8, [x8, EXT(xzs_d6m4_target_thread)@pageoff]
+	cmp		x4, x8
+	b.eq	.Lc640_entry_match
+	adrp	x8, EXT(task_wait_to_return)@page
+	add		x8, x8, EXT(task_wait_to_return)@pageoff
+	cmp		x0, x8
+	b.ne	.Lc640_continue_normal
+
+.Lc640_entry_match:
+	adrp	x8, EXT(xzs_c640_telemetry)@page
+	add		x8, x8, EXT(xzs_c640_telemetry)@pageoff
+
+	// C640/10: Call_continuation entry
+	movz	x9, #0x0010
+	movk	x9, #0xC640, lsl #16
+	str		x9, [x8, #0x00]
+
+	// Capture CPU ID
+	mrs		x9, MPIDR_EL1
+	and		x10, x9, #0xff
+	ubfx	x9, x9, #8, #1
+	bfi		x10, x9, #1, #1
+	str		x10, [x8, #0x08]
+
+	// Capture SP before switch
+	mov		x9, sp
+	str		x9, [x8, #0x10]
+
+	// Capture continuation target
+	str		x0, [x8, #0x20]
+
+	// Increment hit counter
+	ldr		x9, [x8, #0x68]
+	add		x9, x9, #1
+	str		x9, [x8, #0x68]
+
+	dmb		ish
+
+.Lc640_continue_normal:
+#endif
+
 	/* ARM64_TODO arm loads the kstack top instead of arg4. What should we use? */
 	LOAD_KERN_STACK_TOP	dst=x5, src=x4, tmp=x6
 	mov		sp, x5								// Set stack pointer
 	mov		fp, #0								// Clear the frame pointer
+
+#if CONFIG_XZS_BRINGUP
+	adrp	x8, EXT(xzs_d6m4_target_thread)@page
+	ldr		x8, [x8, EXT(xzs_d6m4_target_thread)@pageoff]
+	cmp		x4, x8
+	b.ne	.Lc640_skip_sp_store
+
+	adrp	x8, EXT(xzs_c640_telemetry)@page
+	add		x8, x8, EXT(xzs_c640_telemetry)@pageoff
+
+	// C640/30: target kernel SP loaded/installed
+	mov		x9, sp
+	str		x9, [x8, #0x18]						// sp_after
+	str		x5, [x8, #0x48]						// kstack_top
+	movz	x9, #0x0030
+	movk	x9, #0xC640, lsl #16
+	str		x9, [x8, #0x00]						// marker
+	dmb		ish
+
+.Lc640_skip_sp_store:
+#endif
 
 	set_process_dependent_keys_and_sync_context	x4, x5, x6, x7, w20
 
@@ -299,13 +367,79 @@ LEXT(Call_continuation)
 	mov x21, x1  //continuation parameter
 	mov x22, x2  //wait result
 
+#if CONFIG_XZS_BRINGUP
+	adrp	x8, EXT(xzs_d6m4_target_thread)@page
+	ldr		x8, [x8, EXT(xzs_d6m4_target_thread)@pageoff]
+	cmp		x4, x8
+	b.ne	.Lc640_skip_c20
+
+	adrp	x8, EXT(xzs_c640_telemetry)@page
+	add		x8, x8, EXT(xzs_c640_telemetry)@pageoff
+
+	// C640/20: target continuation register validated / preserved
+	movz	x9, #0x0020
+	movk	x9, #0xC640, lsl #16
+	str		x9, [x8, #0x00]						// marker
+
+	// C640/40: immediately before interrupt state change
+	mrs		x9, DAIF
+	str		x9, [x8, #0x28]						// daif_before
+	movz	x9, #0x0040
+	movk	x9, #0xC640, lsl #16
+	str		x9, [x8, #0x00]						// marker
+	dmb		ish
+
+.Lc640_skip_c20:
+#endif
+
 	cbz x3, 1f
 	mov x0, #1
 	bl EXT(ml_set_interrupts_enabled)
 1:
 
+#if CONFIG_XZS_BRINGUP
+	mrs		x4, TPIDR_EL1
+	adrp	x8, EXT(xzs_d6m4_target_thread)@page
+	ldr		x8, [x8, EXT(xzs_d6m4_target_thread)@pageoff]
+	cmp		x4, x8
+	b.ne	.Lc640_skip_post_intr
+
+	adrp	x8, EXT(xzs_c640_telemetry)@page
+	add		x8, x8, EXT(xzs_c640_telemetry)@pageoff
+
+	// C640/41: immediately after interrupt state change
+	mrs		x9, DAIF
+	str		x9, [x8, #0x30]						// daif_after
+	movz	x9, #0x0041
+	movk	x9, #0xC640, lsl #16
+	str		x9, [x8, #0x00]						// marker
+	dmb		ish
+
+.Lc640_skip_post_intr:
+#endif
+
 	mov		x0, x21								// Set the first parameter
 	mov		x1, x22								// Set the wait result arg
+
+#if CONFIG_XZS_BRINGUP
+	mrs		x4, TPIDR_EL1
+	adrp	x8, EXT(xzs_d6m4_target_thread)@page
+	ldr		x8, [x8, EXT(xzs_d6m4_target_thread)@pageoff]
+	cmp		x4, x8
+	b.ne	.Lc640_skip_pre_branch
+
+	adrp	x8, EXT(xzs_c640_telemetry)@page
+	add		x8, x8, EXT(xzs_c640_telemetry)@pageoff
+
+	// C640/50: immediately before branch/call to continuation
+	movz	x9, #0x0050
+	movk	x9, #0xC640, lsl #16
+	str		x9, [x8, #0x00]						// marker
+	dmb		ish
+
+.Lc640_skip_pre_branch:
+#endif
+
 #ifdef HAS_APPLE_PAC
 	mov		x21, THREAD_CONTINUE_T_DISC
 	blraa	x20, x21							// Branch to the continuation

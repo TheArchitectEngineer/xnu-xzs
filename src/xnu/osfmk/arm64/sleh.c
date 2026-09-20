@@ -44,6 +44,7 @@
 #include <kern/socd_client.h>
 #include <kern/task.h>
 #include <kern/thread.h>
+#include <kern/cpu_number.h>
 #include <kern/zalloc_internal.h>
 #include <mach/exception.h>
 #include <mach/arm/traps.h>
@@ -765,6 +766,58 @@ sleh_synchronous(arm_context_t *context, uint64_t esr, vm_offset_t far, __unused
 	}
 #endif
 	bool is_user = PSR64_IS_USER(get_saved_state_cpsr(state));
+
+#if CONFIG_XZS_BRINGUP
+	extern volatile boolean_t xzs_d6m4_probe_armed;
+	extern thread_t xzs_d6m4_target_thread;
+	extern struct xzs_d6m4_r650_telemetry xzs_d6m4_r650_telemetry;
+
+	if (xzs_d6m4_probe_armed && thread == xzs_d6m4_target_thread) {
+		arm_saved_state64_t *ss64 = saved_state64(state);
+		uint64_t elr = get_saved_state_pc(state);
+		uint64_t spsr = get_saved_state_cpsr(state);
+		uint64_t sp_el0 = get_saved_state_sp(state);
+
+		xzs_d6m4_r650_telemetry.esr = esr;
+		xzs_d6m4_r650_telemetry.elr = elr;
+		xzs_d6m4_r650_telemetry.far = far;
+		xzs_d6m4_r650_telemetry.spsr = spsr;
+		xzs_d6m4_r650_telemetry.sp_el0 = sp_el0;
+		xzs_d6m4_r650_telemetry.x0 = ss64->x[0];
+		xzs_d6m4_r650_telemetry.x1 = ss64->x[1];
+		xzs_d6m4_r650_telemetry.x2 = ss64->x[2];
+		xzs_d6m4_r650_telemetry.x16 = ss64->x[16];
+		xzs_d6m4_r650_telemetry.svc_imm = ESR_ISS(esr);
+		xzs_d6m4_r650_telemetry.exc_cpu = (uint64_t)cpu_number();
+
+		if (is_user && class == ESR_EC_SVC_64) {
+			boolean_t signature_valid =
+			    ESR_ISS(esr) == 0x80 &&
+			    elr == 0x0000000100000304ULL &&
+			    ss64->x[0] == 1 &&
+			    ss64->x[1] == 0x0000000100000320ULL &&
+			    ss64->x[2] == 0x1a &&
+			    ss64->x[16] == 4;
+
+			xzs_d6m4_r650_telemetry.signature_valid = signature_valid ? 1 : 0;
+			xzs_d6m4_r650_telemetry.svc_trapped = 1;
+			__asm__ volatile("dmb ish" ::: "memory");
+		} else {
+			xzs_d6m4_r650_telemetry.unexpected_exception = 1;
+			__asm__ volatile("dmb ish" ::: "memory");
+		}
+
+		/*
+		 * CPU1 must NOT call xzs_spin_halt() or any telemetry helpers
+		 * because TTBR0_EL1 is the user pmap!
+		 * Mask interrupts and spin safely with WFE while CPU0 reports results.
+		 */
+		__asm__ volatile("msr DAIFSet, #0xf");
+		for (;;) {
+			__asm__ volatile("wfe");
+		}
+	}
+#endif
 
 #if CONFIG_SPTM
 	// Lockdown should only be initiated for kernel exceptions

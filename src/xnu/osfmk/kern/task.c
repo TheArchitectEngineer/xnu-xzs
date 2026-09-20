@@ -109,6 +109,7 @@
 #include <kern/kern_types.h>
 #include <kern/mach_param.h>
 #include <kern/misc_protos.h>
+#include <kern/ast.h>
 #include <kern/task.h>
 #include <kern/thread.h>
 #include <kern/coalition.h>
@@ -958,12 +959,64 @@ task_set_ctrl_port_default(
 	ipc_thread_set_immovable_pinned(thread);
 }
 
+#if CONFIG_XZS_BRINGUP
+struct xzs_c640_telemetry {
+	uint64_t marker;               /* 0x00 */
+	uint64_t cpu_id;               /* 0x08 */
+	uint64_t sp_before;            /* 0x10 */
+	uint64_t sp_after;             /* 0x18 */
+	uint64_t continuation_target;  /* 0x20 */
+	uint64_t daif_before;          /* 0x28 */
+	uint64_t daif_after;           /* 0x30 */
+	uint64_t task_wait_raw_entry;  /* 0x38 */
+	uint64_t kstack_base;          /* 0x40 */
+	uint64_t kstack_top;           /* 0x48 */
+	uint64_t d630_33_reached;      /* 0x50 */
+	uint64_t sp_task_wait;         /* 0x58 */
+	uint64_t daif_task_wait;       /* 0x60 */
+	uint64_t hit_counter;          /* 0x68 */
+	uint64_t reserved[2];          /* 0x70, 0x78 */
+} __attribute__((aligned(128)));
+extern struct xzs_c640_telemetry xzs_c640_telemetry;
+#endif
+
 void __attribute__((noreturn))
 task_wait_to_return(void)
 {
+#if CONFIG_XZS_BRINGUP
+	/*
+	 * R650/10 Raw Lock-Free Persistent Marker in TTBR1:
+	 * MUST be the very FIRST operation of task_wait_to_return before ANY regular
+	 * telemetry call, locking, or console logging.
+	 * TTBR0 is the user pmap, so DO NOT call xzs_breadcrumb or xzs_early_puts!
+	 */
+	extern struct xzs_c640_telemetry xzs_c640_telemetry;
+	extern struct xzs_d6m4_r650_telemetry xzs_d6m4_r650_telemetry;
+	xzs_c640_telemetry.task_wait_raw_entry = 0xC6400060;
+	xzs_c640_telemetry.marker = 0xC6400060;
+	__asm__ volatile("mov %0, sp" : "=r"(xzs_c640_telemetry.sp_task_wait));
+	__asm__ volatile("mrs %0, DAIF" : "=r"(xzs_c640_telemetry.daif_task_wait));
+
+	xzs_d6m4_r650_telemetry.marker = 0x10;
+	xzs_d6m4_r650_telemetry.task_wait_entered = 1;
+	__asm__ volatile("mov %0, sp" : "=r"(xzs_d6m4_r650_telemetry.sp_task_wait));
+	__asm__ volatile("mrs %0, MPIDR_EL1" : "=r"(xzs_d6m4_r650_telemetry.cpu_id));
+	__asm__ volatile("dmb ish" ::: "memory");
+#endif
+
 	task_t task = current_task();
 	thread_t thread = current_thread();
 	uint8_t returnwaitflags;
+#if CONFIG_XZS_BRINGUP
+	extern volatile boolean_t xzs_d6m4_probe_armed;
+	extern thread_t xzs_d6m4_target_thread;
+	boolean_t xzs_d6m4_target = xzs_d6m4_probe_armed &&
+	    thread == xzs_d6m4_target_thread;
+	if (xzs_d6m4_target) {
+		xzs_c640_telemetry.d630_33_reached = 1;
+		__asm__ volatile("dmb ish" ::: "memory");
+	}
+#endif
 
 	is_write_lock(task->itk_space);
 
@@ -995,6 +1048,12 @@ task_wait_to_return(void)
 	returnwaitflags = task->t_returnwaitflags;
 	is_write_unlock(task->itk_space);
 	turnstile_cleanup();
+#if CONFIG_XZS_BRINGUP
+	if (xzs_d6m4_target) {
+		xzs_d6m4_r650_telemetry.returnwait_cleared = 1;
+		__asm__ volatile("dmb ish" ::: "memory");
+	}
+#endif
 
 	/**
 	 * In posix_spawn() path, process_signature() is guaranteed to complete
@@ -1002,6 +1061,12 @@ task_wait_to_return(void)
 	 * on the result of that before we return to EL0.
 	 */
 	task_post_signature_processing_hook(task);
+#if CONFIG_XZS_BRINGUP
+	if (xzs_d6m4_target) {
+		xzs_d6m4_r650_telemetry.post_sig_complete = 1;
+		__asm__ volatile("dmb ish" ::: "memory");
+	}
+#endif
 #if CONFIG_MACF
 	/*
 	 * Before jumping to userspace and allowing this process
@@ -1020,9 +1085,29 @@ task_wait_to_return(void)
 	 * Set task/thread control port movability now that we can call AMFI
 	 */
 	task_set_ctrl_port_default(task, thread);
+#if CONFIG_XZS_BRINGUP
+	if (xzs_d6m4_target) {
+		thread_ast_clear(thread, AST_ALL);
+		ast_off(AST_ALL);
+		xzs_d6m4_r650_telemetry.marker = 0x20;
+		xzs_d6m4_r650_telemetry.before_bootstrap_ret = 1;
+		__asm__ volatile("dmb ish" ::: "memory");
+	}
+#endif
 
 	thread_bootstrap_return();
 }
+
+#if CONFIG_XZS_BRINGUP
+void
+xzs_clear_thread_asts(thread_t thread)
+{
+	if (thread != THREAD_NULL) {
+		thread_ast_clear(thread, AST_ALL);
+		ast_off(AST_ALL);
+	}
+}
+#endif
 
 /**
  * A callout by task_wait_to_return on the main thread of a newly spawned task
@@ -10791,5 +10876,4 @@ task_best_name(task_t task)
 {
 	return proc_best_name(task_get_proc_raw(task));
 }
-
 
