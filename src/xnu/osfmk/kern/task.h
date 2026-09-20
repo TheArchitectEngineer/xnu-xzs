@@ -1644,6 +1644,7 @@ struct xzs_d6m4_r650_telemetry {
 } __attribute__((aligned(128)));
 
 extern struct xzs_d6m4_r650_telemetry xzs_d6m4_r650_telemetry;
+void xzs_clear_thread_asts(thread_t thread);
 #endif
 
 __END_DECLS

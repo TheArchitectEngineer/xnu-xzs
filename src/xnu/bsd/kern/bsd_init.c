@@ -1595,7 +1595,9 @@ bsd_utaskbootstrap(void)
 
 	ut = (struct uthread *)get_bsdthread_info(thread);
 	ut->uu_sigmask = 0;
+#if !CONFIG_XZS_BRINGUP
 	act_set_astbsd(thread);
+#endif
 
 	task_t task = get_threadtask(thread);
 #if CONFIG_XZS_BRINGUP

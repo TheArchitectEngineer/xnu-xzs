@@ -5241,6 +5241,10 @@ xzs_d6m4_first_el0(proc_t p, task_t t, thread_t th)
 	xzs_breadcrumb(CP_D6M4, 0x21);
 	xzs_early_puts("[XZS-D6M4] D630/21 first-EL0 exception telemetry armed\n");
 
+	/* Clear any pending ASTs on PID1 thread so it returns directly to EL0 */
+	extern void xzs_clear_thread_asts(thread_t thread);
+	xzs_clear_thread_asts(th);
+
 	kern_return_t kr = task_resume_internal(t);
 	if (kr != KERN_SUCCESS) {
 		xzs_breadcrumb(CP_D6M4, 0xEE30);

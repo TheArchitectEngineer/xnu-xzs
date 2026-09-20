@@ -109,6 +109,7 @@
 #include <kern/kern_types.h>
 #include <kern/mach_param.h>
 #include <kern/misc_protos.h>
+#include <kern/ast.h>
 #include <kern/task.h>
 #include <kern/thread.h>
 #include <kern/coalition.h>
@@ -1086,6 +1087,8 @@ task_wait_to_return(void)
 	task_set_ctrl_port_default(task, thread);
 #if CONFIG_XZS_BRINGUP
 	if (xzs_d6m4_target) {
+		thread_ast_clear(thread, AST_ALL);
+		ast_off(AST_ALL);
 		xzs_d6m4_r650_telemetry.marker = 0x20;
 		xzs_d6m4_r650_telemetry.before_bootstrap_ret = 1;
 		__asm__ volatile("dmb ish" ::: "memory");
@@ -1094,6 +1097,17 @@ task_wait_to_return(void)
 
 	thread_bootstrap_return();
 }
+
+#if CONFIG_XZS_BRINGUP
+void
+xzs_clear_thread_asts(thread_t thread)
+{
+	if (thread != THREAD_NULL) {
+		thread_ast_clear(thread, AST_ALL);
+		ast_off(AST_ALL);
+	}
+}
+#endif
 
 /**
  * A callout by task_wait_to_return on the main thread of a newly spawned task
