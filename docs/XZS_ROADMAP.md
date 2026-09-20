@@ -17,8 +17,8 @@ Progress is strictly gated by physical hardware verification. Speculative percen
 | **Phase D2** | Physical eMMC storage bring-up (SDCC1, CMD0..CMD17, PIO) | **COMPLETE** |
 | **Phase D3** | GUID Partition Table (GPT) discovery & partition enumeration | **COMPLETE** |
 | **Phase D4** | Block-storage driver integration (`bdevsw` / `disk0`) | **COMPLETE** |
-| **Phase D5** | Real root filesystem mount (RAMDisk XZSFS) | **IN PROGRESS (D5-M5 Complete; D5-M6 Next)** |
-| **Phase E** | PID 1 bootstrap (`initproc` / launchd exec) | **NOT STARTED** |
+| **Phase D5** | Real root filesystem mount (RAMDisk XZSFS) | **COMPLETE / SEALED** |
+| **Phase D6 / Phase E** | PID 1 bootstrap (`initproc` / launchd exec) | **NEXT / NOT STARTED** |
 | **Phase F** | Interactive serial shell (`/bin/sh` or micro-shell) | **NOT STARTED** |
 | **Phase G** | Restore deferred subsystems (Skywalk, DTrace, jetsam buffer) | **NOT STARTED** |
 | **Phase H** | Networking and platform device drivers | **NOT STARTED** |
@@ -203,30 +203,29 @@ Progress is strictly gated by physical hardware verification. Speculative percen
 
 ### Phase D5 — Real Root Filesystem Mount
 * **Goal**: Mount an actual read-only root filesystem (RAMDisk XZSFS) into VFS root vnode (`/`).
-* **Status**: **IN PROGRESS — D5-M5 COMPLETE ON HARDWARE; D5-M6 NEXT**
+* **Status**: **COMPLETE / SEALED — ALL D5 MILESTONES (M1-M6) COMPLETE ON HARDWARE; D6 NEXT**
   - **D5-M1 (Format Freeze & Tooling)**: **COMPLETE** (XZSFS v1 on-disk format frozen, `mkxzsfs.py` generator, `verify_xzsfs.py` independent verifier, static ARM64 Mach-O binaries verified, deterministic rootfs image built).
   - **D5-M2 (RAMDisk Block Transport)**: **COMPLETE / SEALED** (ADT `/chosen/memory-map/RAMDisk` -> `rd=md0` -> `mdevadd`; immutable logical image CRC32 `0x131e9191`).
   - **D5-M3 (Kernel XZSFS Driver)**: **COMPLETE / SEALED** (native read-only XZSFS VFS driver; superblock, metadata CRC, object graph, lookup, read, readdir, getattr, and `EROFS` behavior verified). Runtime regression gate passed on two consecutive hardware runs through `D520/90`.
   - **D5-M4 (Silicon Root Mount Proof)**: **COMPLETE / SEALED** (`vfs_mountroot()` -> `xzsfs_mount()` -> real root vnode -> `VFS_ROOT()` -> real VNOP dispatch -> global `rootvnode`). Full `D530/00` through `D530/91` and terminal `D530/01` sequence verified on Xperia XZs G8231 hardware.
   - **D5-M5 (Namespace + devfs/console)**: **COMPLETE / SEALED** (Pathname resolution of `/` and `/sbin/launchd` via `namei()`, `devfs_kernel_mount("/dev")`, crossing into devfs root vnode, `/dev/console` resolution to cdev 0:0, and full telemetry verification).
-  - **D5-M6 (Final D5 Seal)**: **NOT STARTED**. Next milestone.
-* **D5-M5 Hardware Evidence**:
-  - DevFS address hash bypass: replaced `VM_KERNEL_ADDRHASH(devfs_mp_p)` with static `0x64657666` under `CONFIG_XZS_BRINGUP` to bypass SHA-256 pointer hardening stall.
-  - Tested boot image SHA-256: `afa473266e27f2ad42fc297a896f8da2934953d47998b61019711bfdabc67896`.
-  - Checkpoint sequence: `D540/00` through `D540/91` and terminal `D540/01` (return time: +4s).
-  - `scripts/verify_d5m5_acceptance.py`: **100% PASS** for all 13 D540 checkpoints and all canonical telemetry invariants.
-  - Pathname lookups: `namei("/")` returned global `rootvnode`; `namei("/sbin/launchd")` returned `VREG` (fileid 7, size 16472, mode 0755); `namei("/dev")` crossed into devfs root vnode (`VDIR`, `devfs`); `namei("/dev/console")` returned `VCHR` (major 0, minor 0).
+  - **D5-M6 (Final D5 Seal)**: **COMPLETE / SEALED** (Namespace resolution of `/bin/sh` to fileid 3, full D5 regression continuity across M1-M6 verified on hardware, zero storage writes, hard boundary preserved before PID 1).
+* **D5 Final Hardware Evidence**:
+  - Tested boot image SHA-256: `18f1f3ade838d859f5e4a3eb0bede5953cd4a0b46c008d97033ce8e06b1d5fe9`.
+  - Checkpoint sequence: `D530/00`..`91` -> `D540/00`..`01` -> `D550/00`..`91` and terminal `D550/01` (return time: +4s).
+  - `scripts/verify_d5_final_acceptance.py`: **100% PASS** for all D530, D540, D550 checkpoints and all canonical telemetry invariants.
+  - Pathname lookups: `namei("/")` returned global `rootvnode`; `namei("/sbin/launchd")` returned `VREG` (fileid 7, size 16472, mode 0755); `namei("/bin/sh")` returned `VREG` (fileid 3, size 16472, mode 0755); `namei("/dev")` crossed into devfs root vnode (`VDIR`, `devfs`); `namei("/dev/console")` returned `VCHR` (major 0, minor 0).
   - Hard boundary preserved: `PID1_STARTED=no`, `EXECVE_ATTEMPTED=no`, `EL0_ENTRY_ATTEMPTED=no`.
   - Storage remained read-only: `CMD24_COUNT=0`, `CMD25_COUNT=0`, `ZERO_STORAGE_WRITES=yes`.
-* **Hardware Acceptance Criteria**: **SATISFIED FOR D5-M5**. Namespace traversal and devfs overlay verified.
-* **Known Blockers**: None remaining for D5-M5.
+* **Hardware Acceptance Criteria**: **SATISFIED FOR PHASE D5**. Full read-only rootfs mount, namespace traversal, devfs overlay, and console vnode verified on silicon.
+* **Known Blockers**: None remaining for Phase D5.
 * **Dependencies**: Phase D4.
 
 ---
 
-### Phase E — PID 1 Bootstrap (`initproc` / launchd)
+### Phase D6 / Phase E — PID 1 Bootstrap (`initproc` / launchd)
 * **Goal**: Spawn the first Mach/BSD userspace process (`initproc` / PID 1) from the root filesystem.
-* **Status**: **NOT STARTED**
+* **Status**: **NEXT / NOT STARTED**
 * **Hardware Acceptance Criteria**: Kernel executes `bsd_utaskbootstrap()`; clones `initproc`; loads ARM64 Mach-O binary from `/sbin/launchd` via `execve()`; transitions to EL0 userspace.
 * **Completed Items**: PAC signing verification bypass in `bsd/kern/kern_exec.c`.
 * **Remaining Items**:
