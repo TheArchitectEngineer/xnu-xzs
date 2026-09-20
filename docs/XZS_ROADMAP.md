@@ -18,7 +18,7 @@ Progress is strictly gated by physical hardware verification. Speculative percen
 | **Phase D3** | GUID Partition Table (GPT) discovery & partition enumeration | **COMPLETE** |
 | **Phase D4** | Block-storage driver integration (`bdevsw` / `disk0`) | **COMPLETE** |
 | **Phase D5** | Real root filesystem mount (RAMDisk XZSFS) | **COMPLETE / SEALED** |
-| **Phase D6** | PID 1 / First EL0 userspace (`initproc` / launchd) | **IN PROGRESS (D6-M1 through D6-M3 Complete; D6-M4 Next)** |
+| **Phase D6** | PID 1 / First EL0 userspace (`initproc` / launchd) | **BLOCKED AT D6-M4 (`D630/32`); THREE-FIX HARD STOP** |
 | **Phase D7** | Interactive serial shell (`/bin/sh` or micro-shell) | **NOT STARTED** |
 | **Phase G** | Restore deferred subsystems (Skywalk, DTrace, jetsam buffer) | **NOT STARTED** |
 | **Phase H** | Networking and platform device drivers | **NOT STARTED** |
@@ -225,12 +225,12 @@ Progress is strictly gated by physical hardware verification. Speculative percen
 
 ### Phase D6 — PID 1 / First EL0 Userspace
 * **Goal**: Bootstrap the first Mach/BSD userspace process (`initproc` / PID 1) from the root filesystem and transition from EL1 to EL0.
-* **Status**: **IN PROGRESS — D6-M1, D6-M2, D6-M3 COMPLETE ON HARDWARE; D6-M4 NEXT**
+* **Status**: **BLOCKED — D6-M1, D6-M2, D6-M3 COMPLETE ON HARDWARE; D6-M4 STOPPED AT `D630/32` UNDER THREE-FIX RULE**
 * **Milestones**:
   - **D6-M1 (PID1 Skeleton)**: **COMPLETE / SEALED** (Created and validated BSD `initproc` (PID 1, PPID 0), Mach task (non-kernel), Mach thread, and embedded uthread; zero userspace execution; full D5 regression prefix).
   - **D6-M2 (Minimal Mach-O Loader)**: **COMPLETE / SEALED** (Opened `/sbin/launchd`, validated ARM64 Mach-O header/load commands, enumerated segments, resolved entry PC `0x1000002f0`; verified static/no-dyld contract; no VM mapping; zero EL0 entry).
   - **D6-M3 (User VM + Initial Stack)**: **COMPLETE / SEALED** (Mapped and content-verified `__TEXT`, finalized current and maximum protection to RX, preserved hard PAGEZERO, left `__LINKEDIT` unmapped, constructed a native Darwin initial frame on an RW/NX stack, installed and read back PC/SP, and verified zero unexpected RWX mappings while PID1 remained suspended).
-  - **D6-M4 (First EL0 Transition)**: **NEXT / NOT STARTED** (Execute exception return `eret` to EL0 and positively prove the first userspace ARM64 instruction).
+  - **D6-M4 (First EL0 Transition)**: **IN PROGRESS / BLOCKED** (Task/thread suspension releases and return-wait wake reached `D630/32`; target thread did not enter instrumented `task_wait_to_return()` at `D630/33`; three materially different fixes exhausted without EL0 evidence).
   - **D6-M5 (First Syscall Round-Trip)**: **NOT STARTED** (Issue userspace `svc`, trap into XNU syscall dispatcher, execute kernel handler, and return to EL0).
   - **D6-M6 (Minimal Stable PID1 Runtime)**: **NOT STARTED** (Execute minimal deterministic `/sbin/launchd` userspace runtime loop/exit).
   - **D6-M7 (Final D6 Seal)**: **NOT STARTED** (Regression verification, independent verifier, evidence archive, and roadmap seal).
@@ -256,7 +256,7 @@ Progress is strictly gated by physical hardware verification. Speculative percen
   - Saved register state: PC `0x1000002f0`, SP `0x16fdfffb0`; PID1 task/thread remained suspended; EL0 not attempted.
   - Final map audit: PAGEZERO overlap count 0, unexpected RWX count 0, `__LINKEDIT` unmapped.
 * **Hardware Acceptance Criteria**: **SATISFIED FOR D6-M3**. PID1 user VM, Darwin initial stack, and saved user register state verified on physical silicon.
-* **Known Blockers**: None for D6-M3. D6-M4 exception-return path requires source audit before first EL0 attempt.
+* **Known Blockers**: D6-M4 target PID1 thread is hardware-verified as no longer waiting (`clear_wait` returned `KERN_NOT_WAITING`) after both suspension holds were released, but its `task_wait_to_return()` continuation is not observed executing. Current stall window is `D630/32_to_D630/33`. Three materially different evidence-driven fixes were tested from pushed commits, so work is stopped by policy. Scheduler/run-queue/kernel-stack state is the next audit domain; it is not yet a hardware-proven root cause. See `artifacts/reports/D6_M4_BLOCKER_REPORT.md`.
 * **Dependencies**: Phase D5 (COMPLETE / SEALED), Phase D6-M1 through D6-M3 (COMPLETE / SEALED).
 
 ---
