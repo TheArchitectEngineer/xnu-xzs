@@ -2723,3 +2723,171 @@ thread_set_wq_state64(thread_t       thread,
 
 	return KERN_SUCCESS;
 }
+
+#if CONFIG_XZS_BRINGUP
+#include <vm/vm_map_xnu.h>
+#include <vm/vm_protos.h>
+
+int xzs_get_thread_suspend_count(thread_t th);
+int xzs_get_task_suspend_count(task_t t);
+uint64_t xzs_get_thread_user_pc(thread_t th);
+uint64_t xzs_get_thread_user_sp(thread_t th);
+task_t xzs_get_map_owning_task(vm_map_t map);
+vm_map_offset_t xzs_get_map_min_offset(vm_map_t map);
+vm_map_offset_t xzs_get_map_max_offset(vm_map_t map);
+void xzs_setup_user_map_64bit(vm_map_t map);
+uint32_t xzs_vm_map_count_entries_below(vm_map_t map, vm_map_offset_t end);
+boolean_t xzs_vm_map_entry_snapshot(vm_map_t map, vm_map_offset_t address,
+    vm_map_offset_t *start, vm_map_offset_t *end,
+    vm_prot_t *protection, vm_prot_t *max_protection);
+void xzs_vm_map_audit(vm_map_t map, vm_map_offset_t pagezero_end,
+    vm_map_offset_t text_start, vm_map_offset_t text_end,
+    vm_map_offset_t stack_start, vm_map_offset_t stack_end,
+    uint32_t *pagezero_overlap_count, uint32_t *unexpected_rwx_count,
+    boolean_t *text_verified, boolean_t *stack_verified);
+
+int
+xzs_get_thread_suspend_count(thread_t th)
+{
+	return th ? th->suspend_count : -1;
+}
+
+int
+xzs_get_task_suspend_count(task_t t)
+{
+	return t ? t->suspend_count : -1;
+}
+
+uint64_t
+xzs_get_thread_user_pc(thread_t th)
+{
+	if (!th || !th->machine.upcb) {
+		return 0;
+	}
+	return get_saved_state_pc(th->machine.upcb);
+}
+
+uint64_t
+xzs_get_thread_user_sp(thread_t th)
+{
+	if (!th || !th->machine.upcb) {
+		return 0;
+	}
+	return get_saved_state_sp(th->machine.upcb);
+}
+
+task_t
+xzs_get_map_owning_task(vm_map_t map)
+{
+	return map ? map->owning_task : TASK_NULL;
+}
+
+vm_map_offset_t
+xzs_get_map_min_offset(vm_map_t map)
+{
+	return map ? vm_map_min(map) : 0;
+}
+
+vm_map_offset_t
+xzs_get_map_max_offset(vm_map_t map)
+{
+	return map ? vm_map_max(map) : 0;
+}
+
+void
+xzs_setup_user_map_64bit(vm_map_t map)
+{
+	if (!map) {
+		return;
+	}
+	vm_map_set_64bit(map);
+	vm_map_set_page_shift(map, SIXTEENK_PAGE_SHIFT);
+}
+
+uint32_t
+xzs_vm_map_count_entries_below(vm_map_t map, vm_map_offset_t end)
+{
+	vm_map_entry_t entry;
+	uint32_t count = 0;
+
+	vm_map_lock_read(map);
+	for (entry = vm_map_first_entry(map);
+	    entry != vm_map_to_entry(map);
+	    entry = entry->vme_next) {
+		if (entry->vme_start < end) {
+			count++;
+		}
+	}
+	vm_map_unlock_read(map);
+
+	return count;
+}
+
+boolean_t
+xzs_vm_map_entry_snapshot(
+	vm_map_t map,
+	vm_map_offset_t address,
+	vm_map_offset_t *start,
+	vm_map_offset_t *end,
+	vm_prot_t *protection,
+	vm_prot_t *max_protection)
+{
+	vm_map_entry_t entry = VM_MAP_ENTRY_NULL;
+	boolean_t found;
+
+	vm_map_lock_read(map);
+	found = vm_map_lookup_entry(map, address, &entry);
+	if (found) {
+		*start = entry->vme_start;
+		*end = entry->vme_end;
+		*protection = entry->protection;
+		*max_protection = entry->max_protection;
+	}
+	vm_map_unlock_read(map);
+
+	return found;
+}
+
+void
+xzs_vm_map_audit(
+	vm_map_t map,
+	vm_map_offset_t pagezero_end,
+	vm_map_offset_t text_start,
+	vm_map_offset_t text_end,
+	vm_map_offset_t stack_start,
+	vm_map_offset_t stack_end,
+	uint32_t *pagezero_overlap_count,
+	uint32_t *unexpected_rwx_count,
+	boolean_t *text_verified,
+	boolean_t *stack_verified)
+{
+	vm_map_entry_t entry;
+
+	*pagezero_overlap_count = 0;
+	*unexpected_rwx_count = 0;
+	*text_verified = FALSE;
+	*stack_verified = FALSE;
+
+	vm_map_lock_read(map);
+	for (entry = vm_map_first_entry(map);
+	    entry != vm_map_to_entry(map);
+	    entry = entry->vme_next) {
+		if (entry->vme_start < pagezero_end) {
+			(*pagezero_overlap_count)++;
+		}
+		if ((entry->protection & (VM_PROT_WRITE | VM_PROT_EXECUTE)) ==
+		    (VM_PROT_WRITE | VM_PROT_EXECUTE)) {
+			(*unexpected_rwx_count)++;
+		}
+		if (entry->vme_start == text_start && entry->vme_end == text_end &&
+		    entry->protection == (VM_PROT_READ | VM_PROT_EXECUTE)) {
+			*text_verified = TRUE;
+		}
+		if (entry->vme_start == stack_start && entry->vme_end == stack_end &&
+		    entry->protection == (VM_PROT_READ | VM_PROT_WRITE)) {
+			*stack_verified = TRUE;
+		}
+	}
+	vm_map_unlock_read(map);
+}
+#endif
