@@ -66,6 +66,13 @@ kmopen(dev_t dev, __unused int flag, __unused int devtype, proc_t pp)
 	struct tty     *tp;
 	struct winsize *wp;
 	int             ret;
+#if CONFIG_XZS_BRINGUP
+	extern volatile int xzs_d6m6_stdio_probe_active;
+	extern void xzs_breadcrumb(uint32_t cp, uint32_t err);
+	if (xzs_d6m6_stdio_probe_active) {
+		xzs_breadcrumb(0xD651, 0x50);
+	}
+#endif
 
 	unit = minor(dev);
 	if (unit >= 1) {
@@ -74,7 +81,17 @@ kmopen(dev_t dev, __unused int flag, __unused int devtype, proc_t pp)
 
 	tp = km_tty[unit];
 
+#if CONFIG_XZS_BRINGUP
+	if (xzs_d6m6_stdio_probe_active) {
+		xzs_breadcrumb(0xD651, 0x51);
+	}
+#endif
 	tty_lock(tp);
+#if CONFIG_XZS_BRINGUP
+	if (xzs_d6m6_stdio_probe_active) {
+		xzs_breadcrumb(0xD651, 0x52);
+	}
+#endif
 
 	tp->t_oproc = kmstart;
 	tp->t_param = NULL;
@@ -95,7 +112,17 @@ kmopen(dev_t dev, __unused int flag, __unused int devtype, proc_t pp)
 
 	tp->t_state |= TS_CARR_ON;      /* lie and say carrier exists and is
 	                                 * on. */
+#if CONFIG_XZS_BRINGUP
+	if (xzs_d6m6_stdio_probe_active) {
+		xzs_breadcrumb(0xD651, 0x53);
+	}
+#endif
 	ret = ((*linesw[tp->t_line].l_open)(dev, tp));
+#if CONFIG_XZS_BRINGUP
+	if (xzs_d6m6_stdio_probe_active) {
+		xzs_breadcrumb(0xD651, 0x54);
+	}
+#endif
 	{
 		PE_Video        video;
 		wp = &tp->t_winsize;
@@ -131,7 +158,18 @@ kmopen(dev_t dev, __unused int flag, __unused int devtype, proc_t pp)
 	}
 
 out:
+
+#if CONFIG_XZS_BRINGUP
+	if (xzs_d6m6_stdio_probe_active) {
+		xzs_breadcrumb(0xD651, 0x55);
+	}
+#endif
 	tty_unlock(tp);
+#if CONFIG_XZS_BRINGUP
+	if (xzs_d6m6_stdio_probe_active) {
+		xzs_breadcrumb(0xD651, 0x56);
+	}
+#endif
 
 	return ret;
 }

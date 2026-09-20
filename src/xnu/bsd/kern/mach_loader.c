@@ -4554,6 +4554,7 @@ extern kern_return_t clear_wait(thread_t thread, wait_result_t result);
 
 volatile boolean_t xzs_d6m4_probe_armed = FALSE;
 thread_t xzs_d6m4_target_thread = THREAD_NULL;
+volatile int xzs_d6m6_stdio_probe_active = 0;
 
 static void xzs_d6m4_first_el0(proc_t p, task_t t, thread_t th);
 extern void xzs_d6m4_capture_scheduler_state(task_t t, thread_t th);
@@ -4584,8 +4585,14 @@ xzs_d6m3_fatal(uint32_t step, const char *msg)
 static int
 xzs_d6m6_open_console_fd(proc_t p, thread_t th, int expected_fd)
 {
-	struct vnode_attr *vap = kalloc_type(struct vnode_attr, Z_WAITOK | Z_ZERO | Z_NOFAIL);
-	struct nameidata *ndp = kalloc_type(struct nameidata, Z_WAITOK | Z_ZERO | Z_NOFAIL);
+	extern void xzs_breadcrumb(uint32_t cp, uint32_t err);
+	struct vnode_attr *vap;
+	struct nameidata *ndp;
+
+	xzs_breadcrumb(0xD651, 0x10);
+	vap = kalloc_type(struct vnode_attr, Z_WAITOK | Z_ZERO | Z_NOFAIL);
+	ndp = kalloc_type(struct nameidata, Z_WAITOK | Z_ZERO | Z_NOFAIL);
+	xzs_breadcrumb(0xD651, 0x11);
 	struct vfs_context context = {
 		.vc_thread = th,
 		.vc_ucred = kauth_cred_proc_ref(p),
@@ -4593,25 +4600,31 @@ xzs_d6m6_open_console_fd(proc_t p, thread_t th, int expected_fd)
 	struct fileproc *fp = FILEPROC_NULL;
 	int32_t fd = -1;
 	int error;
+	xzs_breadcrumb(0xD651, 0x12);
 
 	VATTR_INIT(vap);
 	VATTR_SET(vap, va_mode, 0);
 	NDINIT(ndp, LOOKUP, OP_OPEN, FOLLOW, UIO_SYSSPACE,
 	    CAST_USER_ADDR_T("/dev/console"), &context);
 
+	xzs_breadcrumb(0xD651, 0x13);
 	error = open1(&context, ndp, O_RDWR | O_NOCTTY, vap, NULL, NULL,
 	    &fd, AUTH_OPEN_NOAUTHFD);
+	xzs_breadcrumb(0xD651, 0x14);
 	kauth_cred_unref(&context.vc_ucred);
 	kfree_type(struct nameidata, ndp);
 	kfree_type(struct vnode_attr, vap);
+	xzs_breadcrumb(0xD651, 0x15);
 	if (error != 0) {
 		return error;
 	}
 	if (fd != expected_fd) {
 		return EINVAL;
 	}
+	xzs_breadcrumb(0xD651, 0x16);
 
 	error = fp_lookup(p, fd, &fp, 0);
+	xzs_breadcrumb(0xD651, 0x17);
 	if (error != 0) {
 		return error;
 	}
@@ -4622,6 +4635,7 @@ xzs_d6m6_open_console_fd(proc_t p, thread_t th, int expected_fd)
 	    major(vnode_specrdev(vp)) == 0 && minor(vnode_specrdev(vp)) == 0 &&
 	    (fp->fp_glob->fg_flag & (FREAD | FWRITE)) == (FREAD | FWRITE);
 	(void)fp_drop(p, fd, fp, 0);
+	xzs_breadcrumb(0xD651, 0x18);
 
 	return valid ? 0 : EINVAL;
 }
@@ -4634,6 +4648,8 @@ xzs_d6m6_setup_console_stdio(proc_t p, thread_t th)
 
 	xzs_breadcrumb(0xD650, 0x00);
 	xzs_early_puts("[XZS-D6M6] D650/00 minimal stable PID1 runtime enter\n");
+	xzs_d6m6_stdio_probe_active = 1;
+	xzs_breadcrumb(0xD651, 0x01);
 
 	/* The certified D6-M5 baseline proved all three inherited slots absent. */
 	for (int fd = 0; fd < 3; fd++) {
@@ -4648,7 +4664,9 @@ xzs_d6m6_setup_console_stdio(proc_t p, thread_t th)
 			xzs_d6m3_fatal(0x10, "D6-M6 PID1 initial fd-table audit failed");
 			return;
 		}
+		xzs_breadcrumb(0xD651, 0x02 + (uint32_t)fd);
 	}
+	xzs_breadcrumb(0xD651, 0x05);
 
 	for (int fd = 0; fd < 3; fd++) {
 		if (xzs_d6m6_open_console_fd(p, th, fd) != 0) {
@@ -4657,6 +4675,7 @@ xzs_d6m6_setup_console_stdio(proc_t p, thread_t th)
 		}
 	}
 
+	xzs_d6m6_stdio_probe_active = 0;
 	xzs_breadcrumb(0xD650, 0x10);
 	xzs_early_puts("[XZS-D6M6] D650/10 PID1 fd 0/1/2 established as native /dev/console VCHR 0:0 objects\n");
 }

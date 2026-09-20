@@ -74,13 +74,35 @@ int
 cnopen(__unused dev_t dev, int flag, int devtype, struct proc *pp)
 {
 	int error;
+#if CONFIG_XZS_BRINGUP
+	extern volatile int xzs_d6m6_stdio_probe_active;
+	extern void xzs_breadcrumb(uint32_t cp, uint32_t err);
+	if (xzs_d6m6_stdio_probe_active) {
+		xzs_breadcrumb(0xD651, 0x40);
+	}
+#endif
 	struct tty *constty = copy_constty();
+#if CONFIG_XZS_BRINGUP
+	if (xzs_d6m6_stdio_probe_active) {
+		xzs_breadcrumb(0xD651, 0x41);
+	}
+#endif
 	if (constty) {
 		dev = constty->t_dev;
 	} else {
 		dev = km_tty[0]->t_dev;
 	}
+#if CONFIG_XZS_BRINGUP
+	if (xzs_d6m6_stdio_probe_active) {
+		xzs_breadcrumb(0xD651, 0x42);
+	}
+#endif
 	error = (*cdevsw[major(dev)].d_open)(dev, flag, devtype, pp);
+#if CONFIG_XZS_BRINGUP
+	if (xzs_d6m6_stdio_probe_active) {
+		xzs_breadcrumb(0xD651, 0x43);
+	}
+#endif
 	if (constty != NULL) {
 		ttyfree(constty);
 	}
