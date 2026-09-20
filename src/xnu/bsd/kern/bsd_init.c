@@ -1101,6 +1101,26 @@ bsd_init(void)
 		extern void xzs_d5m2_r8_seal(dev_t root_dev, const char *root_name);
 		xzs_d5m2_r8_seal(rootdev, rootdevice);
 
+#if CONFIG_XZS_BRINGUP
+		/*
+		 * ================================================================
+		 * PHASE D5-M4: Real XZSFS Mount + Root Vnode
+		 * ================================================================
+		 */
+		extern void xzs_breadcrumb(uint32_t cp, uint32_t err);
+		/* Checkpoint 0xD530/00: D5-M4 enter */
+		xzs_breadcrumb(0xD530, 0x00);
+		xzs_early_puts("[XZS-BOOT] [D5-M4] D5-M4 ENTER\n");
+
+		/* Register XZSFS filesystem */
+		extern int xzsfs_vfs_register(void);
+		xzsfs_vfs_register();
+
+		/* Checkpoint 0xD530/10: root mount path enter */
+		xzs_breadcrumb(0xD530, 0x10);
+		xzs_early_puts("[XZS-BOOT] [D5-M4] ROOT MOUNT PATH ENTER\n");
+#endif
+
 		xzs_early_puts("[XZS-BOOT] [D51] vfs_mountroot ENTER\n");
 		extern void xzs_breadcrumb(uint32_t cp, uint32_t err);
 		xzs_breadcrumb(0xD51, 0);
@@ -1151,6 +1171,12 @@ bsd_init(void)
 	set_rootvnode(init_rootvnode);
 	lck_rw_unlock_exclusive(&rootvnode_rw_lock);
 	init_rootvnode = NULLVP;  /* use rootvnode after this point */
+
+#if CONFIG_XZS_BRINGUP
+	/* Phase D5-M4: Real XZSFS Mount & Root Vnode Probe */
+	extern int xzsfs_d5m4_probe(dev_t rootdev);
+	xzsfs_d5m4_probe(rootdev);
+#endif
 
 
 	if (!bsd_rooted_ramdisk()) {
@@ -2780,13 +2806,5 @@ xzs_d5m2_r8_seal(dev_t root_dev, const char *root_name)
 	xzs_early_puts("=== D5-M2-R8 FINAL SEAL TELEMETRY END ===\n\n");
 
 	xzs_early_puts("[XZS-RAMDISK] PHASE D5-M2-R8 FINAL SEAL COMPLETE & VERIFIED (PASS)\n\n");
-
-	/* Phase D5-M3: Native XZSFS Read-Only VFS Driver Probe */
-	extern int xzsfs_d5m3_probe(dev_t rootdev);
-	xzsfs_d5m3_probe(root_dev);
-
-	/* Safety fallback: never return to bsd_init / vfs_mountroot */
-	delay(50000);
-	xzs_spin_halt();
 }
 
