@@ -13,7 +13,7 @@ REQUIRED_SEQUENCE = [
     0x40, 0x41, 0x50, 0x90, 0x91, 0x01,
 ]
 
-REQUIRED_TELEMETRY = {
+REQUIRED_INVARIANTS = {
     "D6-M3_REGRESSION_PASS": "yes",
     "D6-M4_COMPLETE": "yes",
     "NATIVE_AF_DELTA_ONLY_AF": "yes",
@@ -31,9 +31,12 @@ REQUIRED_TELEMETRY = {
     "SVC_IMMEDIATE": "0x0000000000000080",
     "SVC_SYSCALL_NUMBER_REGISTER": "x16",
     "SVC_SYSCALL_NUMBER": "4",
+    "D6_M4_EXCEPTION_TELEMETRY_COMPLETE": "yes",
+}
+
+HISTORICAL_BOUNDARY = {
     "SYSCALL_DISPATCH_REACHED": "no",
     "FIRST_SYSCALL_ROUNDTRIP_COMPLETE": "no",
-    "D6_M4_EXCEPTION_TELEMETRY_COMPLETE": "yes",
     "ROADMAP_ADVANCED_TO": "D6-M5",
 }
 
@@ -58,11 +61,13 @@ def parse_telemetry(text):
 
 
 def main():
-    if len(sys.argv) != 2 or not os.path.isfile(sys.argv[1]):
-        print(f"Usage: {sys.argv[0]} <console-log>")
+    regression_mode = len(sys.argv) == 3 and sys.argv[1] == "--regression"
+    log_arg = sys.argv[2] if regression_mode else (sys.argv[1] if len(sys.argv) == 2 else None)
+    if log_arg is None or not os.path.isfile(log_arg):
+        print(f"Usage: {sys.argv[0]} [--regression] <console-log>")
         return 2
 
-    log_path = sys.argv[1]
+    log_path = log_arg
     d6m3 = os.path.join(os.path.dirname(__file__), "verify_d6m3_acceptance.py")
     regression = subprocess.run([sys.executable, d6m3, "--regression-only", log_path], check=False)
     if regression.returncode != 0:
@@ -87,7 +92,10 @@ def main():
     print("[PASS] D630 checkpoint sequence complete and in canonical order")
 
     telemetry = parse_telemetry(text)
-    for key, expected in REQUIRED_TELEMETRY.items():
+    required = dict(REQUIRED_INVARIANTS)
+    if not regression_mode:
+        required.update(HISTORICAL_BOUNDARY)
+    for key, expected in required.items():
         actual = telemetry.get(key)
         if actual is None or actual.lower() != expected.lower():
             print(f"FAIL: {key} expected {expected}, got {actual}")
@@ -117,8 +125,12 @@ def main():
 
     print("\n============================================================")
     print("D6_M3_REGRESSION_VERIFIER: PASS")
-    print("D6_M4_ACCEPTANCE_VERIFIER: PASS")
-    print("Known launchd instructions executed in EL0; first SVC captured before dispatch.")
+    if regression_mode:
+        print("D6_M4_REGRESSION_VERIFIER: PASS")
+        print("D6-M4 EL0-entry, PTE, register-signature, and exception invariants preserved.")
+    else:
+        print("D6_M4_ACCEPTANCE_VERIFIER: PASS")
+        print("Known launchd instructions executed in EL0; first SVC captured before dispatch.")
     print("============================================================")
     return 0
 

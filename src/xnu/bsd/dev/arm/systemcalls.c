@@ -102,6 +102,18 @@ unix_syscall(
 
 	code = arm_get_syscall_number(state);
 
+#if CONFIG_XZS_BRINGUP
+	extern volatile boolean_t xzs_d6m4_probe_armed;
+	extern thread_t xzs_d6m4_target_thread;
+	extern struct xzs_d6m4_r650_telemetry xzs_d6m4_r650_telemetry;
+	boolean_t xzs_d6m5_target_write = xzs_d6m4_probe_armed &&
+	    thread_act == xzs_d6m4_target_thread && code == SYS_write;
+	if (xzs_d6m5_target_write) {
+		xzs_d6m4_r650_telemetry.dispatcher_reached = 1;
+		__asm__ volatile("dmb ish" ::: "memory");
+	}
+#endif
+
 #define unix_syscall_kprintf(x...)      /* kprintf("unix_syscall: " x) */
 
 	if (kdebug_enable && !code_is_kdebug_trace(code)) {
@@ -178,7 +190,21 @@ unix_syscall(
 #endif /* CONFIG_DEBUG_SYSCALL_REJECTION */
 
 	AUDIT_SYSCALL_ENTER(code, proc, uthread);
+#if CONFIG_XZS_BRINGUP
+	if (xzs_d6m5_target_write && syscode == SYS_write) {
+		xzs_d6m4_r650_telemetry.handler_entered = 1;
+		__asm__ volatile("dmb ish" ::: "memory");
+	}
+#endif
 	error = (*(callp->sy_call))(proc, &uthread->uu_arg[0], &(uthread->uu_rval[0]));
+#if CONFIG_XZS_BRINGUP
+	if (xzs_d6m5_target_write && syscode == SYS_write) {
+		xzs_d6m4_r650_telemetry.syscall_error = (uint64_t)(unsigned int)error;
+		xzs_d6m4_r650_telemetry.syscall_rval0 = (uint64_t)uthread->uu_rval[0];
+		xzs_d6m4_r650_telemetry.handler_completed = 1;
+		__asm__ volatile("dmb ish" ::: "memory");
+	}
+#endif
 	AUDIT_SYSCALL_EXIT(code, proc, uthread, error);
 
 #if CONFIG_MACF
@@ -205,6 +231,17 @@ skip_syscall:
 #endif /* DEBUG || DEVELOPMENT */
 
 	arm_prepare_syscall_return(callp, state, uthread, error);
+
+#if CONFIG_XZS_BRINGUP
+	if (xzs_d6m5_target_write && syscode == SYS_write) {
+		arm_saved_state64_t *ss64 = saved_state64(state);
+		xzs_d6m4_r650_telemetry.syscall_return_x0 = ss64->x[0];
+		xzs_d6m4_r650_telemetry.syscall_return_x1 = ss64->x[1];
+		xzs_d6m4_r650_telemetry.syscall_return_cpsr = ss64->cpsr;
+		xzs_d6m4_r650_telemetry.syscall_return_prepared = 1;
+		__asm__ volatile("dmb ish" ::: "memory");
+	}
+#endif
 
 	uthread->uu_flag &= ~UT_NOTCANCELPT;
 	uthread->syscall_code = 0;
