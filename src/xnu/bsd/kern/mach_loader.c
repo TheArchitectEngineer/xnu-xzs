@@ -5258,9 +5258,9 @@ xzs_d6m4_first_el0(proc_t p, task_t t, thread_t th)
 	}
 
 	/* Wake the native main-thread return gate only after both holds are gone. */
-	task_clear_return_wait(t, TCRW_CLEAR_ALL_WAIT);
 	xzs_breadcrumb(CP_D6M4, 0x32);
-	xzs_early_puts("[XZS-D6M4] D630/32 PID1 return-wait gate cleared after suspension release\n");
+	xzs_early_puts("[XZS-D6M4] D630/32 clearing PID1 return-wait gate after suspension release\n");
+	task_clear_return_wait(t, TCRW_CLEAR_ALL_WAIT);
 
 	/*
 	 * Let bsd_utaskbootstrap() return through the native bootstrap path.

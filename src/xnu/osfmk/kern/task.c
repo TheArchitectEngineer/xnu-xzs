@@ -964,6 +964,18 @@ task_wait_to_return(void)
 	task_t task = current_task();
 	thread_t thread = current_thread();
 	uint8_t returnwaitflags;
+#if CONFIG_XZS_BRINGUP
+	extern volatile boolean_t xzs_d6m4_probe_armed;
+	extern thread_t xzs_d6m4_target_thread;
+	extern void xzs_breadcrumb(uint32_t cp, uint32_t err);
+	extern void xzs_early_puts(const char *s);
+	boolean_t xzs_d6m4_target = xzs_d6m4_probe_armed &&
+	    thread == xzs_d6m4_target_thread;
+	if (xzs_d6m4_target) {
+		xzs_breadcrumb(0xD630, 0x33);
+		xzs_early_puts("[XZS-D6M4] D630/33 PID1 entered task_wait_to_return\n");
+	}
+#endif
 
 	is_write_lock(task->itk_space);
 
@@ -995,6 +1007,12 @@ task_wait_to_return(void)
 	returnwaitflags = task->t_returnwaitflags;
 	is_write_unlock(task->itk_space);
 	turnstile_cleanup();
+#if CONFIG_XZS_BRINGUP
+	if (xzs_d6m4_target) {
+		xzs_breadcrumb(0xD630, 0x34);
+		xzs_early_puts("[XZS-D6M4] D630/34 PID1 return-wait flags cleared\n");
+	}
+#endif
 
 	/**
 	 * In posix_spawn() path, process_signature() is guaranteed to complete
@@ -1002,6 +1020,12 @@ task_wait_to_return(void)
 	 * on the result of that before we return to EL0.
 	 */
 	task_post_signature_processing_hook(task);
+#if CONFIG_XZS_BRINGUP
+	if (xzs_d6m4_target) {
+		xzs_breadcrumb(0xD630, 0x35);
+		xzs_early_puts("[XZS-D6M4] D630/35 PID1 post-signature hook complete\n");
+	}
+#endif
 #if CONFIG_MACF
 	/*
 	 * Before jumping to userspace and allowing this process
@@ -1020,6 +1044,14 @@ task_wait_to_return(void)
 	 * Set task/thread control port movability now that we can call AMFI
 	 */
 	task_set_ctrl_port_default(task, thread);
+#if CONFIG_XZS_BRINGUP
+	if (xzs_d6m4_target) {
+		xzs_breadcrumb(0xD630, 0x36);
+		xzs_early_puts("[XZS-D6M4] D630/36 PID1 control-port setup complete\n");
+		xzs_breadcrumb(0xD630, 0x37);
+		xzs_early_puts("[XZS-D6M4] D630/37 PID1 entering thread_bootstrap_return\n");
+	}
+#endif
 
 	thread_bootstrap_return();
 }
@@ -10791,5 +10823,4 @@ task_best_name(task_t task)
 {
 	return proc_best_name(task_get_proc_raw(task));
 }
-
 
