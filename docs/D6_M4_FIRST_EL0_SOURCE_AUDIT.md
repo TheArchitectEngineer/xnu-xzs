@@ -18,9 +18,12 @@ continuation `task_wait_to_return()`. The canonical activation sequence in
 the final exception return to EL0.
 
 D6-M1 added exactly one user thread suspension and one normal task suspension.
-D6-M4 completes IPC/return-wait activation, releases the task hold with
-`task_resume_internal()`, and releases the thread user hold with
-`thread_resume()`.
+D6-M4 enables IPC, releases the task hold with `task_resume_internal()`, and
+releases the thread user hold with `thread_resume()`. Only after both holds are
+gone does it call `task_clear_return_wait(TCRW_CLEAR_ALL_WAIT)`, matching the
+native main-thread wake model without trying to wake a still-suspended thread.
+The bootstrap parent then returns normally instead of occupying its context in
+a diagnostic busy-wait.
 
 ## Positive first-instruction proof
 

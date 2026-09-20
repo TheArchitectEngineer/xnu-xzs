@@ -5229,9 +5229,8 @@ xzs_d6m4_first_el0(proc_t p, task_t t, thread_t th)
 	xzs_early_puts("[XZS-D6M4] D630/10 PID1 saved EL0 state and identity revalidated\n");
 
 	ipc_task_enable(t);
-	task_clear_return_wait(t, TCRW_CLEAR_ALL_WAIT);
 	xzs_breadcrumb(CP_D6M4, 0x20);
-	xzs_early_puts("[XZS-D6M4] D630/20 IPC task enabled and return-wait gate cleared\n");
+	xzs_early_puts("[XZS-D6M4] D630/20 IPC task enabled\n");
 
 	xzs_d6m4_target_thread = th;
 	xzs_d6m4_probe_armed = TRUE;
@@ -5257,6 +5256,11 @@ xzs_d6m4_first_el0(proc_t p, task_t t, thread_t th)
 		delay(50000);
 		xzs_spin_halt();
 	}
+
+	/* Wake the native main-thread return gate only after both holds are gone. */
+	task_clear_return_wait(t, TCRW_CLEAR_ALL_WAIT);
+	xzs_breadcrumb(CP_D6M4, 0x32);
+	xzs_early_puts("[XZS-D6M4] D630/32 PID1 return-wait gate cleared after suspension release\n");
 
 	/*
 	 * Let bsd_utaskbootstrap() return through the native bootstrap path.
