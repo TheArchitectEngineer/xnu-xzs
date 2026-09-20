@@ -118,7 +118,7 @@ REQUIRED_D6M3_SEQUENCE = [
     (0x01, "diagnostic terminal halt before D6-M4"),
 ]
 
-REQUIRED_TELEMETRY = [
+REQUIRED_REGRESSION_TELEMETRY = [
     ("D6-M1_REGRESSION_PASS", "yes"),
     ("D6-M2_REGRESSION_PASS", "yes"),
     ("D6-M3_COMPLETE", "yes"),
@@ -163,12 +163,15 @@ REQUIRED_TELEMETRY = [
     ("PID1_THREAD_REMAINS_SUSPENDED", "yes"),
     ("PID1_TASK_REMAINS_SUSPENDED", "yes"),
     ("PID1_SUSPEND_STATE_UNINTENTIONALLY_CHANGED", "no"),
-    ("PID1_STARTED", "no"),
-    ("EL0_ENTRY_ATTEMPTED", "no"),
-    ("FIRST_EL0_INSTRUCTION_EXECUTED", "no"),
     ("D6_M3_ACCEPTANCE_VERIFIER", "PASS"),
     ("FINAL_DEVICE_STATE", "fastboot"),
     ("FASTBOOT_RETURN_METHOD", "twrp_scripted"),
+]
+
+REQUIRED_BOUNDARY_TELEMETRY = [
+    ("PID1_STARTED", "no"),
+    ("EL0_ENTRY_ATTEMPTED", "no"),
+    ("FIRST_EL0_INSTRUCTION_EXECUTED", "no"),
     ("ROADMAP_ADVANCED_TO", "D6-M4"),
 ]
 
@@ -187,7 +190,8 @@ def parse_telemetry(text):
     telemetry = {}
     pattern = re.compile(r"^([A-Za-z0-9_-]+)\s*[=:]\s*(.+?)\s*$")
     for line in text.splitlines():
-        match = pattern.match(line.strip())
+        cleaned = re.sub(r"^\[.*?\]\s*", "", line.strip())
+        match = pattern.match(cleaned)
         if match:
             telemetry[match.group(1)] = match.group(2)
     return telemetry
@@ -201,19 +205,7 @@ def is_ordered_subsequence(expected, actual):
     return position == len(expected)
 
 
-def main():
-    if len(sys.argv) != 2:
-        print(f"Usage: {sys.argv[0]} <console-log>")
-        return 2
-
-    log_path = sys.argv[1]
-    if not os.path.isfile(log_path):
-        print(f"ERROR: log file not found: {log_path}")
-        return 2
-
-    with open(log_path, "r", encoding="utf-8", errors="replace") as f:
-        content = f.read()
-
+def verify_d6m3(content, regression_only=False):
     breadcrumbs = parse_breadcrumbs(content)
     telemetry = parse_telemetry(content)
 
@@ -307,7 +299,7 @@ def main():
     # 8. Canonical Telemetry Assertions
     print("\n=== D6-M3 CANONICAL TELEMETRY AUDIT ===")
     failed_keys = []
-    for key, expected_val in REQUIRED_TELEMETRY:
+    for key, expected_val in REQUIRED_REGRESSION_TELEMETRY:
         actual_val = telemetry.get(key)
         if actual_val is None:
             print(f"FAIL: Missing telemetry key '{key}'")
@@ -333,17 +325,58 @@ def main():
         print(f"FAIL: PID1_INITIAL_SP invalid: {initial_sp}")
         failed_keys.append("PID1_INITIAL_SP")
 
+    if not regression_only:
+        print("\n--- D6-M3 Terminal Boundary Check ---")
+        for key, expected_val in REQUIRED_BOUNDARY_TELEMETRY:
+            actual_val = telemetry.get(key)
+            if actual_val is None:
+                print(f"FAIL: Missing telemetry key '{key}'")
+                failed_keys.append(key)
+            elif actual_val.lower() != expected_val.lower():
+                print(f"FAIL: Telemetry '{key}' expected '{expected_val}', got '{actual_val}'")
+                failed_keys.append(key)
+            else:
+                print(f"[PASS] {key} = {actual_val}")
+
     if failed_keys:
         print(f"\nFAIL: {len(failed_keys)} telemetry assertions failed")
         return 1
 
     print("\n============================================================")
-    print("D6-M3 ACCEPTANCE VERIFICATION RESULT: PASS")
-    print("PID1 User VM and Initial Stack fully verified on hardware.")
-    print("Zero user execution observed (PID1_STARTED=no).")
+    if regression_only:
+        print("D6-M3 REGRESSION VERIFICATION RESULT: PASS")
+        print("D5, D6-M1, D6-M2, and D6-M3 VM/stack invariants verified.")
+    else:
+        print("D6-M3 ACCEPTANCE VERIFICATION RESULT: PASS")
+        print("PID1 User VM and Initial Stack fully verified on hardware.")
+        print("Zero user execution observed (PID1_STARTED=no).")
     print("============================================================")
     return 0
 
 
+def main():
+    if len(sys.argv) < 2 or len(sys.argv) > 3:
+        print(f"Usage: {sys.argv[0]} [--regression-only] <console-log>")
+        return 2
+
+    regression_only = False
+    log_path = None
+    for arg in sys.argv[1:]:
+        if arg == "--regression-only":
+            regression_only = True
+        else:
+            log_path = arg
+
+    if not log_path or not os.path.isfile(log_path):
+        print(f"ERROR: log file not found: {log_path}")
+        return 2
+
+    with open(log_path, "r", encoding="utf-8", errors="replace") as f:
+        content = f.read()
+
+    return verify_d6m3(content, regression_only=regression_only)
+
+
 if __name__ == "__main__":
     sys.exit(main())
+

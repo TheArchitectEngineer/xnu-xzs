@@ -12,9 +12,17 @@ REQUIRED_SEQUENCE = [
     0x33, 0x34, 0x35, 0x36, 0x37,
     0x40, 0x41, 0x50, 0x90, 0x91, 0x01,
 ]
+
 REQUIRED_TELEMETRY = {
     "D6-M3_REGRESSION_PASS": "yes",
     "D6-M4_COMPLETE": "yes",
+    "NATIVE_AF_DELTA_ONLY_AF": "yes",
+    "XZS_EXEC_DELTA_ONLY_UXN": "yes",
+    "TOTAL_BOOTSTRAP_DELTA_AF_AND_UXN": "yes",
+    "UNRELATED_PTE_BITS_UNCHANGED": "yes",
+    "PARENT_EL0_EXEC_BLOCKED": "no",
+    "PP_ATTR_REFERENCED": "1",
+    "PP_ATTR_REFFAULT": "0",
     "PID1_STARTED": "yes",
     "EL0_ENTRY_ATTEMPTED": "yes",
     "FIRST_EL0_INSTRUCTION_EXECUTED": "yes",
@@ -38,6 +46,17 @@ def ordered(expected, actual):
     return position == len(expected)
 
 
+def parse_telemetry(text):
+    telemetry = {}
+    pattern = re.compile(r"^([A-Za-z0-9_-]+)\s*[=:]\s*(.+?)\s*$")
+    for line in text.splitlines():
+        cleaned = re.sub(r"^\[.*?\]\s*", "", line.strip())
+        match = pattern.match(cleaned)
+        if match:
+            telemetry[match.group(1)] = match.group(2)
+    return telemetry
+
+
 def main():
     if len(sys.argv) != 2 or not os.path.isfile(sys.argv[1]):
         print(f"Usage: {sys.argv[0]} <console-log>")
@@ -45,7 +64,7 @@ def main():
 
     log_path = sys.argv[1]
     d6m3 = os.path.join(os.path.dirname(__file__), "verify_d6m3_acceptance.py")
-    regression = subprocess.run([sys.executable, d6m3, log_path], check=False)
+    regression = subprocess.run([sys.executable, d6m3, "--regression-only", log_path], check=False)
     if regression.returncode != 0:
         print("FAIL: D6-M3 regression verifier failed")
         return 1
@@ -65,16 +84,15 @@ def main():
     if any(value >= 0xEE00 for value in breadcrumbs):
         print("FAIL: D630 fatal breadcrumb present")
         return 1
+    print("[PASS] D630 checkpoint sequence complete and in canonical order")
 
-    telemetry = {}
-    for line in text.splitlines():
-        match = re.match(r"^([A-Za-z0-9_-]+)=(.+?)\s*$", line.strip())
-        if match:
-            telemetry[match.group(1)] = match.group(2)
+    telemetry = parse_telemetry(text)
     for key, expected in REQUIRED_TELEMETRY.items():
-        if telemetry.get(key, "").lower() != expected.lower():
-            print(f"FAIL: {key} expected {expected}, got {telemetry.get(key)}")
+        actual = telemetry.get(key)
+        if actual is None or actual.lower() != expected.lower():
+            print(f"FAIL: {key} expected {expected}, got {actual}")
             return 1
+        print(f"[PASS] {key} = {actual}")
 
     expected_registers = {
         "ESR_EL1": 0x56000080,
@@ -88,9 +106,20 @@ def main():
         if value is None or int(value, 16) != expected:
             print(f"FAIL: {key} expected 0x{expected:x}, got {value}")
             return 1
+        print(f"[PASS] {key} verified: {value}")
 
-    print("D6-M4 ACCEPTANCE VERIFICATION RESULT: PASS")
+    # Checkpoint 0x41 is emitted only when sleh.c verifies:
+    # x0 == 1, x1 == 0x100000320, x2 == 0x1a, x16 == 4
+    if 0x41 not in breadcrumbs:
+        print("FAIL: D630/41 launchd EL0 register signature breadcrumb missing")
+        return 1
+    print("[PASS] EL0 register signature verified (x0=1, x1=0x100000320, x2=0x1a, x16=4)")
+
+    print("\n============================================================")
+    print("D6_M3_REGRESSION_VERIFIER: PASS")
+    print("D6_M4_ACCEPTANCE_VERIFIER: PASS")
     print("Known launchd instructions executed in EL0; first SVC captured before dispatch.")
+    print("============================================================")
     return 0
 
 
