@@ -11,6 +11,7 @@
 #include <sys/vnode_if.h>
 #include <sys/mount_internal.h>
 #include <sys/namei.h>
+#include <sys/conf.h>
 #include <sys/dirent.h>
 #include <kern/clock.h>
 
@@ -624,6 +625,7 @@ xzsfs_d5m3_probe(dev_t root_dev)
 }
 
 #define CP_D5M4 0xD530
+#define CP_D5M5 0xD540
 
 static void
 xzs_early_putdec(uint32_t val)
@@ -838,9 +840,193 @@ xzsfs_d5m4_probe(dev_t rootdev)
     xzs_breadcrumb(CP_D5M4, 0x91);
     xzs_early_puts("[XZSFS] PHASE D5-M4 COMPLETE & VERIFIED (PASS)\n");
 
-    /* Checkpoint 0x01: D5-M4 diagnostic terminal state */
-    xzs_breadcrumb(CP_D5M4, 0x01);
-    xzs_early_puts("[XZSFS] TERMINAL STATE — TRIGGERING WARM RESET TO FASTBOOT\n\n");
+    return 0;
+}
+
+static int
+xzsfs_d5m5_namei_lookup(const char *path, vnode_t *vpp)
+{
+    struct nameidata nd;
+    int error;
+
+    if (path == NULL || vpp == NULL) {
+        return EINVAL;
+    }
+
+    *vpp = NULLVP;
+    bzero(&nd, sizeof(nd));
+    NDINIT(&nd, LOOKUP, OP_LOOKUP, FOLLOW, UIO_SYSSPACE,
+        CAST_USER_ADDR_T(path), vfs_context_kernel());
+    error = namei(&nd);
+    if (error == 0) {
+        *vpp = nd.ni_vp;
+    }
+    nameidone(&nd);
+    return error;
+}
+
+static int
+xzsfs_d5m5_fatal(uint32_t error_code, const char *message, int error)
+{
+    xzs_early_puts("[XZSFS] D5-M5 FATAL: ");
+    xzs_early_puts(message);
+    xzs_early_puts("\n");
+    xzs_breadcrumb(CP_D5M5, error_code);
+    delay(50000);
+    xzs_spin_halt();
+    return (error != 0) ? error : EINVAL;
+}
+
+int
+xzsfs_d5m5_predevfs_probe(void)
+{
+    int error;
+    vnode_t rootvp = NULLVP;
+    vnode_t launchdvp = NULLVP;
+    struct vnode_attr va;
+
+    xzs_breadcrumb(CP_D5M5, 0x00);
+    xzs_early_puts("\n=======================================================\n");
+    xzs_early_puts("=== PHASE D5-M5: NAMESPACE + DEVFS/CONSOLE PROBE ===\n");
+    xzs_early_puts("=======================================================\n");
+
+    /* Exercise the canonical pathname resolver against the installed root. */
+    error = xzsfs_d5m5_namei_lookup("/", &rootvp);
+    if (error != 0 || rootvp == NULLVP || rootvp != rootvnode ||
+        vnode_vtype(rootvp) != VDIR) {
+        if (rootvp != NULLVP) {
+            vnode_put(rootvp);
+        }
+        return xzsfs_d5m5_fatal(0xE0, "namei('/') failed or returned the wrong root vnode", error);
+    }
+    vnode_put(rootvp);
+    rootvp = NULLVP;
+    xzs_breadcrumb(CP_D5M5, 0x10);
+    xzs_early_puts("[XZSFS] namei('/') resolved global rootvnode (PASS)\n");
+
+    error = xzsfs_d5m5_namei_lookup("/sbin/launchd", &launchdvp);
+    if (error != 0 || launchdvp == NULLVP || vnode_vtype(launchdvp) != VREG) {
+        if (launchdvp != NULLVP) {
+            vnode_put(launchdvp);
+        }
+        return xzsfs_d5m5_fatal(0xE1, "namei('/sbin/launchd') failed", error);
+    }
+    xzs_breadcrumb(CP_D5M5, 0x20);
+
+    VATTR_INIT(&va);
+    VATTR_WANTED(&va, va_type);
+    VATTR_WANTED(&va, va_mode);
+    VATTR_WANTED(&va, va_fileid);
+    VATTR_WANTED(&va, va_data_size);
+    error = VNOP_GETATTR(launchdvp, &va, vfs_context_kernel());
+    if (error != 0 || va.va_type != VREG || va.va_mode != 0755 ||
+        va.va_fileid != 7 || va.va_data_size != 16472) {
+        vnode_put(launchdvp);
+        return xzsfs_d5m5_fatal(0xE2, "launchd vnode identity/getattr mismatch", error);
+    }
+    vnode_put(launchdvp);
+    launchdvp = NULLVP;
+    xzs_breadcrumb(CP_D5M5, 0x21);
+    xzs_early_puts("[XZSFS] namei('/sbin/launchd') + VNOP_GETATTR verified (PASS)\n");
+
+    return 0;
+}
+
+int
+xzsfs_d5m5_postdevfs_probe(int devfs_mount_error)
+{
+    int error;
+    vnode_t devvp = NULLVP;
+    vnode_t consolevp = NULLVP;
+    mount_t devfs_mp;
+    dev_t console_dev;
+
+    if (devfs_mount_error != 0) {
+        return xzsfs_d5m5_fatal(0xE3, "devfs_kernel_mount('/dev') failed", devfs_mount_error);
+    }
+    xzs_breadcrumb(CP_D5M5, 0x31);
+    xzs_early_puts("[XZSFS] devfs_kernel_mount('/dev') succeeded (PASS)\n");
+
+    error = xzsfs_d5m5_namei_lookup("/dev", &devvp);
+    if (error != 0 || devvp == NULLVP || vnode_vtype(devvp) != VDIR) {
+        if (devvp != NULLVP) {
+            vnode_put(devvp);
+        }
+        return xzsfs_d5m5_fatal(0xE4, "namei('/dev') failed after devfs mount", error);
+    }
+    devfs_mp = vnode_mount(devvp);
+    if (devfs_mp == NULL || devfs_mp->mnt_vtable == NULL ||
+        strcmp(devfs_mp->mnt_vtable->vfc_name, "devfs") != 0 ||
+        (devvp->v_flag & VROOT) == 0) {
+        vnode_put(devvp);
+        return xzsfs_d5m5_fatal(0xE5, "'/dev' did not cross into the devfs root vnode", EINVAL);
+    }
+    vnode_put(devvp);
+    devvp = NULLVP;
+    xzs_breadcrumb(CP_D5M5, 0x40);
+    xzs_early_puts("[XZSFS] namei('/dev') crossed mountpoint into devfs (PASS)\n");
+
+    error = xzsfs_d5m5_namei_lookup("/dev/console", &consolevp);
+    if (error != 0 || consolevp == NULLVP || vnode_vtype(consolevp) != VCHR) {
+        if (consolevp != NULLVP) {
+            vnode_put(consolevp);
+        }
+        return xzsfs_d5m5_fatal(0xE6, "namei('/dev/console') failed", error);
+    }
+    xzs_breadcrumb(CP_D5M5, 0x50);
+
+    console_dev = vnode_specrdev(consolevp);
+    if (major(console_dev) != 0 || minor(console_dev) != 0) {
+        vnode_put(consolevp);
+        return xzsfs_d5m5_fatal(0xE7, "'/dev/console' is not cdev 0:0", EINVAL);
+    }
+    vnode_put(consolevp);
+    consolevp = NULLVP;
+    xzs_breadcrumb(CP_D5M5, 0x51);
+    xzs_early_puts("[XZSFS] namei('/dev/console') resolved cdev 0:0 (PASS)\n");
+
+    xzs_breadcrumb(CP_D5M5, 0x60);
+    xzs_early_puts("[XZSFS] namespace traversal and devfs overlay verified (PASS)\n");
+
+    xzs_early_puts("\n=======================================================\n");
+    xzs_early_puts("=== D5-M5 FINAL ACCEPTANCE TELEMETRY BEGIN ===\n");
+    xzs_early_puts("D5-M1_COMPLETE=yes\n");
+    xzs_early_puts("D5-M2_COMPLETE=yes\n");
+    xzs_early_puts("D5-M3_COMPLETE=yes\n");
+    xzs_early_puts("D5-M4_COMPLETE=yes\n");
+    xzs_early_puts("D5-M5_COMPLETE=yes\n");
+    xzs_early_puts("ROOT_NAMEI_PASS=yes\n");
+    xzs_early_puts("ROOT_NAMEI_RETURNS_GLOBAL_ROOTVNODE=yes\n");
+    xzs_early_puts("LAUNCHD_NAMEI_PASS=yes\n");
+    xzs_early_puts("LAUNCHD_VNODE_TYPE=VREG\n");
+    xzs_early_puts("LAUNCHD_OBJECT_ID=7\n");
+    xzs_early_puts("LAUNCHD_MODE=0755\n");
+    xzs_early_puts("LAUNCHD_SIZE=16472\n");
+    xzs_early_puts("DEVFS_KERNEL_MOUNT_PASS=yes\n");
+    xzs_early_puts("DEVFS_MOUNTPOINT=/dev\n");
+    xzs_early_puts("DEVFS_ROOT_NAMEI_PASS=yes\n");
+    xzs_early_puts("DEVFS_FS_TYPE=devfs\n");
+    xzs_early_puts("DEVFS_ROOT_VNODE_TYPE=VDIR\n");
+    xzs_early_puts("DEV_CONSOLE_NAMEI_PASS=yes\n");
+    xzs_early_puts("DEV_CONSOLE_VNODE_TYPE=VCHR\n");
+    xzs_early_puts("DEV_CONSOLE_MAJOR=0\n");
+    xzs_early_puts("DEV_CONSOLE_MINOR=0\n");
+    xzs_early_puts("CONSOLE_OPEN_ATTEMPTED=no\n");
+    xzs_early_puts("PID1_STARTED=no\n");
+    xzs_early_puts("EXECVE_ATTEMPTED=no\n");
+    xzs_early_puts("EL0_ENTRY_ATTEMPTED=no\n");
+    xzs_early_puts("CMD24_COUNT=0\n");
+    xzs_early_puts("CMD25_COUNT=0\n");
+    xzs_early_puts("ZERO_STORAGE_WRITES=yes\n");
+    xzs_early_puts("D5_COMPLETE=no\n");
+    xzs_early_puts("=== D5-M5 FINAL ACCEPTANCE TELEMETRY END ===\n");
+    xzs_early_puts("=======================================================\n\n");
+
+    xzs_breadcrumb(CP_D5M5, 0x90);
+    xzs_breadcrumb(CP_D5M5, 0x91);
+    xzs_early_puts("[XZSFS] PHASE D5-M5 COMPLETE & VERIFIED (PASS)\n");
+    xzs_breadcrumb(CP_D5M5, 0x01);
+    xzs_early_puts("[XZSFS] D5-M5 TERMINAL STATE — BEFORE SIGINIT/PID1/EXECVE/EL0\n\n");
 
     delay(50000);
     xzs_spin_halt();

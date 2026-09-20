@@ -303,6 +303,13 @@ kernel_mount(const char *fstype, vnode_t pvp, vnode_t vp, const char *path,
 	struct nameidata nd;
 	boolean_t did_namei;
 	int error;
+#if CONFIG_XZS_BRINGUP
+	boolean_t xzs_trace_devfs = (strcmp(fstype, "devfs") == 0);
+	extern void xzs_breadcrumb(uint32_t cp, uint32_t err);
+	if (xzs_trace_devfs) {
+		xzs_breadcrumb(0xD541, 0x10);
+	}
+#endif
 
 	NDINIT(&nd, LOOKUP, OP_MOUNT, FOLLOW | AUDITVNPATH1 | WANTPARENT,
 	    UIO_SYSSPACE, CAST_USER_ADDR_T(path), ctx);
@@ -323,6 +330,11 @@ kernel_mount(const char *fstype, vnode_t pvp, vnode_t vp, const char *path,
 			}
 			return error;
 		}
+#if CONFIG_XZS_BRINGUP
+		if (xzs_trace_devfs) {
+			xzs_breadcrumb(0xD541, 0x11);
+		}
+#endif
 		vp = nd.ni_vp;
 		pvp = nd.ni_dvp;
 		did_namei = TRUE;
@@ -335,14 +347,29 @@ kernel_mount(const char *fstype, vnode_t pvp, vnode_t vp, const char *path,
 	}
 
 	kern_flags |= KERNEL_MOUNT_KMOUNT;
+#if CONFIG_XZS_BRINGUP
+	if (xzs_trace_devfs) {
+		xzs_breadcrumb(0xD541, 0x20);
+	}
+#endif
 	error = mount_common(fstype, pvp, vp, &nd.ni_cnd, CAST_USER_ADDR_T(data),
 	    syscall_flags, kern_flags, NULL, ctx);
+#if CONFIG_XZS_BRINGUP
+	if (xzs_trace_devfs) {
+		xzs_breadcrumb(0xD541, 0x21);
+	}
+#endif
 
 	if (did_namei) {
 		vnode_put(vp);
 		vnode_put(pvp);
 		nameidone(&nd);
 	}
+#if CONFIG_XZS_BRINGUP
+	if (xzs_trace_devfs) {
+		xzs_breadcrumb(0xD541, 0x30);
+	}
+#endif
 
 	return error;
 }
@@ -1157,6 +1184,13 @@ mount_common(const char *fstypename, vnode_t pvp, vnode_t vp,
 	boolean_t did_set_lmount = FALSE;
 	boolean_t did_set_vmount = FALSE;
 	boolean_t kernelmount = !!(internal_flags & KERNEL_MOUNT_KMOUNT);
+#if CONFIG_XZS_BRINGUP
+	boolean_t xzs_trace_devfs = (strcmp(fstypename, "devfs") == 0);
+	extern void xzs_breadcrumb(uint32_t cp, uint32_t err);
+	if (xzs_trace_devfs) {
+		xzs_breadcrumb(0xD542, 0x10);
+	}
+#endif
 
 #if CONFIG_ROSV_STARTUP || CONFIG_MOUNT_VM || CONFIG_BASESYSTEMROOT
 	/* Check for mutually-exclusive flag bits */
@@ -1307,10 +1341,20 @@ mount_common(const char *fstypename, vnode_t pvp, vnode_t vp,
 		goto out1;
 	}
 
+#if CONFIG_XZS_BRINGUP
+	if (xzs_trace_devfs) {
+		xzs_breadcrumb(0xD542, 0x20);
+	}
+#endif
 	error = prepare_coveredvp(vp, ctx, cnp, fstypename, internal_flags);
 	if (error != 0) {
 		goto out1;
 	}
+#if CONFIG_XZS_BRINGUP
+	if (xzs_trace_devfs) {
+		xzs_breadcrumb(0xD542, 0x21);
+	}
+#endif
 
 	/*
 	 * Upon successful of prepare_coveredvp(), VMOUNT is set for the covered vp.
@@ -1322,6 +1366,11 @@ mount_common(const char *fstypename, vnode_t pvp, vnode_t vp,
 	 */
 	mp = zalloc_flags(mount_zone, Z_WAITOK | Z_ZERO);
 	mntalloc = 1;
+#if CONFIG_XZS_BRINGUP
+	if (xzs_trace_devfs) {
+		xzs_breadcrumb(0xD542, 0x30);
+	}
+#endif
 
 	/* Initialize the default IO constraints */
 	mp->mnt_maxreadcnt = mp->mnt_maxwritecnt = MAXPHYS;
@@ -1357,6 +1406,11 @@ mount_common(const char *fstypename, vnode_t pvp, vnode_t vp,
 			strlcpy(mp->mnt_vfsstat.f_mntonname, cnp->cn_pnbuf, MAXPATHLEN);
 		}
 	} while (0);
+#if CONFIG_XZS_BRINGUP
+	if (xzs_trace_devfs) {
+		xzs_breadcrumb(0xD542, 0x31);
+	}
+#endif
 	mp->mnt_vnodecovered = vp;
 	mp->mnt_vfsstat.f_owner = kauth_cred_getuid(vfs_context_ucred(ctx));
 	mp->mnt_throttle_mask = LOWPRI_MAX_NUM_DEV - 1;
@@ -1735,7 +1789,17 @@ update:
 		error = EINVAL;
 #endif
 	} else {
+#if CONFIG_XZS_BRINGUP
+		if (xzs_trace_devfs) {
+			xzs_breadcrumb(0xD542, 0x40);
+		}
+#endif
 		error = VFS_MOUNT(mp, device_vnode, fsmountargs, ctx);
+#if CONFIG_XZS_BRINGUP
+		if (xzs_trace_devfs) {
+			xzs_breadcrumb(0xD542, 0x41);
+		}
+#endif
 	}
 
 	if (flags & MNT_UPDATE) {
@@ -1810,6 +1874,11 @@ update:
 		 */
 		wakeup(&vp->v_flag);
 		vnode_unlock(vp);
+#if CONFIG_XZS_BRINGUP
+		if (xzs_trace_devfs) {
+			xzs_breadcrumb(0xD542, 0x50);
+		}
+#endif
 
 		/*
 		 * taking the name_cache_lock exclusively will

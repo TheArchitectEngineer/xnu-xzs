@@ -173,6 +173,10 @@ devfs_mount(struct mount *mp, __unused vnode_t devvp, __unused user_addr_t data,
 {
 	struct devfsmount *devfs_mp_p;  /* devfs specific mount info */
 	int error;
+#if CONFIG_XZS_BRINGUP
+	extern void xzs_breadcrumb(uint32_t cp, uint32_t err);
+	xzs_breadcrumb(0xD543, 0x10);
+#endif
 
 	/*-
 	 *  If they just want to update, we don't need to do anything.
@@ -193,18 +197,42 @@ devfs_mount(struct mount *mp, __unused vnode_t devvp, __unused user_addr_t data,
 	devfs_mp_p = kalloc_type(struct devfsmount,
 	    Z_WAITOK | Z_ZERO | Z_NOFAIL);
 	devfs_mp_p->mount = mp;
+#if CONFIG_XZS_BRINGUP
+	xzs_breadcrumb(0xD543, 0x20);
+#endif
 
 	/*-
 	 *  Fill out some fields
 	 */
 	__IGNORE_WCASTALIGN(mp->mnt_data = (qaddr_t)devfs_mp_p);
+#if CONFIG_XZS_BRINGUP
+	/*
+	 * vm_kernel_addrhash() enters the generic SHA-256 pointer-hardening path,
+	 * which is not required for the single bring-up devfs instance and does
+	 * not return on MSM8996.  Use a stable non-pointer fsid component here.
+	 */
+	mp->mnt_vfsstat.f_fsid.val[0] = (int32_t)0x64657666; /* "devf" */
+#else
 	mp->mnt_vfsstat.f_fsid.val[0] = (int32_t)VM_KERNEL_ADDRHASH(devfs_mp_p);
+#endif
 	mp->mnt_vfsstat.f_fsid.val[1] = vfs_typenum(mp);
 	mp->mnt_flag |= MNT_LOCAL;
 
+#if CONFIG_XZS_BRINGUP
+	xzs_breadcrumb(0xD543, 0x30);
+#endif
 	DEVFS_LOCK();
+#if CONFIG_XZS_BRINGUP
+	xzs_breadcrumb(0xD543, 0x31);
+#endif
 	error = dev_dup_plane(devfs_mp_p);
+#if CONFIG_XZS_BRINGUP
+	xzs_breadcrumb(0xD543, 0x32);
+#endif
 	DEVFS_UNLOCK();
+#if CONFIG_XZS_BRINGUP
+	xzs_breadcrumb(0xD543, 0x33);
+#endif
 
 	if (error) {
 		mp->mnt_data = (qaddr_t)0;
@@ -224,6 +252,9 @@ devfs_mount(struct mount *mp, __unused vnode_t devvp, __unused user_addr_t data,
 	bzero(mp->mnt_vfsstat.f_mntfromname, MAXPATHLEN);
 	bcopy("devfs", mp->mnt_vfsstat.f_mntfromname, 5);
 	(void)devfs_statfs(mp, &mp->mnt_vfsstat, ctx);
+#if CONFIG_XZS_BRINGUP
+	xzs_breadcrumb(0xD543, 0x40);
+#endif
 
 	return 0;
 }
@@ -304,7 +335,11 @@ devfs_statfs( struct mount *mp, struct vfsstatfs *sbp, __unused vfs_context_t ct
 	sbp->f_bavail = 0;
 	sbp->f_files  = devfs_stats.nodes;
 	sbp->f_ffree  = 0;
+#if CONFIG_XZS_BRINGUP
+	sbp->f_fsid.val[0] = (int32_t)0x64657666; /* "devf" */
+#else
 	sbp->f_fsid.val[0] = (int32_t)VM_KERNEL_ADDRHASH(devfs_mp_p);
+#endif
 	sbp->f_fsid.val[1] = vfs_typenum(mp);
 
 	return 0;
