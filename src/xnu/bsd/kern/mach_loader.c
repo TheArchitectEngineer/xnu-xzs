@@ -4543,8 +4543,15 @@ xzs_d6m2_macho_probe(proc_t p, task_t t, thread_t th)
 }
 
 #define CP_D6M3 0xD620
+#define CP_D6M4 0xD630
 
 extern kern_return_t vm_map_protect(vm_map_t map, vm_map_offset_t start, vm_map_offset_t end, boolean_t set_max, vm_prot_t new_prot);
+extern void ipc_task_enable(task_t task);
+
+volatile boolean_t xzs_d6m4_probe_armed = FALSE;
+thread_t xzs_d6m4_target_thread = THREAD_NULL;
+
+static void xzs_d6m4_first_el0(proc_t p, task_t t, thread_t th);
 
 static void
 xzs_d6m3_fatal(uint32_t step, const char *msg)
@@ -5189,11 +5196,69 @@ xzs_d6m3_user_vm_probe(proc_t p, task_t t, thread_t th)
 	xzs_breadcrumb(CP_D6M3, 0x91);
 	xzs_early_puts("[XZS-D6M3] PHASE D6-M3 COMPLETE & VERIFIED (PASS)\n");
 
-	/* D620/01: Terminal diagnostic spin halt */
+	/* D620/01: D6-M3 complete — handoff to D6-M4 */
 	xzs_breadcrumb(CP_D6M3, 0x01);
-	xzs_early_puts("[XZS-D6M3] D6-M3 TERMINAL STATE — BEFORE D6-M4 EL0 TRANSITION\n\n");
+	xzs_early_puts("[XZS-D6M3] D620/01 D6-M3 complete — handoff to D6-M4\n\n");
 
-	delay(50000);
-	xzs_spin_halt();
+	xzs_d6m4_first_el0(p, t, th);
+	__builtin_unreachable();
+}
+
+static void
+xzs_d6m4_first_el0(proc_t p, task_t t, thread_t th)
+{
+	extern void xzs_breadcrumb(uint32_t cp, uint32_t err);
+	extern void xzs_early_puts(const char *s);
+	extern void delay(int);
+	extern void xzs_spin_halt(void);
+
+	xzs_breadcrumb(CP_D6M4, 0x00);
+	xzs_early_puts("\n=======================================================\n");
+	xzs_early_puts("=== PHASE D6-M4: FIRST EL0 TRANSITION ENTER =========\n");
+	xzs_early_puts("=======================================================\n");
+
+	if (p == PROC_NULL || proc_getpid(p) != 1 || t == TASK_NULL || th == THREAD_NULL ||
+	    get_threadtask(th) != t || get_task_map(t) == VM_MAP_NULL) {
+		xzs_breadcrumb(CP_D6M4, 0xEE10);
+		xzs_early_puts("[XZS-D6M4] FATAL: PID1 process/task/thread identity invalid\n");
+		delay(50000);
+		xzs_spin_halt();
+	}
+
+	xzs_breadcrumb(CP_D6M4, 0x10);
+	xzs_early_puts("[XZS-D6M4] D630/10 PID1 saved EL0 state and identity revalidated\n");
+
+	ipc_task_enable(t);
+	task_clear_return_wait(t, TCRW_CLEAR_ALL_WAIT);
+	xzs_breadcrumb(CP_D6M4, 0x20);
+	xzs_early_puts("[XZS-D6M4] D630/20 IPC task enabled and return-wait gate cleared\n");
+
+	xzs_d6m4_target_thread = th;
+	xzs_d6m4_probe_armed = TRUE;
+	xzs_breadcrumb(CP_D6M4, 0x21);
+	xzs_early_puts("[XZS-D6M4] D630/21 first-EL0 exception telemetry armed\n");
+
+	kern_return_t kr = task_resume_internal(t);
+	if (kr != KERN_SUCCESS) {
+		xzs_breadcrumb(CP_D6M4, 0xEE30);
+		xzs_early_puts("[XZS-D6M4] FATAL: task_resume_internal failed\n");
+		delay(50000);
+		xzs_spin_halt();
+	}
+	xzs_breadcrumb(CP_D6M4, 0x30);
+	xzs_early_puts("[XZS-D6M4] D630/30 PID1 task suspension released\n");
+
+	xzs_breadcrumb(CP_D6M4, 0x31);
+	xzs_early_puts("[XZS-D6M4] D630/31 releasing PID1 thread suspension; EL0 entry attempted\n");
+	kr = thread_resume(th);
+	if (kr != KERN_SUCCESS) {
+		xzs_breadcrumb(CP_D6M4, 0xEE31);
+		xzs_early_puts("[XZS-D6M4] FATAL: thread_resume failed\n");
+		delay(50000);
+		xzs_spin_halt();
+	}
+	for (;;) {
+		delay(1000);
+	}
 }
 #endif

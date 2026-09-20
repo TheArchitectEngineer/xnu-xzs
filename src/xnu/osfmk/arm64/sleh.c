@@ -44,6 +44,7 @@
 #include <kern/socd_client.h>
 #include <kern/task.h>
 #include <kern/thread.h>
+#include <kern/cpu_number.h>
 #include <kern/zalloc_internal.h>
 #include <mach/exception.h>
 #include <mach/arm/traps.h>
@@ -765,6 +766,75 @@ sleh_synchronous(arm_context_t *context, uint64_t esr, vm_offset_t far, __unused
 	}
 #endif
 	bool is_user = PSR64_IS_USER(get_saved_state_cpsr(state));
+
+#if CONFIG_XZS_BRINGUP
+	extern volatile boolean_t xzs_d6m4_probe_armed;
+	extern thread_t xzs_d6m4_target_thread;
+	if (xzs_d6m4_probe_armed && thread == xzs_d6m4_target_thread &&
+	    is_user && class == ESR_EC_SVC_64) {
+		extern void xzs_breadcrumb(uint32_t cp, uint32_t err);
+		extern void xzs_early_puts(const char *s);
+		extern void xzs_early_puthex64(uint64_t value);
+		extern void xzs_spin_halt(void);
+		arm_saved_state64_t *ss64 = saved_state64(state);
+		uint64_t elr = get_saved_state_pc(state);
+		uint64_t spsr = get_saved_state_cpsr(state);
+		uint64_t sp_el0 = get_saved_state_sp(state);
+		boolean_t signature_valid =
+		    ESR_ISS(esr) == 0x80 &&
+		    elr == 0x0000000100000304ULL &&
+		    ss64->x[0] == 1 &&
+		    ss64->x[1] == 0x0000000100000320ULL &&
+		    ss64->x[2] == 0x1a &&
+		    ss64->x[16] == 4;
+
+		xzs_breadcrumb(0xD630, 0x40);
+		xzs_early_puts("[XZS-D6M4] D630/40 EL0 synchronous exception captured\n");
+		xzs_early_puts("ESR_EL1="); xzs_early_puthex64(esr); xzs_early_puts("\n");
+		xzs_early_puts("ELR_EL1="); xzs_early_puthex64(elr); xzs_early_puts("\n");
+		xzs_early_puts("FAR_EL1="); xzs_early_puthex64(far); xzs_early_puts("\n");
+		xzs_early_puts("SPSR_EL1="); xzs_early_puthex64(spsr); xzs_early_puts("\n");
+		xzs_early_puts("SP_EL0="); xzs_early_puthex64(sp_el0); xzs_early_puts("\n");
+		xzs_early_puts("CPU="); xzs_early_puthex64((uint64_t)cpu_number()); xzs_early_puts("\n");
+		xzs_early_puts("SVC_IMMEDIATE="); xzs_early_puthex64(ESR_ISS(esr)); xzs_early_puts("\n");
+		xzs_early_puts("SVC_X16="); xzs_early_puthex64(ss64->x[16]); xzs_early_puts("\n");
+
+		if (!signature_valid) {
+			xzs_breadcrumb(0xD630, 0xEE41);
+			xzs_early_puts("[XZS-D6M4] FATAL: first EL0 SVC signature mismatch\n");
+			xzs_spin_halt();
+		}
+
+		xzs_d6m4_probe_armed = FALSE;
+		xzs_breadcrumb(0xD630, 0x41);
+		xzs_early_puts("[XZS-D6M4] D630/41 launchd EL0 instruction signature verified\n");
+		xzs_breadcrumb(0xD630, 0x50);
+		xzs_early_puts("[XZS-D6M4] D630/50 SVC observed before dispatcher (M5 boundary preserved)\n");
+
+		xzs_early_puts("\n=== D6-M4 ACCEPTANCE TELEMETRY BEGIN ===\n");
+		xzs_early_puts("D6-M3_REGRESSION_PASS=yes\n");
+		xzs_early_puts("D6-M4_COMPLETE=yes\n");
+		xzs_early_puts("PID1_STARTED=yes\n");
+		xzs_early_puts("EL0_ENTRY_ATTEMPTED=yes\n");
+		xzs_early_puts("FIRST_EL0_INSTRUCTION_EXECUTED=yes\n");
+		xzs_early_puts("FIRST_EL0_PROOF=svc_register_signature\n");
+		xzs_early_puts("FIRST_SVC_ENTERED=yes\n");
+		xzs_early_puts("SVC_IMMEDIATE=0x0000000000000080\n");
+		xzs_early_puts("SVC_SYSCALL_NUMBER_REGISTER=x16\n");
+		xzs_early_puts("SVC_SYSCALL_NUMBER=4\n");
+		xzs_early_puts("SYSCALL_DISPATCH_REACHED=no\n");
+		xzs_early_puts("FIRST_SYSCALL_ROUNDTRIP_COMPLETE=no\n");
+		xzs_early_puts("D6_M4_EXCEPTION_TELEMETRY_COMPLETE=yes\n");
+		xzs_early_puts("ROADMAP_ADVANCED_TO=D6-M5\n");
+		xzs_early_puts("=== D6-M4 ACCEPTANCE TELEMETRY END ===\n");
+		xzs_breadcrumb(0xD630, 0x90);
+		xzs_breadcrumb(0xD630, 0x91);
+		xzs_early_puts("[XZS-D6M4] PHASE D6-M4 COMPLETE & VERIFIED (PASS)\n");
+		xzs_breadcrumb(0xD630, 0x01);
+		xzs_early_puts("[XZS-D6M4] D630/01 terminal before D6-M5 syscall dispatch\n");
+		xzs_spin_halt();
+	}
+#endif
 
 #if CONFIG_SPTM
 	// Lockdown should only be initiated for kernel exceptions
