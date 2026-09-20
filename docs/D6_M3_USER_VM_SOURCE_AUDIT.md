@@ -18,7 +18,7 @@ The objective of D6-M3 is to construct a fully valid userspace execution environ
 4. Allocate `__TEXT`, load file-backed bytes from `/sbin/launchd`, verify content integrity via CRC32 and `memcmp`, verify zero-fill on any padding tail, and finalize protection to `RX` (W^X strictly enforced, zero unexpected RWX).
 5. Resolve `__LINKEDIT` policy based on static executable metadata (runtime mapping not required).
 6. Create a dedicated user stack (`RW`, `NX`, 128 KiB) rooted at `USRSTACK64` (`0x16FE00000ULL`), validated against task map bounds and page alignment.
-7. Construct the Darwin initial argument stack frame (`argc=1`, `argv[0]="/sbin/launchd"`, `envp[0]=NULL`, `apple[0]=NULL`) with a 16-byte aligned user stack pointer (`initial_sp = 0x16FDFFB0ULL`).
+7. Construct the Darwin initial argument stack frame (`argc=1`, `argv[0]="/sbin/launchd"`, `envp[0]=NULL`, `apple[0]=NULL`) with a 16-byte aligned user stack pointer (`initial_sp = 0x16FDFFFB0ULL`).
 8. Install ARM64 user register state (`PC = 0x1000002f0`, `SP = initial_sp`, `CPSR = PSR64_USER64_DEFAULT`) while keeping the thread and task strictly suspended.
 9. Perform a read-locked kernel-side VM map audit asserting 0 unexpected RWX regions and verifying all permissions.
 10. Enforce an airtight execution barrier: thread and task remain suspended; zero EL0 entry; hard stop before D6-M4.
@@ -120,15 +120,15 @@ The objective of D6-M3 is to construct a fully valid userspace execution environ
     - `0x16FE00000 % 16384 == 0` (16 KiB page aligned) -> PASS.
   - Protection: `VM_PROT_READ | VM_PROT_WRITE` (`RW`), `NX` (never executable).
   - Darwin initial stack frame construction:
-    - String area at `0x16FDFFE0ULL`: `"/sbin/launchd\0"` (14 bytes + 18 bytes zero padding = 32 bytes).
-    - `argc` area at `0x16FDFFB0ULL` (one pointer-sized slot): `argc = 1`.
-    - Pointer area starts immediately at `0x16FDFFB8ULL`, matching `exec_copyout_strings()`:
-      - `argv[0] = 0x16FDFFE0ULL`
+    - String area at `0x16FDFFFE0ULL`: `"/sbin/launchd\0"` (14 bytes + 18 bytes zero padding = 32 bytes).
+    - `argc` area at `0x16FDFFFB0ULL` (one pointer-sized slot): `argc = 1`.
+    - Pointer area starts immediately at `0x16FDFFFB8ULL`, matching `exec_copyout_strings()`:
+      - `argv[0] = 0x16FDFFFE0ULL`
       - `argv[1] = NULL` (0)
       - `envp[0] = NULL` (0)
       - `apple[0] = NULL` (0)
     - The remaining 8 bytes before the string area are zero alignment padding.
-    - Initial SP: `initial_sp = 0x16FDFFB0ULL`.
+    - Initial SP: `initial_sp = 0x16FDFFFB0ULL` (inside the mapped stack, exactly 80 bytes below `USRSTACK64`).
     - Stack alignment: `initial_sp & 0xF == 0` (16-byte aligned, required by ARM64 hardware).
 - **Classification:** `SOURCE-AUDITED FACT`
 

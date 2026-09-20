@@ -327,7 +327,7 @@ def main():
         failed_keys.append("PID1_INITIAL_PC")
 
     initial_sp = telemetry.get("PID1_INITIAL_SP")
-    if initial_sp and int(initial_sp, 16) == 0x16FDFFB0:
+    if initial_sp and int(initial_sp, 16) == 0x16FDFFFB0:
         print(f"[PASS] PID1_INITIAL_SP verified: {initial_sp}")
     else:
         print(f"FAIL: PID1_INITIAL_SP invalid: {initial_sp}")

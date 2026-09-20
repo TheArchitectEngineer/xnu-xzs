@@ -4979,8 +4979,8 @@ xzs_d6m3_user_vm_probe(proc_t p, task_t t, thread_t th)
 	xzs_early_puts("[XZS-D6M3] D620/50 user stack mapping created (RW, NX, 128 KiB at 0x16fde0000..0x16fe00000)\n");
 
 	/* D620/51: Initial stack contents constructed (Darwin ABI: argc=1, argv0=/sbin/launchd) */
-	uint64_t initial_sp = 0x000000016FDFFB0ULL;
-	uint64_t str_addr   = 0x000000016FDFFE0ULL;
+	uint64_t initial_sp = 0x000000016FDFFFB0ULL;
+	uint64_t str_addr   = 0x000000016FDFFFE0ULL;
 
 	uint64_t stack_frame[10];
 	memset(stack_frame, 0, sizeof(stack_frame));
@@ -4990,7 +4990,7 @@ xzs_d6m3_user_vm_probe(proc_t p, task_t t, thread_t th)
 	stack_frame[3] = 0;        /* sp + 24: envp[0] = NULL */
 	stack_frame[4] = 0;        /* sp + 32: apple[0] = NULL */
 	stack_frame[5] = 0;        /* sp + 40: string-area alignment pad */
-	/* stack_frame[6] starts at initial_sp + 48 = 0x16FDFFE0 = str_addr */
+	/* stack_frame[6] starts at initial_sp + 48 = 0x16FDFFFE0 = str_addr */
 	memcpy(&stack_frame[6], "/sbin/launchd", sizeof("/sbin/launchd"));
 
 	kr = vm_map_write_user(map, stack_frame, initial_sp, sizeof(stack_frame));
