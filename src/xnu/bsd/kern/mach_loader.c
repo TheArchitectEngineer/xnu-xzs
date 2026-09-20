@@ -5240,6 +5240,8 @@ xzs_d6m4_first_el0(proc_t p, task_t t, thread_t th)
 	xzs_d6m4_probe_armed = TRUE;
 	xzs_breadcrumb(CP_D6M4, 0x21);
 	xzs_early_puts("[XZS-D6M4] D630/21 first-EL0 exception telemetry armed\n");
+	xzs_breadcrumb(0xD640, 0x00);
+	xzs_early_puts("[XZS-D6M5] D640/00 first real BSD syscall round-trip enter\n");
 
 	/* Clear any pending ASTs on PID1 thread so it returns directly to EL0 */
 	extern void xzs_clear_thread_asts(thread_t thread);

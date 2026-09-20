@@ -1641,6 +1641,27 @@ struct xzs_d6m4_r650_telemetry {
 	volatile uint64_t x16;                  /* 0xA8 */
 	volatile uint64_t svc_imm;              /* 0xB0 */
 	volatile uint64_t exc_cpu;              /* 0xB8 */
+
+	/* D6-M5 first real BSD syscall round-trip telemetry. */
+	volatile uint64_t syscall_classified;       /* 0xC0: handle_svc chose BSD */
+	volatile uint64_t dispatcher_reached;       /* 0xC8: unix_syscall entered */
+	volatile uint64_t handler_entered;          /* 0xD0: sysent[SYS_write] entered */
+	volatile uint64_t handler_completed;        /* 0xD8: real handler returned */
+	volatile uint64_t syscall_error;            /* 0xE0: BSD errno */
+	volatile uint64_t syscall_rval0;            /* 0xE8: handler rval[0] */
+	volatile uint64_t syscall_return_x0;        /* 0xF0: ABI x0 after prepare */
+	volatile uint64_t syscall_return_x1;        /* 0xF8: ABI x1 after prepare */
+	volatile uint64_t syscall_return_cpsr;      /* 0x100: ABI flags after prepare */
+	volatile uint64_t syscall_return_prepared;  /* 0x108 */
+	volatile uint64_t sleh_return_ready;         /* 0x110: handle_svc returned */
+	volatile uint64_t post_svc_trapped;          /* 0x118: second SVC observed */
+	volatile uint64_t post_signature_valid;      /* 0x120 */
+	volatile uint64_t post_esr;                  /* 0x128 */
+	volatile uint64_t post_elr;                  /* 0x130 */
+	volatile uint64_t post_spsr;                 /* 0x138 */
+	volatile uint64_t post_sp_el0;               /* 0x140 */
+	volatile uint64_t post_x0;                   /* 0x148 */
+	volatile uint64_t post_x16;                  /* 0x150 */
 } __attribute__((aligned(128)));
 
 extern struct xzs_d6m4_r650_telemetry xzs_d6m4_r650_telemetry;
