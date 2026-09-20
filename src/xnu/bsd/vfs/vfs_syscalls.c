@@ -4918,6 +4918,13 @@ int
 open1(vfs_context_t ctx, struct nameidata *ndp, int uflags,
     struct vnode_attr *vap, fp_initfn_t fp_init, void *initarg, int32_t *retval, int authfd)
 {
+#if CONFIG_XZS_BRINGUP
+	extern volatile int xzs_d6m6_stdio_probe_active;
+	extern void xzs_breadcrumb(uint32_t cp, uint32_t err);
+	if (xzs_d6m6_stdio_probe_active) {
+		xzs_breadcrumb(0xD651, 0x20);
+	}
+#endif
 	proc_t p = vfs_context_proc(ctx);
 	kauth_cred_t p_cred = current_cached_proc_cred(PROC_NULL);
 	uthread_t uu = get_bsdthread_info(vfs_context_thread(ctx));
@@ -4950,6 +4957,11 @@ open1(vfs_context_t ctx, struct nameidata *ndp, int uflags,
 	if ((error = falloc_withinit(p, p_cred, ctx, &fp, &indx, fp_init, initarg)) != 0) {
 		return error;
 	}
+#if CONFIG_XZS_BRINGUP
+	if (xzs_d6m6_stdio_probe_active) {
+		xzs_breadcrumb(0xD651, 0x21);
+	}
+#endif
 	if (flags & O_CLOEXEC) {
 		fp->fp_flags |= FP_CLOEXEC;
 	}
@@ -4976,6 +4988,11 @@ open1(vfs_context_t ctx, struct nameidata *ndp, int uflags,
 		}
 	}
 
+#if CONFIG_XZS_BRINGUP
+	if (xzs_d6m6_stdio_probe_active) {
+		xzs_breadcrumb(0xD651, 0x22);
+	}
+#endif
 	if ((error = vn_open_auth(ndp, &flags, vap, authvp))) {
 		if (authvp != NULLVP) {
 			vnode_put(authvp);
@@ -4992,6 +5009,11 @@ open1(vfs_context_t ctx, struct nameidata *ndp, int uflags,
 		fp_free(p, indx, fp);
 		return error;
 	}
+#if CONFIG_XZS_BRINGUP
+	if (xzs_d6m6_stdio_probe_active) {
+		xzs_breadcrumb(0xD651, 0x23);
+	}
+#endif
 
 	if (authvp != NULLVP) {
 		vnode_put(authvp);
@@ -5191,10 +5213,21 @@ open1(vfs_context_t ctx, struct nameidata *ndp, int uflags,
 	}
 
 	proc_fdlock(p);
+
+#if CONFIG_XZS_BRINGUP
+	if (xzs_d6m6_stdio_probe_active) {
+		xzs_breadcrumb(0xD651, 0x25);
+	}
+#endif
 	procfdtbl_releasefd(p, indx, NULL);
 
 	fp_drop(p, indx, fp, 1);
 	proc_fdunlock(p);
+#if CONFIG_XZS_BRINGUP
+	if (xzs_d6m6_stdio_probe_active) {
+		xzs_breadcrumb(0xD651, 0x26);
+	}
+#endif
 
 	*retval = indx;
 

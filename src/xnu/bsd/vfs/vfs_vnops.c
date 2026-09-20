@@ -374,6 +374,13 @@ out:
 int
 vn_open_auth(struct nameidata *ndp, int *fmodep, struct vnode_attr *vap, vnode_t authvp)
 {
+#if CONFIG_XZS_BRINGUP
+	extern volatile int xzs_d6m6_stdio_probe_active;
+	extern void xzs_breadcrumb(uint32_t cp, uint32_t err);
+	if (xzs_d6m6_stdio_probe_active) {
+		xzs_breadcrumb(0xD651, 0x30);
+	}
+#endif
 	struct vnode *vp;
 	struct vnode *dvp;
 	vfs_context_t ctx = ndp->ni_cnd.cn_context;
@@ -458,9 +465,19 @@ again:
 		}
 
 continue_create_lookup:
+#if CONFIG_XZS_BRINGUP
+		if (xzs_d6m6_stdio_probe_active) {
+			xzs_breadcrumb(0xD651, 0x31);
+		}
+#endif
 		if ((error = namei(ndp))) {
 			goto out;
 		}
+#if CONFIG_XZS_BRINGUP
+		if (xzs_d6m6_stdio_probe_active) {
+			xzs_breadcrumb(0xD651, 0x32);
+		}
+#endif
 
 		dvp = ndp->ni_dvp;
 		vp = ndp->ni_vp;
@@ -666,10 +683,20 @@ continue_create_lookup:
 		}
 
 		if (!did_create) {
+#if CONFIG_XZS_BRINGUP
+			if (xzs_d6m6_stdio_probe_active) {
+				xzs_breadcrumb(0xD651, 0x33);
+			}
+#endif
 			error = vn_authorize_open_existing(vp, &ndp->ni_cnd, fmode, ctx, NULL);
 			if (error) {
 				goto bad;
 			}
+#if CONFIG_XZS_BRINGUP
+			if (xzs_d6m6_stdio_probe_active) {
+				xzs_breadcrumb(0xD651, 0x34);
+			}
+#endif
 		}
 
 		if (VATTR_IS_ACTIVE(vap, va_dataprotect_flags)) {
@@ -696,7 +723,17 @@ continue_create_lookup:
 			}
 		}
 
+#if CONFIG_XZS_BRINGUP
+		if (xzs_d6m6_stdio_probe_active) {
+			xzs_breadcrumb(0xD651, 0x35);
+		}
+#endif
 		error = VNOP_OPEN(vp, fmode, ctx);
+#if CONFIG_XZS_BRINGUP
+		if (xzs_d6m6_stdio_probe_active) {
+			xzs_breadcrumb(0xD651, 0x36);
+		}
+#endif
 		if (error) {
 			/*
 			 * Some file systems fail in vnop_open call with absense of both
@@ -728,7 +765,17 @@ continue_create_lookup:
 	/*
 	 * Grab reference, etc.
 	 */
+#if CONFIG_XZS_BRINGUP
+	if (xzs_d6m6_stdio_probe_active) {
+		xzs_breadcrumb(0xD651, 0x37);
+	}
+#endif
 	error = vn_open_auth_finish(vp, fmode, ctx);
+#if CONFIG_XZS_BRINGUP
+	if (xzs_d6m6_stdio_probe_active) {
+		xzs_breadcrumb(0xD651, 0x38);
+	}
+#endif
 	if (error) {
 		ref_failed = TRUE;
 		goto bad;
@@ -741,6 +788,11 @@ continue_create_lookup:
 
 	*fmodep = fmode;
 	nameidone(ndp);
+#if CONFIG_XZS_BRINGUP
+	if (xzs_d6m6_stdio_probe_active) {
+		xzs_breadcrumb(0xD651, 0x39);
+	}
+#endif
 	return 0;
 
 bad:

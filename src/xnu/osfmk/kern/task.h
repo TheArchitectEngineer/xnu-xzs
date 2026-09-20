@@ -1662,6 +1662,14 @@ struct xzs_d6m4_r650_telemetry {
 	volatile uint64_t post_sp_el0;               /* 0x140 */
 	volatile uint64_t post_x0;                   /* 0x148 */
 	volatile uint64_t post_x16;                  /* 0x150 */
+
+	/* D6-M6 sustained, side-effect-free getpid(2) loop telemetry. */
+	volatile uint64_t stable_dispatcher_reached; /* 0x158 */
+	volatile uint64_t stable_handler_completed;  /* 0x160 */
+	volatile uint64_t stable_last_error;         /* 0x168 */
+	volatile uint64_t stable_last_x0;            /* 0x170 */
+	volatile uint64_t stable_last_cpsr;          /* 0x178 */
+	volatile uint64_t stable_roundtrip_count;    /* 0x180 */
 } __attribute__((aligned(128)));
 
 extern struct xzs_d6m4_r650_telemetry xzs_d6m4_r650_telemetry;

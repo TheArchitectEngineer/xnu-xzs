@@ -66,3 +66,15 @@ This document explicitly catalogs temporary bring-up compromises, architectural 
 * **Rationale**: Bring-up focused on kernel bootstrap, memory, and SMP scheduler (Mục tiêu A, B, C).
 * **Risk / Impact**: Cannot mount internal eMMC/UFS storage partitions; booting BSD requires an initrd/RAM disk.
 * **Remediation Plan**: Implement a RAM-disk rootfs driver first (Phase D.1), followed by a native Qualcomm UFS controller driver with SMMU v2 stage 1 bypass (Phase D.2).
+
+---
+
+### DEBT-08: devfs_getattr Pointer-Hardening Bypass (`3e417bb`)
+* **Location**: `src/xnu/bsd/miscfs/devfs/devfs_vnops.c` (`devfs_getattr`)
+* **Classification**: `XZS PLATFORM WORKAROUND / BRING-UP COMPATIBILITY FIX`
+* **Nature**: Upstream XNU invokes `VM_KERNEL_ADDRHASH(file_node->dn_dvm)` to compute `va_fsid` from the directory vnode pointer. This macro routes through the generic SHA-256 pointer-hardening path (`vm_kernel_addrhash()`), which does not return / stalls on Qualcomm MSM8996 during early single-instance devfs initialization. The workaround replaces this with a static non-pointer fsid `(uint32_t)0x64657666` (`"devf"`).
+* **Rationale**: Required during D6-M6 to permit `vn_authorize_open_existing()` and `vnode_getattr()` to complete when opening `/dev/console` from userspace/bootstrap, allowing PID1 to acquire native file descriptors 0, 1, and 2.
+* **Risk / Impact**: Non-canonical `va_fsid` generation for devfs. Modifies generic XNU vfs/devfs code under `#if CONFIG_XZS_BRINGUP`.
+* **Migration Plan / Remediation**:
+  The `devfs_getattr` pointer-hardening bypass must be re-audited when XZSPlatform and the long-term platform abstraction are introduced.
+  **Goal**: avoid carrying Xperia/MSM8996 bring-up exceptions as permanent, generic XNU-core behavior. Once platform crypto/entropy and long-term abstractions mature, investigate why `vm_kernel_addrhash()` stalls or move platform-specific exceptions into `XZSPlatform`.

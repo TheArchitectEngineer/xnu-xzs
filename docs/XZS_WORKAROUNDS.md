@@ -258,12 +258,42 @@ To ensure engineering rigor and prevent technical debt conflation, every non-ups
 
 ---
 
+### 18. Synthetic PID1 Console Descriptor Bootstrap
+* **Name**: `pid1_console_stdio_bootstrap`
+* **File / Function**: [`src/xnu/bsd/kern/mach_loader.c`](../src/xnu/bsd/kern/mach_loader.c) — `xzs_d6m6_setup_console_stdio()`
+* **Reason**: The project-specific PID1 is constructed directly from `kernproc` and does not yet run the normal userspace launchd initialization that opens `/dev/console`; the inherited fd 0/1/2 slots are therefore empty.
+* **Classification**: `XZS-WORKAROUND`
+* **What canonical behavior is being bypassed**: Userspace init opening and assigning its own standard descriptors.
+* **Why acceptable for current Phase**: Uses unmodified native `open1()`, VFS, fileproc, vnode, and device mechanisms with PID1's thread/credential context. It does not special-case `read()` or `write()` and gives PID1 ordinary descriptor ownership/cleanup semantics.
+* **Dependency**: A fuller PID1 capable of issuing `open()`/`dup2()` before starting the shell.
+* **Removal condition**: PID1 or `/bin/sh` establishes fd 0/1/2 itself through verified userspace syscalls.
+* **Future phase where it must be revisited**: D7 shell hardening.
+* **Hardware evidence**: Verified on silicon in D6-M6 (`artifacts/logs/xnu-console-extracted.log`): PID1 acquired fd 0, 1, 2 to `/dev/console` (cdev 0:0, VCHR), issued `write(1)` of 26 bytes, and completed 3,009 sustained `getpid` round trips.
+
+---
+
+### 19. devfs_getattr Pointer-Hardening Bypass
+* **Name**: `devfs_getattr_addrhash_bypass`
+* **File / Function**: [`src/xnu/bsd/miscfs/devfs/devfs_vnops.c`](../src/xnu/bsd/miscfs/devfs/devfs_vnops.c#L525-L534) — `devfs_getattr()`
+* **Reason**: Upstream XNU invokes `VM_KERNEL_ADDRHASH(file_node->dn_dvm)` to compute `va_fsid` from the directory vnode pointer. This enters the generic SHA-256 pointer-hardening path (`vm_kernel_addrhash()`), which does not return / stalls on Qualcomm MSM8996 during early single-instance devfs initialization. The workaround replaces this with a stable non-pointer fsid component `(uint32_t)0x64657666` (`"devf"`).
+* **Classification**: `XZS PLATFORM WORKAROUND / BRING-UP COMPATIBILITY FIX`
+* **What canonical behavior is being bypassed**: Dynamic SHA-256 kernel pointer address hashing for devfs directory nodes.
+* **Why acceptable for current Phase**: Single devfs instance mounted at `/dev`; fsid uniqueness across multiple devfs instances is unneeded during bring-up. Eliminates stall during `vn_authorize_open_existing()` when opening `/dev/console`.
+* **Dependency**: Long-term platform crypto/entropy and platform abstraction layer.
+* **Removal condition / Migration Note**:
+  The `devfs_getattr` pointer-hardening bypass must be re-audited when XZSPlatform and the long-term platform abstraction are introduced.
+  **Goal**: avoid carrying Xperia/MSM8996 bring-up exceptions as permanent, generic XNU-core behavior.
+* **Future phase where it must be revisited**: Phase D9 (XZSPlatform).
+* **Hardware evidence**: Verified on silicon in D6-M6 (`artifacts/logs/xnu-console-extracted.log`): `devfs_getattr()` returns immediately with `va_fsid=0x64657666`, enabling `/dev/console` open and PID1 stdio bootstrap.
+
+---
+
 ## 3. Summary of Workaround Distribution
 
 ```text
-Total Active Items: 17
+Total Active Items: 19
 ├── XZS-COMPAT:     1 (CTRR absence handling)
-├── XZS-WORKAROUND: 14 (Subsystem defers, sizing caps, priming, error propagation)
+├── XZS-WORKAROUND: 16 (Subsystem defers, sizing caps, priming, error propagation, PID1 stdio bootstrap, devfs pointer bypass)
 └── XZS-SELFTEST:   2 (Bounded IOMedia wait, synthetic sd0a rootdev)
 ```
 

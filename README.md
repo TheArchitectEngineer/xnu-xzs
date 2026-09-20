@@ -1,357 +1,229 @@
-# XNU on Sony Xperia XZs
+# xnu-xzs
 
-> **Apple XNU has been brought up natively on Sony Xperia XZs / Qualcomm MSM8996 through Mach SMP, BSD initialization, physical eMMC storage bring-up, and full GUID Partition Table (GPT) discovery & cross-validation.**
+> Native Apple XNU Kernel on Sony Xperia XZs (Qualcomm MSM8996)
+
+---
+
+## Mission
+
+**xnu-xzs** is primarily a hardware and platform porting project.
+
+Its long-term research goal is to determine how far an older authentic **Apple iOS userland** can be brought up on **Sony Xperia XZs** hardware by combining:
+- **Native XNU**: Canonical Darwin/XNU kernel running bare-metal on Qualcomm silicon.
+- **Xperia/MSM8996 Platform Support**: Clocks, power management, interrupts, MMIO, and bus infrastructure.
+- **Native Hardware Drivers**: IOKit drivers for storage, display, touch, USB, and power subsystems.
+- **Apple-Facing Compatibility Services (`XZSAppleCompat`)**: IOKit contracts, platform properties, and device topology expected by Apple userland.
+- **Darwin/iOS Userland Compatibility**: Mach traps, BSD syscalls, Mach IPC, dyld, launchd, and core frameworks.
+
+> [!IMPORTANT]
+> **Mission Clarity**:
+> This project is explicitly **NOT** attempting to build an unrelated new mobile operating system.
+> The custom userspace components (PID1 skeleton, `/bin/sh` interactive shell) exist strictly as:
+> - Bring-up infrastructure
+> - Low-level debugging environment
+> - Driver-development environment
+> - Hardware-validation environment
 >
-> **Phase D3 GUID Partition Discovery is COMPLETE. Phase D4 (IOKit Block Storage Integration) is NEXT.**
+> The ultimate research objective is authentic old-iOS userland execution on Xperia hardware.
 
 ---
 
-## Overview
-
-This repository hosts an experimental port of Apple's **XNU kernel** (the core of macOS and iOS) to the **Sony Xperia XZs** smartphone, powered by the **Qualcomm Snapdragon 820 (MSM8996)** System-on-Chip.
-
-The kernel runs **bare-metal at Exception Level 1 (EL1)**, loaded natively via the Sony S1 ABOOT fastboot bootloader. A custom early bootshim bridges Qualcomm device trees into an Apple Device Tree (ADT), configures ARM64 page tables with a 16KB granule, activates Qualcomm BLSP2 UARTDM console logging, drives ARM GICv3 interrupts, and brings all 4 Kryo CPU cores online into the Mach SMP scheduler via standard ARM PSCI.
-
-From Mach SMP, the kernel bootstraps the BSD kernel subsystem, populates VFS structures, executes IOKit autoconfiguration, and drives physical eMMC storage communication over Qualcomm SDCC1/SDHCI, reading and validating both Primary and Backup GPT headers and 16-KiB entry arrays, achieving 100% byte-for-byte and map-for-map cross-validation across all 55 partitions against independent TWRP Linux oracles.
-
-> [!WARNING]
-> **Research & Bring-up Notice**:
-> This is a low-level OS kernel research and hardware bring-up project. It is **NOT** a usable mobile operating system. It does **NOT** run iOS, has no graphical user interface, has no working userspace shell, and cannot make phone calls.
-
----
-
-## Current Status
-
-```text
-Phase D3 GUID Partition Discovery: COMPLETE
-Primary & Backup GPT Headers, Entry Arrays, and 55 Partition Extents Verified.
-AUTHORITATIVE_GPT_PARTITION_MAP_VERIFIED = yes.
-Phase D4 IOKit Block Storage Integration: NEXT
-```
-
-* **Target Hardware**: Sony Xperia XZs (`G8231` / `tone` / `keyaki`)
-* **SoC**: Qualcomm Snapdragon 820 (`MSM8996SG` / `MSM8996 Pro`)
-* **Architecture**: Quad-core Qualcomm Kryo ARMv8.0-A (64-bit)
-* **Storage Device**: Samsung BJNB4R 32GB eMMC 5.1 (`CID: 150100424a4e4234520fdac7c0381400`)
-* **Kernel Baseline**: Apple XNU `xnu-12377.1.9` (macOS 15.0 Sequoia / Darwin 24.0.0)
-* **Active Branches**: `main` (integrated), `xzs-port` (synchronized), `xzs-d3-gpt` (development)
-* **Milestone Tag**: `xzs-d3-gpt-complete`
-
----
-
-## Hardware Target
+## Target Hardware
 
 | Component | Hardware Specification |
 | :--- | :--- |
 | **Device** | Sony Xperia XZs (Model G8231, Platform Tone, Board Keyaki) |
 | **SoC** | Qualcomm Snapdragon 820 (MSM8996SG / MSM8996 Pro) |
-| **CPU Cores** | 4x Qualcomm Kryo ARMv8.0-A (2x Silver @ 1.59 GHz + 2x Gold @ 2.15 GHz) |
-| **DRAM** | 4 GB LPDDR4 (Base address `0x80000000`) |
+| **CPU Cores** | Quad-core Qualcomm Kryo ARMv8.0-A (2x Silver @ 1.59 GHz + 2x Gold @ 2.15 GHz) |
+| **DRAM** | 4 GB LPDDR4 (Base physical address `0x80000000`) |
 | **Interrupt Controller** | ARM GICv3 (Distributor `0x09bc0000`, Redistributors `0x09c00000`) |
 | **Hardware Timer** | ARM Generic Timer (19.200 MHz, PPI 27 virtual / PPI 30 physical) |
 | **Serial Console** | Qualcomm BLSP2 UARTDM UART2 (`0x075b0000`, 115200 8N1) |
-| **Storage** | Samsung BJNB4R 32GB eMMC 5.1 on Qualcomm SDCC1 / SDHCI (`0x07464900`) |
-| **Boot Mechanism** | Sony S1 ABOOT fastboot (`fastboot boot boot.img`) |
+| **Internal Storage** | Samsung BJNB4R 32GB eMMC 5.1 on Qualcomm SDCC1 / SDHCI (`0x07464900`) |
+| **Display** | 5.2" 1080x1920 IPS LCD (DSI / MDP5) |
+| **Boot Mechanism** | Sony S1 ABOOT Fastboot (`fastboot boot boot.img`) |
 
 ---
 
-## Verified Platform Subsystems
-
-| Subsystem | Milestone | Status |
-| :--- | :--- | :---: |
-| **Native XNU Execution** | EL1 bare-metal entry, ADT generation, boot_args | ✅ |
-| **MMU & Caches** | 16KB granule, TCR/MAIR, High KVA jump, WBWA coherency | ✅ |
-| **Interrupts (GICv3)** | GICD/GICR, system registers (`ICC_SRE_EL1`), SPI routing | ✅ |
-| **Timers** | ARM Generic Timer (PPI 27 virtual / PPI 30 physical) @ 19.2 MHz | ✅ |
-| **SMP & Cores** | 4/4 Kryo CPUs online via PSCI `CPU_ON`, cross-core IPIs | ✅ |
-| **Mach Scheduler** | Multi-core `pset0`, `idle_thread`, AST urgent preemption | ✅ |
-| **BSD & VFS Initialization** | `kernproc`, credentials, zones, mount table, devfs | ✅ |
-| **Physical eMMC Discovery** | SDCC1 host controller, clock RCG (400 kHz), controlled reset | ✅ |
-| **SDHCI Host** | Host power (1.8V), clock enable, timeout control, W1C IRQ | ✅ |
-| **MMC Protocol Handshake** | CMD0 (Idle), CMD1 (`CARD_READY=yes`, `FINAL_OCR=0xC0FF8080`) | ✅ |
-| **Card Identification** | CMD2 (`CID_MATCH=yes`, Samsung BJNB4R) | ✅ |
-| **RCA Assignment** | CMD3 (`ASSIGNED_RCA=2`, STBY state) | ✅ |
-| **Card Specific Data** | CMD9 (`CSD_MATCH=yes`, `d02701320f5903fff6dbffef8e404000`) | ✅ |
-| **Card Selection** | CMD7 (`CARD_SELECTION_CONFIRMED=yes`, TRAN state) | ✅ |
-| **EXT_CSD Data Transfer** | CMD8 (512 bytes captured via PIO, `SEC_COUNT=61071360`) | ✅ |
-| **Physical Block Read** | CMD17 (`LBA=1`, 512 bytes read via SDHCI_BUFFER) | ✅ |
-| **Oracle Equality** | Byte-for-byte SHA-256 match against TWRP disk oracle | ✅ |
-| **Primary GPT Discovery** | CMD17 LBA 1 (Header CRC32 0xBFDF741D) & LBA 2..33 (Array CRC32 0x64EDE0F4) | ✅ |
-| **Primary Partition Map** | 55 used / 73 unused entries, GUID decoding, bounds validated | ✅ |
-| **Backup GPT Verification** | CMD17 LBA 61071359 & LBA 61071327..61071358, 100% reciprocal cross-validation | ✅ |
-| **Authoritative GPT Map** | Primary/Backup byte & map equality, verified against TWRP oracles | ✅ |
+## Current Hardware-Verified Status
 
 ```text
-D3 GUID Partition Discovery:     COMPLETE
-D4 IOKit Block Storage:          NEXT
+Native XNU boot        VERIFIED
+4-core SMP             VERIFIED
+VFS/rootfs             VERIFIED
+PID1                   VERIFIED
+EL0 execution          VERIFIED
+Darwin syscall path    VERIFIED
+/dev/console stdout    VERIFIED
+stable PID1 runtime    VERIFIED
 
-AUTHORITATIVE_GPT_PARTITION_MAP_VERIFIED = yes
-GPT_NAME_PAIRED_A_B_ENTRIES_OBSERVED     = yes
-A_B_BOOT_SLOT_SEMANTICS                  = NOT_ESTABLISHED
-FILESYSTEMS                              = NOT_PROBED
-ROOTFS                                   = NOT_SELECTED
+physical UART RX       NOT IMPLEMENTED
+interactive shell      NEXT PHASE
+native display         FUTURE D8
 ```
 
-### D3 GUID Partition Table Acceptance Evidence
+### Verified Milestone Capabilities
+
+* **Native Kernel Entry**: Bare-metal EL1 entry via `xzs-bootshim`, Apple Device Tree (ADT) generation, 16KB translation tables, and transition to High KVA (`0xfffffe0000000000`).
+* **4-Core SMP Scheduler**: CPU0–CPU3 brought online via standard ARM PSCI `CPU_ON` (`0xC4000003`); Mach `pset0` active with `idle_thread` on all cores, GICv3 SGI 1 reschedule IPIs, and AST urgent preemption.
+* **BSD Subsystem & VFS Root**: Full BSD process table, credentials, and read-only XZSFS v1 root filesystem mounted from RAMDisk (`rd=md0`).
+* **devfs & Console Device**: Namespace resolution through `/dev` overlay; `/dev/console` created as character device 0:0 (`VCHR`).
+* **PID 1 Userspace (EL0)**: BSD `initproc` (PID 1) mapped with PAGEZERO guard, RX `__TEXT`, and RW/NX initial stack; Strategy A2 native AF & UXN permission promotion verified on silicon.
+* **Native Console Output**: PID 1 holds native file descriptors 0, 1, and 2 mapped to `/dev/console`; real Darwin `write(1)` syscall verified producing 26 bytes of console output (`[XZS-INIT] launchd entered\n`).
+* **Sustained Stable Runtime**: PID 1 executes in EL0 indefinitely; completed 3,009 consecutive successful `getpid` (syscall 20) round-trips without faulting.
+
+---
+
+## Architecture
 
 ```text
-Acceptance Sectors:      LBA 1 (Primary Header), LBA 2..33 (Primary Array)
-                         LBA 61071327..61071358 (Backup Array), LBA 61071359 (Backup Header)
-Primary Header CRC32:    0xBFDF741D (exact match)
-Backup Header CRC32:     0x03F02415 (exact match)
-Partition Array CRC32:   0x64EDE0F4 (16,384 bytes, 128 slots, exact match)
-Primary/Backup Array:    XNU_PRIMARY_BACKUP_ARRAY_BYTE_MATCH = yes (100% byte-for-byte)
-Partitions Discovered:   55 used / 73 unused (all 55 verified against TWRP oracles)
-Reciprocal Relationship: PRIMARY.MyLBA == BACKUP.AlternateLBA == 1
-                         PRIMARY.AlternateLBA == BACKUP.MyLBA == 61071359
-Host/Silicon Oracles:    100% byte-for-byte & map-for-map match (cmp exit 0)
+               Authentic Apple / Darwin Userspace (launchd, dyld, daemons)
+                                            │
+                                            ▼
+                       Standard IOKit / Platform Contracts
+                 (IORegistry, AppleARMPERoot, IOPMPowerSource)
+                                            │
+                                            ▼
+                    +──────────────────────────────────────────────+
+                    |                XZSAppleCompat                |
+                    |  - Translates Apple contracts to platform    |
+                    |  - Emulates Apple IORegistry topologies      |
+                    |  - Provides device-tree/chosen properties    |
+                    |  - Exposes power/battery/display interfaces  |
+                    +──────────────────────────────────────────────+
+                                            │
+                                            ▼
+                    +──────────────────────────────────────────────+
+                    |                 XZSPlatform                  |
+                    |  - Clean OS-neutral Qualcomm hardware API    |
+                    |  - MMIO, Clock (GCC), Reset, Regulator (RPM) |
+                    |  - GPIO/TLMM pinmux, GICv3 IRQ, SMMU DMA     |
+                    +──────────────────────────────────────────────+
+                                            │
+                                            ▼
+                    +──────────────────────────────────────────────+
+                    |          Native Qualcomm / Sony Drivers      |
+                    |  - BLSP UARTDM, SDCC1 eMMC, MDP5 display,    |
+                    |  - Synaptics ClearPad touch, DWC3 USB, etc.  |
+                    +──────────────────────────────────────────────+
+                                            │
+                                            ▼
+                                  MSM8996 Hardware
 ```
 
 ---
 
-## What Has Been Verified
+## Current Development Phase
 
-All items below have been certified by direct physical evidence extracted from hardware registers, persistent RAM (`0x80060000`), or pstore ramoops (`0xa7fbe000`):
-
-- [x] **Native S1 Bootloader Handoff**: Unlocked Sony bootloader boots custom Android-format boot image containing kernel and compressed DTB.
-- [x] **xzs-bootshim Runtime**: Parses Qualcomm DTB, extracts memory tags, and dynamically generates an Apple Device Tree (ADT) at `0x81810000`.
-- [x] **ARM64 MMU & 16KB Granule**: Page tables constructed; TCR/MAIR set; clean jump from identity mapping to High KVA (`0xfffffe0000000000`).
-- [x] **Serial & Post-Mortem Logging**: Qualcomm BLSP2 UARTDM driver active; lockless ring buffer in RAM (`0x80060000`); Linux/TWRP-compatible `pstore ramoops` (`0xa7fbe000`).
-- [x] **ARM GICv3 Interrupt Subsystem**: Distributor enabled; Redistributors awake; native system register interface (`ICC_SRE_EL1.SRE = 1`).
-- [x] **ARM Generic Timers**: PPI 27 (Virtual Timer) & PPI 30 (Physical Timer) firing reliably across all cores at 19.2 MHz.
-- [x] **PSCI Multi-Core Bring-up**: Secondary cores booted via SMC `CPU_ON` (`0xC4000003`); shared memory handshake verified.
-- [x] **Mach SMP Scheduler**: All 4 cores joined in processor set `pset0`; `idle_thread` active on all cores; inter-processor reschedule IPIs via SGI 1; AST urgent preemption operational.
-- [x] **Multi-Core Cache Coherency**: Inner Shareable WBWA memory; 40,000 concurrent atomic operations completed across all 4 cores without corruption (`0x9c40`).
-- [x] **BSD Subsystem Bootstrap**: Process 0 (`kernproc`), credentials, zones, domains, and sysctl tree fully initialized.
-- [x] **VFS Core Framework**: Mount table structures, vnode cache pools (`vnodes=263168`), and devfs bootstrap operational.
-- [x] **IOKit Autoconfiguration**: `IOKitBSDInit` publishing the `IOBSD` plane to the BSD subsystem.
-- [x] **Root Device Discovery Boundary**: `IOFindBSDRoot()` executes canonical `IOMedia` matching dictionary traversal; bounded 1.0s wait loop verifies no physical disk exists; returns canonical `kIOReturnNotFound` (`0xe00002f0`).
-- [x] **Block Device Vnode Probing**: `vfs_mountroot()` calls `bdevvp()` on synthetic root device `sd0a`; `VNOP_OPEN` queries the BSD block device switch table (`bdevsw`), returning canonical `ENODEV` (`0x13`).
-- [x] **Automated Recovery**: Upon reaching `[D51-TERMINAL]`, the kernel writes `0x77665500` to IMEM SRAM (`0x066bf65c`) and triggers an APCS watchdog bite (`xzs_spin_halt()`), warm-rebooting the device back to Fastboot within **+6 seconds**.
-
----
-
-## Current Boot Flow
-
-```text
-Sony ABOOT (Fastboot)
-       │
-       ▼  Loads boot.img at EL1 (0x82000000)
-xzs-bootshim (src/xzs-bootshim/)
-       │  Builds ADT at 0x81810000, boot_args at 0x81800000
-       ▼
-Apple XNU Entry (_start in osfmk/arm64/start.s)
-       │  Installs vectors, configures MMU (16KB), jumps to High KVA
-       ▼
-arm_init() -> pmap / VM Bootstrap
-       │  Initializes zones, UART console (0x075b0000), pstore ramoops
-       ▼
-pe_fiq() -> ARM GICv3 Distributor & CPU0 Redistributor
-       │
-       ▼  PSCI CPU_ON (0xC4000003) via SMC #0
-4/4 CPU SMP Online (CPU0..CPU3 in pset0)
-       │  Mach scheduler, SGI 1 reschedule IPIs, AST preemption
-       ▼
-bsd_init() -> BSD Kernel Bootstrap
-       │  Credentials, proc0, kernproc, zones, devfs, sysctl
-       ▼
-bsd_autoconf() -> IOKitBSDInit()
-       │  Publishes IOBSD plane
-       ▼
-IOFindBSDRoot() -> Root Device Discovery
-       │  Canonical matching on "IOMedia" (1.0s bounded wait)
-       │  Returns kIOReturnNotFound (0xe00002f0)
-       │  setconf() configures synthetic rootdev "sd0a"
-       ▼
-vfs_mountroot() -> Block Device Boundary
-       │  Calls bdevvp(rootdev) -> VNOP_OPEN queries bdevsw[6]
-       │  Returns canonical ENODEV (0x13)
-       ▼
-[D51-TERMINAL] reached!
-       │  xzs_spin_halt() writes IMEM restart reason 0x77665500
-       ▼  Triggers APCS Watchdog Bite
-Fastboot re-entry in +6 seconds (automated cycle complete)
-```
-
----
-
-## Phase D1 Result
-
-The acceptance criteria for Phase D1 required the BSD/VFS subsystem to execute through autoconfiguration down to the block storage boundary.
-
-Extracted persistent log excerpt:
-```text
-[XZS-BOOT] [D50] ROOT DEVICE SELECTION ENTER
-[XZS-BOOT] [D50a] IOFindBSDRoot ENTER
-[XZS-BOOT] [D50-IOKIT] IOFindBSDRoot ENTER
-[XZS-BOOT] [D50-I0] alloc matching ENTER
-[XZS-BOOT] [D50-I0a] alloc matching RETURN
-[XZS-BOOT] [D50-I1] fromPath /chosen ENTER
-[XZS-BOOT] [D50-I1a] fromPath /chosen RETURN
-[XZS-BOOT] [D50-I2] fromPath /chosen/memory-map ENTER
-[XZS-BOOT] [D50-I2a] fromPath /chosen/memory-map RETURN
-[XZS-BOOT] [D50-I3] serviceMatching(IOMedia) ENTER
-[XZS-BOOT] [D50-I3a] serviceMatching(IOMedia) RETURN
-[XZS-BOOT] [D50-I4] waitQuiet SKIPPED (not set in gIOKitDebug)
-[XZS-BOOT] [D50-I5] serialize matching ENTER
-[XZS-BOOT] [XZS-WORKAROUND] IOFindBSDRoot matching serialization/logging DEFERRED
-[XZS-BOOT] [D50-I5a] serialize matching RETURN / DEFERRED
-[XZS-BOOT] [D50-I6] startDeferredMatches SKIPPED
-[XZS-BOOT] [D50-I7] canonical root-service wait ENTER
-[XZS-BOOT] [XZS-SELFTEST] bounded root-device wait (timeout=1.0s)...
-[XZS-BOOT] [D50-I8] no matching physical root service
-[XZS-BOOT] [XZS-SELFTEST] root-device wait timed out: no matching physical IOMedia
-IOFindBSDRoot: no root device matched after timeout, failing gracefully
-[XZS-BOOT] [D50-IOKIT] IOFindBSDRoot: returning kIOReturnNotFound (0xe00002bc)
-[XZS-BOOT] [D50b] IOFindBSDRoot RETURN err=0x0xe00002f0
-[XZS-BOOT] [D50c] synthetic rootdev selected (XZS-WORKAROUND / SELFTEST)
-setconf: IOFindBSDRoot returned an error (-536870160); setting rootdevice to 'sd0a'.
-[XZS-BOOT] [D50d] rootdev major=0x0x6 minor=0x0x0 rootdevice=sd0a
-[XZS-BOOT] [D51] vfs_mountroot ENTER
-[XZS-BOOT] [D51b] bdevvp(rootdev, ...) error=0x0x13
-vfs_mountroot: can't setup bdevvp
-[XZS-BOOT] [D51-TERMINAL] cannot mount root, errno = 0x0x13 (expected: physical storage / UFS not implemented)
-[XZS-BOOT] PHASE D1 TERMINAL CONDITION REACHED — WARM REBOOTING TO FASTBOOT
-```
-
----
-
-## Current Limitations
-
-1. **No Root Filesystem Mounted**: While physical block reads (CMD17) are verified on hardware, partition table parsing (Phase D3) and filesystem driver mounting (Phase D4/D5) have not yet been integrated.
-2. **No Userspace Execution**: The kernel terminates cleanly at the hardware bring-up boundary; PID 1 (`launchd`) and userland execution are not started.
-3. **Deferred Subsystems**: Advanced networking (Skywalk, lo0, gif0, ethernet) and DTrace tracing are temporarily deferred.
-4. **Warm Reboot Nondeterminism**: Repeated warm reboots can cause early stalls; a cold reset is required for 100% deterministic reproduction (see [`docs/XZS_KNOWN_ISSUES.md`](docs/XZS_KNOWN_ISSUES.md)).
-
----
-
-## Bring-up Workarounds
-
-All deviations from canonical XNU behavior are cataloged in [`docs/XZS_WORKAROUNDS.md`](docs/XZS_WORKAROUNDS.md) and partitioned into:
-* **`XZS-COMPAT`**: Architectural adaptations for non-Apple ARMv8.0 silicon (e.g. CTRR absence handling).
-* **`XZS-WORKAROUND`**: Temporary early bring-up compromises (e.g. deferring background network daemons, static jetsam snapshot buffer, thread-call zone priming, and debug serialization deferral).
-* **`XZS-SELFTEST`**: Synthetic verification probes (e.g. bounded 1.0s IOMedia wait loop and `sd0a` synthetic fallback).
-
----
-
-## Repository Layout
-
-```text
-├── src/
-│   ├── xnu/                 # Apple XNU kernel source (macOS 15.0 / Darwin 24.0.0)
-│   │   ├── osfmk/           # Mach kernel core, SMP scheduler, ARM64 low-level start
-│   │   ├── bsd/             # BSD subsystem, VFS, networking, sysctl
-│   │   ├── iokit/           # IOKit C++ driver framework & device discovery
-│   │   └── pexpert/         # Platform Expert (UARTDM, GICv3, device tree)
-│   ├── xzs-bootshim/        # Early bootshim (ADT generator, boot_args builder)
-│   ├── xzs-debug-dumper/    # USB CDC-ACM crash dumper tool
-│   └── xzs-ram-test/        # RAM persistence verifier
-├── device/                  # Qualcomm device tree blobs (tone-keyaki.dtb)
-├── toolchain/               # Build utilities and helper libraries
-├── scripts/                 # Build, PAC audit, packaging, and hardware test scripts
-├── docs/                    # Complete technical documentation suite
-├── LICENSE                  # Apple Public Source License (APSL) Version 2.0
-├── NOTICE                   # Upstream attribution notice
-└── README.md                # This document
-```
-
----
-
-## Build
-
-Building requires a macOS host with Xcode and command line tools.
-
-```bash
-# 1. Compile XNU for ARM64 VMAPPLE target
-DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer \
-make -C src/xnu \
-    KERNEL_CONFIGS=DEVELOPMENT \
-    ARCH_CONFIGS=ARM64 \
-    MACHINE_CONFIGS=VMAPPLE \
-    RC_DARWIN_KERNEL_VERSION=24.0.0 \
-    build -j$(sysctl -n hw.ncpu)
-
-# 2. Audit that zero Apple PAC instructions exist
-./scripts/check-no-pac.sh
-
-# 3. Package Android boot image
-./scripts/package-boot.sh
-```
-
-Output: `artifacts/builds/xzs-xnu-boot.img`
-
-*(Detailed instructions: see [`docs/XZS_BUILD.md`](docs/XZS_BUILD.md))*
-
----
-
-## Hardware Testing
-
-1. **Cold-Reset Device**: Hold `Power + Volume Up` until the phone vibrates 3 times.
-2. **Enter Fastboot**: Hold `Volume Down` and connect USB-C cable (blue LED turns on).
-3. **Execute Automated Verification**:
-   ```bash
-   ./scripts/run-and-extract.sh
-   ```
-   The script boots XNU, monitors execution to the terminal boundary (+6s), boots recovery RAM, and extracts persistent console logs to `artifacts/logs/`.
-
-*(Detailed guide: see [`docs/XZS_HARDWARE_TESTING.md`](docs/XZS_HARDWARE_TESTING.md))*
+* **Current Milestone**: **Phase D6 COMPLETE / SEALED** (Milestones D6-M1 through D6-M6 sealed on hardware).
+* **Next Immediate Action**: **Phase D6-M7 (Final D6 Regression and Seal)** — small consolidation milestone to regress M1–M6, consolidate documentation, verify verifiers, and apply git tag `xzs-d6-userspace-complete`.
+* **Subsequent Milestone**: **Phase D7 (Interactive EL0 Shell)**.
 
 ---
 
 ## Roadmap
 
+| Phase | Milestone Description | Hardware Status |
+| :--- | :--- | :---: |
+| **Phase A** | Native kernel entry (Bootshim, ADT, MMU, High KVA) | **COMPLETE** |
+| **Phase B** | Platform bring-up (UARTDM, GICv3, Timer, Pmap, VM) | **COMPLETE** |
+| **Phase C** | SMP / Mach scheduler (PSCI, 4 Kryo cores, IPI, AST, Preemption) | **COMPLETE** |
+| **Phase D1** | BSD / VFS bootstrap to root-storage boundary | **COMPLETE** |
+| **Phase D2** | Physical eMMC storage bring-up (SDCC1, CMD0..CMD17, PIO) | **COMPLETE** |
+| **Phase D3** | GUID Partition Table (GPT) discovery & partition enumeration | **COMPLETE** |
+| **Phase D4** | Block-storage driver integration (`bdevsw` / `disk0`) | **COMPLETE** |
+| **Phase D5** | Real root filesystem mount (RAMDisk XZSFS v1) | **COMPLETE / SEALED** |
+| **Phase D6** | PID 1 / First EL0 userspace (`initproc` / launchd) | **D6-M1..M6 COMPLETE / SEALED; D6-M7 NEXT** |
+| **Phase D7** | Interactive serial shell (`/bin/sh` headless REPL) | **NEXT PHASE** |
+| **Phase D8** | Native display / framebuffer / touch / recovery console | **PLANNED** |
+| **Phase D9** | XZSPlatform hardware/platform compatibility layer | **PLANNED** |
+| **Phase D10**| Core native device drivers | **PLANNED** |
+| **Phase D11**| System hardware integration | **PLANNED** |
+| **Phase D12**| XZSAppleCompat (Apple-facing hardware compatibility layer) | **PLANNED** |
+| **Phase D13**| Darwin / iOS userland compatibility | **PLANNED** |
+| **Phase D14**| First old-iOS userland boot | **PLANNED** |
+| **Phase D15**| iOS service bring-up | **PLANNED** |
+| **Phase D16**| Graphical iOS userland / SpringBoard investigation | **PLANNED** |
+
+Full specifications and milestone criteria are detailed in [`docs/XZS_ROADMAP.md`](docs/XZS_ROADMAP.md).
+
+---
+
+## Hardware / Platform Strategy
+
+To maintain engineering rigor and keep generic XNU maintainable:
+1. **Upstream Alignment**: Keep generic XNU code as close to canonical Apple/Darwin semantics as practical.
+2. **Platform Encapsulation**: All Qualcomm MSM8996 and Sony Xperia specific hardware behaviors must be encapsulated within `XZSPlatform`.
+3. **Compatibility Shimming**: Apple-specific expectations (IORegistry planes, property trees, power sources) are isolated within `XZSAppleCompat`.
+4. **Audit and Retirement**: Temporary bring-up workarounds (e.g. `devfs_getattr` pointer-hardening bypass `3e417bb`) are tracked as technical debt and slated for systematic retirement under Phase D9.
+
+---
+
+## iOS Userland Research Goal
+
+The project models authentic iOS userland execution through an extracted-image paradigm:
 ```text
-Phase A:   Native kernel entry                     [COMPLETE]
-Phase B:   Platform bring-up (UART, GIC, Timer)    [COMPLETE]
-Phase C:   Mach SMP Scheduler (4 Cores, IPI, AST)  [COMPLETE]
-Phase D1:  BSD/VFS to Root Storage Boundary        [COMPLETE]
-Phase D2:  Physical eMMC Storage Bring-up (CMD17)  [COMPLETE]
-Phase D3:  GUID Partition Table (GPT) Discovery    [COMPLETE]
-Phase D4:  IOKit Block Storage Integration (disk0) [NEXT]
-Phase D5:  Real Root Filesystem Mount (HFS+/APFS)  [NOT STARTED]
-Phase E:   PID 1 Userspace Bootstrap (launchd)     [NOT STARTED]
-Phase F:   Interactive Serial Console Shell        [NOT STARTED]
-Phase G:   Restore Deferred Subsystems             [NOT STARTED]
-Phase H:   Networking & Peripheral Device Drivers  [NOT STARTED]
-Phase I:   Userspace & Platform Expansion          [NOT STARTED]
+Legally obtained Apple IPSW
+        ↓
+Extract compatible iOS root/userland
+        ↓
+Prepare project-specific root filesystem/image
+        ↓
+Boot using xnu-xzs / target-compatible XNU
+        ↓
+Mount iOS userland
+        ↓
+Execute authentic Apple launchd
 ```
 
-*(Full roadmap: see [`docs/XZS_ROADMAP.md`](docs/XZS_ROADMAP.md))*
+### Version Compatibility Principle
+An older iOS userland cannot automatically be assumed compatible with the current macOS Sequoia bring-up XNU kernel. The project audits:
+```text
+Target iOS Version ↔ Darwin Version ↔ XNU Version ↔ dyld Version ↔ launchd Version ↔ IOKit ABI
+```
+The modular `XZSPlatform` design ensures that board support and native drivers can be re-targeted to an XNU branch matching the selected iOS version if needed.
 
 ---
 
-## Branch Strategy
+## Debug / Recovery Workflow
 
-* **`main`**: Certified public release milestones.
-* **`xzs-bringup`**: Active bring-up laboratory, verbose instrumentation, and temporary workarounds.
-* **`xzs-port`**: Clean hardware-verified port changes intended to remain close to canonical XNU behavior.
-
-*(Full branch guidelines: see [`docs/CONTRIBUTING.md`](docs/CONTRIBUTING.md))*
-
----
-
-## Upstream
-
-* **Upstream Project**: [Apple XNU Open Source](https://github.com/apple-oss-distributions/xnu)
-* **Release Baseline**: `xnu-12377.1.9` (macOS 15.0 Sequoia / Darwin 24.0.0)
-* All original Apple license headers and copyright notices are strictly preserved throughout the codebase.
+* **Boot Mechanism**: Automated testing boots through Sony S1 Fastboot (`fastboot boot boot.img`).
+* **Diagnostic Telemetry**: Multi-tier persistent logging:
+  - IMEM SRAM breadcrumbs (`0x066bf660`): Hardware checkpoint IDs and error codes.
+  - DRAM scratch ring buffer (`0x80060000`): Lockless early character buffer.
+  - Persistent RAM ramoops (`0xa7f00000` dmesg, `0xa7fbe000` console): Extracted post-mortem via TWRP.
+* **Automated Recovery**: On panic or test completion, the kernel writes `0x77665500` to IMEM and triggers a warm reset directly back to Fastboot mode.
+* **Automated Acceptance Verification**: Independent Python verifiers in `scripts/verify_*.py` audit checkpoint sequences and telemetry keys.
 
 ---
 
-## Disclaimer
+## Known Limitations
 
-This project is an independent research endeavor and is not affiliated with, endorsed by, or sponsored by Apple Inc. or Sony Corporation. All product names, logos, and brands are property of their respective owners.
+1. **UARTDM RX Not Implemented**: Qualcomm MSM8996 UARTDM RX driver is currently stubbed (`PHYSICAL_CONSOLE_RX_AVAILABLE=no`). Serial console input is not yet available; interactive input will be brought up in Phase D7.
+2. **Display & GPU Uninitialized**: Physical screen and GPU acceleration are uninitialized; on-device console rendering is planned for Phase D8.
+3. **devfs Pointer-Hardening Bypass**: Commit `3e417bb` bypasses `vm_kernel_addrhash` in `devfs_getattr` to prevent a SHA-256 address hashing hang during early devfs open. Classified as `XZS PLATFORM WORKAROUND` to be re-audited under Phase D9.
+4. **Deferred Subsystems**: Advanced networking (Skywalk, lo0) and DTrace FBT are temporarily deferred until required drivers are active.
 
 ---
 
-## Documentation
+## Documentation Index
 
-* [`docs/XZS_PORT_STATUS.md`](docs/XZS_PORT_STATUS.md) — 2-minute project status summary.
-* [`docs/XZS_WORKAROUNDS.md`](docs/XZS_WORKAROUNDS.md) — Exhaustive 17-item workaround and compatibility matrix.
-* [`docs/XZS_KNOWN_ISSUES.md`](docs/XZS_KNOWN_ISSUES.md) — Known hardware behaviors, warm reset nondeterminism, and log audits.
-* [`docs/XZS_HARDWARE_VERIFICATION.md`](docs/XZS_HARDWARE_VERIFICATION.md) — Rigorous 4-column hardware evidence audit.
-* [`docs/XZS_ROADMAP.md`](docs/XZS_ROADMAP.md) — Detailed technical phase breakdown from Phase A to I.
-* [`docs/XZS_ARCHITECTURE.md`](docs/XZS_ARCHITECTURE.md) — Architectural overview, execution pipeline, and MMIO map.
-* [`docs/XZS_BUILD.md`](docs/XZS_BUILD.md) — Complete build and toolchain instructions.
-* [`docs/XZS_HARDWARE_TESTING.md`](docs/XZS_HARDWARE_TESTING.md) — Deployment, test automation, and recovery procedures.
-* [`docs/CONTRIBUTING.md`](docs/CONTRIBUTING.md) — Branch workflows and contribution guidelines.
+### Core Architecture & Strategy
+* [Project Roadmap](docs/XZS_ROADMAP.md) — Authoritative multi-phase development roadmap (Phases A through D16).
+* [Architecture Overview](docs/XZS_ARCHITECTURE.md) — End-to-end boot architecture, execution flow, and platform design.
+* [Workarounds & Compatibility Matrix](docs/XZS_WORKAROUNDS.md) — Active shims, workarounds, and classification taxonomy.
+* [Technical Debt & Backlog](docs/XZS_TECHNICAL_DEBT.md) — Architectural debt inventory, risks, and remediation plans.
+* [Current Session Handoff](docs/CURRENT_HANDOFF.md) — Concise current state, commits, and next actions for AI sessions.
+
+### Hardware & Bring-up Reference
+* [Hardware Map](docs/HARDWARE_MAP.md) — Audited MMIO register bases, IRQs, and clock domains.
+* [Memory Map](docs/XZS_MEMORY_MAP.md) — Physical memory layout, carveouts, and pstore allocations.
+* [Early Debug Architecture](docs/XZS_EARLY_DEBUG.md) — Diagnostic telemetry, breadcrumbs, and ramoops recovery.
+* [Hardware Verification Guide](docs/XZS_HARDWARE_VERIFICATION.md) — Flashing, testing, and extraction procedures.
+
+### Sealed Phase Reports & Audits
+* [Phase D6-M6 Stable PID1 Report](artifacts/reports/D6_M6_STABLE_PID1_REPORT.md) — D6-M6 hardware acceptance report.
+* [Phase D6-M6 Source Audit](docs/D6_M6_STABLE_PID1_SOURCE_AUDIT.md) — File descriptor bootstrap, console call path, and telemetry audit.
+* [Phase D6-M5 Syscall Round-Trip Report](artifacts/reports/D6_M5_FIRST_SYSCALL_REPORT.md) — First EL0 syscall dispatcher and return proof.
+* [Phase D6-M4 First EL0 Transition Report](artifacts/reports/D6_M4_FIRST_EL0_REPORT.md) — First userland instruction execution proof.
+* [Phase D5 Rootfs Final Architecture](docs/D5_ROOTFS_FINAL_ARCHITECTURE.md) — RAMDisk transport and XZSFS v1 filesystem architecture.

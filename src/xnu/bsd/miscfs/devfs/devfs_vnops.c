@@ -473,8 +473,19 @@ devfs_getattr(struct vnop_getattr_args *ap)
 	devnode_t *     file_node;
 	struct timeval now;
 
-
+#if CONFIG_XZS_BRINGUP
+	extern volatile int xzs_d6m6_stdio_probe_active;
+	extern void xzs_breadcrumb(uint32_t cp, uint32_t err);
+	if (xzs_d6m6_stdio_probe_active) {
+		xzs_breadcrumb(0xD651, 0x70);
+	}
+#endif
 	DEVFS_LOCK();
+#if CONFIG_XZS_BRINGUP
+	if (xzs_d6m6_stdio_probe_active) {
+		xzs_breadcrumb(0xD651, 0x71);
+	}
+#endif
 	file_node = VTODN(vp);
 
 	VATTR_RETURN(vap, va_mode, file_node->dn_mode);
@@ -511,7 +522,16 @@ devfs_getattr(struct vnop_getattr_args *ap)
 	VATTR_RETURN(vap, va_nlink, file_node->dn_links);
 	VATTR_RETURN(vap, va_uid, file_node->dn_uid);
 	VATTR_RETURN(vap, va_gid, file_node->dn_gid);
+#if CONFIG_XZS_BRINGUP
+	/*
+	 * vm_kernel_addrhash() enters the generic SHA-256 pointer-hardening path,
+	 * which is not required for the single bring-up devfs instance and does
+	 * not return on MSM8996.  Use a stable non-pointer fsid component here.
+	 */
+	VATTR_RETURN(vap, va_fsid, (uint32_t)0x64657666); /* "devf" */
+#else
 	VATTR_RETURN(vap, va_fsid, (uint32_t)VM_KERNEL_ADDRHASH(file_node->dn_dvm));
+#endif
 	VATTR_RETURN(vap, va_fileid, (uintptr_t)file_node->dn_ino);
 	VATTR_RETURN(vap, va_data_size, file_node->dn_len);
 
@@ -524,8 +544,17 @@ devfs_getattr(struct vnop_getattr_args *ap)
 		VATTR_RETURN(vap, va_iosize, (uint32_t)vp->v_mount->mnt_vfsstat.f_iosize);
 	}
 
-
+#if CONFIG_XZS_BRINGUP
+	if (xzs_d6m6_stdio_probe_active) {
+		xzs_breadcrumb(0xD651, 0x72);
+	}
+#endif
 	DEVFS_ATTR_LOCK_SPIN();
+#if CONFIG_XZS_BRINGUP
+	if (xzs_d6m6_stdio_probe_active) {
+		xzs_breadcrumb(0xD651, 0x73);
+	}
+#endif
 
 	microtime(&now);
 	dn_times_locked(file_node, &now, &now, &now, 0);
@@ -546,6 +575,11 @@ devfs_getattr(struct vnop_getattr_args *ap)
 	VATTR_RETURN(vap, va_access_time, file_node->dn_atime);
 
 	DEVFS_ATTR_UNLOCK();
+#if CONFIG_XZS_BRINGUP
+	if (xzs_d6m6_stdio_probe_active) {
+		xzs_breadcrumb(0xD651, 0x74);
+	}
+#endif
 
 	VATTR_RETURN(vap, va_gen, 0);
 	VATTR_RETURN(vap, va_filerev, 0);
@@ -558,7 +592,17 @@ devfs_getattr(struct vnop_getattr_args *ap)
 		VATTR_RETURN(vap, va_flags, 0);
 	}
 
+#if CONFIG_XZS_BRINGUP
+	if (xzs_d6m6_stdio_probe_active) {
+		xzs_breadcrumb(0xD651, 0x75);
+	}
+#endif
 	DEVFS_UNLOCK();
+#if CONFIG_XZS_BRINGUP
+	if (xzs_d6m6_stdio_probe_active) {
+		xzs_breadcrumb(0xD651, 0x76);
+	}
+#endif
 
 	return 0;
 }

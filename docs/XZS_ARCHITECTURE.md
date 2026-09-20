@@ -1,6 +1,26 @@
 # Sony Xperia XZs (MSM8996) — Architecture & Execution Pipeline
 
-This document details the complete architectural execution flow of Apple XNU running on Qualcomm Snapdragon 820 (MSM8996), from primary bootloader power-on through the BSD/VFS storage boundary and future userspace.
+## Project Mission & Research Model
+
+**xnu-xzs** is primarily a hardware and platform porting project.
+
+Its long-term research goal is to determine how far an older authentic **Apple iOS userland** can be brought up on **Sony Xperia XZs** hardware by combining:
+- **Native XNU**: Canonical Darwin/XNU kernel running directly on Qualcomm hardware.
+- **Xperia/MSM8996 Platform Support**: SoC clocks, power, IRQ, MMIO, and bus infrastructure.
+- **Native Hardware Drivers**: IOKit drivers for storage, display, touch, USB, and peripherals.
+- **Apple-Facing Compatibility Services (`XZSAppleCompat`)**: IOKit contracts, platform properties, and device topology expected by Apple userland.
+- **Darwin/iOS Userland Compatibility**: Mach traps, BSD syscalls, Mach IPC, dyld, launchd, and core frameworks.
+
+> [!IMPORTANT]
+> **Mission Clarity**:
+> This project is explicitly **NOT** attempting to "build a completely unrelated new mobile OS".
+> The project-specific minimal userspace (PID1 launchd skeleton, `/bin/sh` interactive shell) exists primarily as:
+> - Bring-up infrastructure
+> - Low-level debugging environment
+> - Driver-development environment
+> - Hardware-validation environment
+>
+> The ultimate research objective is authentic old-iOS userland execution on Xperia hardware.
 
 ---
 
@@ -102,44 +122,96 @@ This document details the complete architectural execution flow of Apple XNU run
                                      │
                                      ▼
 +-------------------------------------------------------------------------+
-|             IOKit Autoconfiguration (bsd_autoconf / IOKitBSDInit)       |
-|  [XZS-PORT / CANONICAL IOKIT]                                           |
-|  - Publishes IOBSD plane resource                                       |
-|  - Traverses IOKit registry matching for boot devices                   |
+|        VFS Root Filesystem Mount & devfs (vfs_mountroot) [VERIFIED]     |
+|  [XZS-PORT / CANONICAL VFS]                                             |
+|  - Discovers RAMDisk block device via ADT memory-map (rd=md0)          |
+|  - Mounts read-only XZSFS v1 filesystem as rootvnode ("/")              |
+|  - Mounts devfs overlay at "/dev", creates cdev 0:0 (/dev/console)      |
+|  - Verifies namespace traversal: /sbin/launchd, /bin/sh, /dev/console   |
 +-------------------------------------------------------------------------+
                                      │
                                      ▼
 +-------------------------------------------------------------------------+
-|          Root Device Discovery Boundary (IOFindBSDRoot)                 |
-|  [XZS-SELFTEST / BOUNDARY GATE]                                         |
-|  - Traverses /chosen and builds serviceMatching("IOMedia")             |
-|  - Defers debug serialization (avoids kmem_realloc_guard stall)         |
-|  - Bounded 1.0s wait loop polls copyMatchingService("IOMedia")          |
-|  - Returns canonical kIOReturnNotFound (0xe00002f0) on missing storage  |
-|  - setconf() assigns synthetic rootdev "sd0a" (major=6, minor=0)        |
+|        PID 1 Userspace Bootstrap & Native Console [VERIFIED]            |
+|  [XZS-PORT / CANONICAL DARWIN USR]                                      |
+|  - Constructs initproc (PID 1), user VM map, PAGEZERO, and RX __TEXT    |
+|  - Prepares native initial stack frame (argc=1, argv[0]=/sbin/launchd)  |
+|  - Performs Strategy A2 native AF & UXN permission promotion            |
+|  - Sets up native fd 0, 1, 2 bound to /dev/console (VCHR, cdev 0:0)     |
+|  - Transitions EL1 -> EL0 via eret; executes first user instruction    |
+|  - Issues SYS_write (x16=4) -> 26 bytes output to /dev/console          |
+|  - Enters stable loop: 3,009 consecutive successful SYS_getpid calls    |
 +-------------------------------------------------------------------------+
                                      │
                                      ▼
 +-------------------------------------------------------------------------+
-|              VFS Root Mount Boundary (vfs_mountroot)                    |
-|  [XZS-WORKAROUND / HARDWARE TERMINAL GATE]                             |
-|  - Calls bdevvp(rootdev, &rootvp)                                       |
-|  - VNOP_OPEN queries bdevsw[6], returns canonical ENODEV (0x13)         |
-|  - bdevvp returns error without panicking                               |
-|  - [D51-TERMINAL] logged: cannot mount root, errno = 0x13               |
-|  - Automated warm reboot to Fastboot triggered via xzs_spin_halt()      |
-+-------------------------------------------------------------------------+
-                                     │
-                                     ▼  [FUTURE PHASES]
-+-------------------------------------------------------------------------+
-|  Phase D2: Physical eMMC Storage Bring-up (SDCC1 / CMD17 LBA 1) [DONE]   |
-|  Phase D3: GUID Partition Table (GPT) Discovery & Enumeration  [DONE]   |
-|  Phase D4: Block Storage Integration (disk0 / bdevvp)           [DONE]   |
-|  Phase D5: Real Root Filesystem Mount (HFS+ / APFS / ramdisk)   [NEXT]   |
-|  Phase E:  PID 1 Userspace Exec (/sbin/launchd)                         |
-|  Phase F:  Interactive Serial Console Shell (/bin/sh)                   |
+|              Long-Term Platform & Compatibility Roadmap                 |
+|  Phase D7:  Headless Interactive Serial Shell (/bin/sh REPL)            |
+|  Phase D8:  Native Display / Framebuffer / Touch / Recovery Console     |
+|  Phase D9:  XZSPlatform Hardware Compatibility Layer (qcom-common)      |
+|  Phase D10: Core Native Drivers (storage, USB, power, sensors)          |
+|  Phase D11: System Hardware Integration (sleep/wake, thermal, battery)  |
+|  Phase D12: XZSAppleCompat (Apple IOKit contracts & service topology)   |
+|  Phase D13: Darwin / iOS Userland Compatibility (Mach IPC, dyld, VM)    |
+|  Phase D14: First Old-iOS Userland Boot (extracted IPSW -> launchd)     |
+|  Phase D15: iOS Service Bring-Up (system daemons under launchd)         |
+|  Phase D16: Graphical iOS Userland Investigation (SpringBoard / UI)     |
 +-------------------------------------------------------------------------+
 ```
+
+---
+
+## 2. Platform Architecture & Separation of Concerns
+
+To prevent Qualcomm/Xperia-specific adaptations from diffusing into generic XNU code, the project establishes a two-tiered architectural boundary:
+
+```text
+               Authentic Apple / Darwin Userspace (launchd, dyld, daemons)
+                                            │
+                                            ▼
+                       Standard IOKit / Platform Contracts
+                 (IORegistry, AppleARMPERoot, IOPMPowerSource)
+                                            │
+                                            ▼
+                    +──────────────────────────────────────────────+
+                    |                XZSAppleCompat                |
+                    |  - Translates Apple contracts to platform    |
+                    |  - Emulates Apple IORegistry topologies      |
+                    |  - Provides device-tree/chosen properties    |
+                    |  - Exposes power/battery/display interfaces  |
+                    +──────────────────────────────────────────────+
+                                            │
+                                            ▼
+                    +──────────────────────────────────────────────+
+                    |                 XZSPlatform                  |
+                    |  - Clean OS-neutral Qualcomm hardware API    |
+                    |  - MMIO, Clock (GCC), Reset, Regulator (RPM) |
+                    |  - GPIO/TLMM pinmux, GICv3 IRQ, SMMU DMA     |
+                    +──────────────────────────────────────────────+
+                                            │
+                                            ▼
+                    +──────────────────────────────────────────────+
+                    |          Native Qualcomm / Sony Drivers      |
+                    |  - BLSP UARTDM, SDCC1 eMMC, MDP5 display,    |
+                    |  - Synaptics ClearPad touch, DWC3 USB, etc.  |
+                    +──────────────────────────────────────────────+
+                                            │
+                                            ▼
+                                  MSM8996 Hardware
+```
+
+### 2.1 XZSPlatform vs. XZSAppleCompat
+* **`XZSPlatform`**: Governs how the kernel controls Qualcomm Snapdragon 820 / Sony Xperia XZs silicon. It encapsulates hardware register access, clock trees, power domains, and pinmuxing.
+* **`XZSAppleCompat`**: Governs how Darwin/Apple-facing software observes the hardware. It translates platform states into the standard IOKit planes, properties, and service contracts expected by Apple binaries.
+* **Non-Emulation Boundary**: The project does **NOT** attempt to fully emulate an Apple SoC. It provides standard IOKit service shims so that unmodified Apple daemons and frameworks can interact with Xperia hardware drivers.
+
+### 2.2 XNU Kernel Version Compatibility
+The current bring-up uses Apple XNU `xnu-12377.1.9` (macOS 15.0 Sequoia / Darwin 24.0.0 baseline). An older authentic iOS userland (e.g., iOS 9–14) depends on a specific historical Darwin ABI:
+```text
+Target iOS Version ↔ Darwin Version ↔ XNU Version ↔ dyld Version ↔ launchd Version ↔ IOKit ABI
+```
+By isolating platform drivers in `XZSPlatform`, the project preserves the ability to re-host `XZSPlatform` and native drivers on a target-appropriate XNU branch matching the selected iOS userland if required.
+
 
 ---
 

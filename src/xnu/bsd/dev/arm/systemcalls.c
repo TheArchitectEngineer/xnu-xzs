@@ -108,8 +108,14 @@ unix_syscall(
 	extern struct xzs_d6m4_r650_telemetry xzs_d6m4_r650_telemetry;
 	boolean_t xzs_d6m5_target_write = xzs_d6m4_probe_armed &&
 	    thread_act == xzs_d6m4_target_thread && code == SYS_write;
+	boolean_t xzs_d6m6_target_getpid = xzs_d6m4_probe_armed &&
+	    thread_act == xzs_d6m4_target_thread && code == SYS_getpid;
 	if (xzs_d6m5_target_write) {
 		xzs_d6m4_r650_telemetry.dispatcher_reached = 1;
+		__asm__ volatile("dmb ish" ::: "memory");
+	}
+	if (xzs_d6m6_target_getpid) {
+		xzs_d6m4_r650_telemetry.stable_dispatcher_reached = 1;
 		__asm__ volatile("dmb ish" ::: "memory");
 	}
 #endif
@@ -204,6 +210,11 @@ unix_syscall(
 		xzs_d6m4_r650_telemetry.handler_completed = 1;
 		__asm__ volatile("dmb ish" ::: "memory");
 	}
+	if (xzs_d6m6_target_getpid && syscode == SYS_getpid) {
+		xzs_d6m4_r650_telemetry.stable_last_error = (uint64_t)(unsigned int)error;
+		xzs_d6m4_r650_telemetry.stable_handler_completed = 1;
+		__asm__ volatile("dmb ish" ::: "memory");
+	}
 #endif
 	AUDIT_SYSCALL_EXIT(code, proc, uthread, error);
 
@@ -239,6 +250,16 @@ skip_syscall:
 		xzs_d6m4_r650_telemetry.syscall_return_x1 = ss64->x[1];
 		xzs_d6m4_r650_telemetry.syscall_return_cpsr = ss64->cpsr;
 		xzs_d6m4_r650_telemetry.syscall_return_prepared = 1;
+		__asm__ volatile("dmb ish" ::: "memory");
+	}
+	if (xzs_d6m6_target_getpid && syscode == SYS_getpid) {
+		arm_saved_state64_t *ss64 = saved_state64(state);
+		xzs_d6m4_r650_telemetry.stable_last_x0 = ss64->x[0];
+		xzs_d6m4_r650_telemetry.stable_last_cpsr = ss64->cpsr;
+		if (error == 0 && ss64->x[0] == (uint64_t)proc_pid(proc) &&
+		    (ss64->cpsr & PSR64_CF) == 0) {
+			xzs_d6m4_r650_telemetry.stable_roundtrip_count++;
+		}
 		__asm__ volatile("dmb ish" ::: "memory");
 	}
 #endif

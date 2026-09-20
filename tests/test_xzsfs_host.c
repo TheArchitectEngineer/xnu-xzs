@@ -130,7 +130,7 @@ int main(int argc, char **argv) {
     assert(err == XZSFS_ERR_OK && bytes_read == 16472);
     uint32_t launchd_crc = xzsfs_crc32(0, launchd_buf, bytes_read);
     printf("[PASS] /sbin/launchd: size=%zu, CRC32=0x%08x\n", bytes_read, launchd_crc);
-    assert(launchd_crc == 0xbba67a73);
+    assert(launchd_crc == 0xe212a8a2);
 
     /* Payload Verification: /bin/sh */
     uint8_t *sh_buf = (uint8_t *)malloc(16472);
