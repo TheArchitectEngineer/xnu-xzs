@@ -18,7 +18,7 @@ Progress is strictly gated by physical hardware verification. Speculative percen
 | **Phase D3** | GUID Partition Table (GPT) discovery & partition enumeration | **COMPLETE** |
 | **Phase D4** | Block-storage driver integration (`bdevsw` / `disk0`) | **COMPLETE** |
 | **Phase D5** | Real root filesystem mount (RAMDisk XZSFS) | **COMPLETE / SEALED** |
-| **Phase D6** | PID 1 / First EL0 userspace (`initproc` / launchd) | **NEXT / NOT STARTED** |
+| **Phase D6** | PID 1 / First EL0 userspace (`initproc` / launchd) | **IN PROGRESS (D6-M1 Complete; D6-M2 Next)** |
 | **Phase D7** | Interactive serial shell (`/bin/sh` or micro-shell) | **NOT STARTED** |
 | **Phase G** | Restore deferred subsystems (Skywalk, DTrace, jetsam buffer) | **NOT STARTED** |
 | **Phase H** | Networking and platform device drivers | **NOT STARTED** |
@@ -225,16 +225,23 @@ Progress is strictly gated by physical hardware verification. Speculative percen
 
 ### Phase D6 — PID 1 / First EL0 Userspace
 * **Goal**: Bootstrap the first Mach/BSD userspace process (`initproc` / PID 1) from the root filesystem and transition from EL1 to EL0.
-* **Status**: **NEXT / NOT STARTED**
+* **Status**: **IN PROGRESS — D6-M1 COMPLETE ON HARDWARE; D6-M2 NEXT**
 * **Milestones**:
-  - **D6-M1 (PID1 Skeleton)**: **NEXT / NOT STARTED** (Create first BSD process/task/thread structures; no userspace entry).
-  - **D6-M2 (Minimal Mach-O Loader)**: **NOT STARTED** (Open `/sbin/launchd`, validate ARM64 Mach-O header/load commands, map segments, resolve entry state; no EL0 entry).
+  - **D6-M1 (PID1 Skeleton)**: **COMPLETE / SEALED** (Created and validated BSD `initproc` (PID 1, PPID 0), Mach task (non-kernel), Mach thread, and embedded uthread; zero userspace execution; full D5 regression prefix).
+  - **D6-M2 (Minimal Mach-O Loader)**: **NEXT / NOT STARTED** (Open `/sbin/launchd`, validate ARM64 Mach-O header/load commands, map segments, resolve entry state; no EL0 entry).
   - **D6-M3 (User VM + Initial Stack)**: **NOT STARTED** (Construct userspace VM map, pmap, user stack, argc/argv/env, and register state).
   - **D6-M4 (First EL0 Transition)**: **NOT STARTED** (Execute exception return `eret` to EL0 and execute first userspace ARM64 instruction).
   - **D6-M5 (First Syscall Round-Trip)**: **NOT STARTED** (Issue userspace `svc`, trap into XNU syscall dispatcher, execute kernel handler, and return to EL0).
   - **D6-M6 (Minimal Stable PID1 Runtime)**: **NOT STARTED** (Execute minimal deterministic `/sbin/launchd` userspace runtime loop/exit).
   - **D6-M7 (Final D6 Seal)**: **NOT STARTED** (Regression verification, independent verifier, evidence archive, and roadmap seal).
-* **Hardware Acceptance Criteria**: Kernel boots through D5 stack; executes `bsd_utaskbootstrap()`; resolves `/sbin/launchd`; creates PID 1; maps static ARM64 Mach-O; sets up user stack and registers; transitions to EL0 via `eret`; executes userspace code; performs syscall round-trip; maintains system stability without panicking or triggering watchdog faults.
+* **D6-M1 Hardware Evidence**:
+  - Boot image SHA-256: `bd64531a83390b8c1cfd57efc8bfe712923a53c92d854a2e6bdfc3e0795c6f83`.
+  - Checkpoint sequence: `D530/00`..`91` -> `D540/00`..`01` -> `D550/00`..`01` -> `D600/00`..`91` and terminal `D600/01` (return time: +4s).
+  - `scripts/verify_d6m1_acceptance.py`: **100% PASS** for all D530, D540, D550, and D600 checkpoints and all canonical telemetry invariants.
+  - Process objects verified on silicon: `PID1_PROCESS_CREATED=yes`, `PID1_PROC_PID=1`, `PID1_PROC_PPID=0`, `PID1_TASK_CREATED=yes`, `PID1_TASK_IS_KERNEL_TASK=no`, `PID1_THREAD_CREATED=yes`, `PID1_UTHREAD_CREATED=yes`.
+  - Boundaries strictly preserved: `PID1_STARTED=no`, `EXECVE_ATTEMPTED=no`, `MACHO_LOAD_ATTEMPTED=no`, `USER_VM_SETUP_ATTEMPTED=no`, `EL0_ENTRY_ATTEMPTED=no`.
+* **Hardware Acceptance Criteria**: **SATISFIED FOR D6-M1**. PID 1 skeleton objects verified on silicon.
+* **Known Blockers**: None for D6-M1.
 * **Dependencies**: Phase D5 (COMPLETE / SEALED).
 
 ---
