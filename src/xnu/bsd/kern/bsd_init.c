@@ -1546,12 +1546,12 @@ xzs_d6m1_post_bootstrap(proc_t p, task_t t, thread_t th)
 	xzs_breadcrumb(CP_D6M1, 0x91);
 	xzs_early_puts("[XZS-D6M1] PHASE D6-M1 COMPLETE & VERIFIED (PASS)\n");
 
-	/* D600/01: terminal halt */
+	/* D600/01: D6-M1 complete — handoff to D6-M2 */
 	xzs_breadcrumb(CP_D6M1, 0x01);
-	xzs_early_puts("[XZS-D6M1] D6-M1 TERMINAL STATE — BEFORE D6-M2 MACH-O LOADER\n\n");
+	xzs_early_puts("[XZS-D6M1] D600/01 D6-M1 complete — handoff to D6-M2\n\n");
 
-	delay(50000);
-	xzs_spin_halt();
+	extern void xzs_d6m2_macho_probe(proc_t p, task_t t, thread_t th);
+	xzs_d6m2_macho_probe(p, t, th);
 }
 #endif
 

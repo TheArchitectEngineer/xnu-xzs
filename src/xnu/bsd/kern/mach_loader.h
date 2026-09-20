@@ -145,4 +145,8 @@ validate_potential_simulator_binary(
 #define LOAD_BADMACHO_UPX       11      /* malformed mach-o file */
 #define LOAD_BADARCH_X86        12      /* -no32exec boot-arg + attempted load of 32bit x86 binary */
 
+#if CONFIG_XZS_BRINGUP
+void xzs_d6m2_macho_probe(proc_t p, task_t t, thread_t th);
+#endif
+
 #endif  /* _BSD_KERN_MACH_LOADER_H_ */

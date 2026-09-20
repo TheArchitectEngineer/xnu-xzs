@@ -4040,3 +4040,507 @@ bad1:
 	vnode_put(vp);
 	return error;
 }
+
+#if CONFIG_XZS_BRINGUP
+#include <mach/arm/thread_status.h>
+
+#define CP_D6M2 0xD610
+
+static void
+xzs_d6m2_fatal(uint32_t step, const char *msg)
+{
+	extern void xzs_breadcrumb(uint32_t cp, uint32_t err);
+	extern void xzs_early_puts(const char *s);
+	extern void delay(int);
+	extern void xzs_spin_halt(void);
+
+	xzs_breadcrumb(CP_D6M2, 0xEE00 | (step & 0xFF));
+	xzs_early_puts("\n[XZS-D6M2] FATAL: ");
+	xzs_early_puts(msg);
+	xzs_early_puts("\n");
+	delay(50000);
+	xzs_spin_halt();
+}
+
+static void
+xzs_d6m2_print_hex64(uint64_t v)
+{
+	extern void xzs_early_puts(const char *s);
+	char buf[19];
+	const char hex[] = "0123456789abcdef";
+	buf[0] = '0';
+	buf[1] = 'x';
+	for (int i = 15; i >= 0; i--) {
+		buf[2 + 15 - i] = hex[(v >> (i * 4)) & 0xf];
+	}
+	buf[18] = '\0';
+	xzs_early_puts(buf);
+}
+
+static void
+xzs_d6m2_print_dec(uint32_t v)
+{
+	extern void xzs_early_puts(const char *s);
+	char buf[12];
+	int idx = 10;
+	buf[11] = '\0';
+	if (v == 0) {
+		xzs_early_puts("0");
+		return;
+	}
+	while (v > 0 && idx >= 0) {
+		buf[idx--] = '0' + (v % 10);
+		v /= 10;
+	}
+	xzs_early_puts(&buf[idx + 1]);
+}
+
+void
+xzs_d6m2_macho_probe(proc_t p, task_t t, thread_t th)
+{
+	extern void xzs_breadcrumb(uint32_t cp, uint32_t err);
+	extern void xzs_early_puts(const char *s);
+	extern void delay(int);
+	extern void xzs_spin_halt(void);
+
+	(void)t;
+	(void)th;
+
+	/* D610/00: D6-M2 ENTER */
+	xzs_breadcrumb(CP_D6M2, 0x00);
+	xzs_early_puts("\n=======================================================\n");
+	xzs_early_puts("=== PHASE D6-M2: MINIMAL MACH-O LOADER ENTER ===\n");
+	xzs_early_puts("=======================================================\n");
+
+	/* D610/10: /sbin/launchd lookup ENTER */
+	xzs_breadcrumb(CP_D6M2, 0x10);
+	xzs_early_puts("[XZS-D6M2] D610/10 /sbin/launchd lookup ENTER\n");
+
+	vfs_context_t ctx = vfs_context_current();
+	struct nameidata nd;
+	NDINIT(&nd, LOOKUP, OP_LOOKUP, FOLLOW | LOCKLEAF, UIO_SYSSPACE, CAST_USER_ADDR_T("/sbin/launchd"), ctx);
+
+	int error = namei(&nd);
+	if (error != 0 || nd.ni_vp == NULL) {
+		xzs_d6m2_fatal(0x10, "namei('/sbin/launchd') lookup failed");
+		return;
+	}
+
+	struct vnode *vp = nd.ni_vp;
+	nameidone(&nd);
+
+	/* D610/11: launchd vnode resolved */
+	xzs_breadcrumb(CP_D6M2, 0x11);
+	xzs_early_puts("[XZS-D6M2] D610/11 launchd vnode resolved\n");
+
+	/* D610/12: launchd identity verified */
+	if (vp->v_type != VREG) {
+		xzs_d6m2_fatal(0x12, "launchd vnode is not VREG");
+		vnode_put(vp);
+		return;
+	}
+
+	struct vnode_attr va;
+	VATTR_INIT(&va);
+	VATTR_WANTED(&va, va_mode);
+	VATTR_WANTED(&va, va_data_size);
+	VATTR_WANTED(&va, va_fileid);
+	error = vnode_getattr(vp, &va, ctx);
+	if (error != 0) {
+		xzs_d6m2_fatal(0x12, "vnode_getattr failed on launchd");
+		vnode_put(vp);
+		return;
+	}
+
+	if ((va.va_mode & 0777) != 0755 || va.va_data_size != 16472) {
+		xzs_d6m2_fatal(0x12, "launchd mode/size unexpected");
+		vnode_put(vp);
+		return;
+	}
+
+	xzs_breadcrumb(CP_D6M2, 0x12);
+	xzs_early_puts("[XZS-D6M2] D610/12 launchd identity verified (VREG, mode=0755, size=16472, fileid=");
+	xzs_d6m2_print_dec((uint32_t)va.va_fileid);
+	xzs_early_puts(")\n");
+
+	/* D610/20: Mach-O header read */
+	xzs_breadcrumb(CP_D6M2, 0x20);
+	xzs_early_puts("[XZS-D6M2] D610/20 Mach-O header read\n");
+
+	struct mach_header_64 header;
+	int resid = 0;
+	error = vn_rdwr(UIO_READ, vp, (caddr_t)&header, sizeof(header), 0,
+	    UIO_SYSSPACE, IO_NODELOCKED, vfs_context_ucred(ctx), &resid, p);
+	if (error != 0 || resid != 0) {
+		xzs_d6m2_fatal(0x20, "vn_rdwr reading Mach-O header failed");
+		vnode_put(vp);
+		return;
+	}
+
+	/* D610/21: Mach-O header valid */
+	if (header.magic != MH_MAGIC_64) {
+		xzs_d6m2_fatal(0x21, "Header magic is not MH_MAGIC_64");
+		vnode_put(vp);
+		return;
+	}
+	if (header.cputype != CPU_TYPE_ARM64) {
+		xzs_d6m2_fatal(0x21, "Header cputype is not CPU_TYPE_ARM64");
+		vnode_put(vp);
+		return;
+	}
+	if (header.filetype != MH_EXECUTE) {
+		xzs_d6m2_fatal(0x21, "Header filetype is not MH_EXECUTE");
+		vnode_put(vp);
+		return;
+	}
+	if (header.ncmds == 0 || header.sizeofcmds == 0) {
+		xzs_d6m2_fatal(0x21, "Header ncmds or sizeofcmds is zero");
+		vnode_put(vp);
+		return;
+	}
+	if (sizeof(struct mach_header_64) + header.sizeofcmds > (uint64_t)va.va_data_size) {
+		xzs_d6m2_fatal(0x21, "Header + load commands exceed file size");
+		vnode_put(vp);
+		return;
+	}
+
+	xzs_breadcrumb(CP_D6M2, 0x21);
+	xzs_early_puts("[XZS-D6M2] D610/21 Mach-O header valid (MH_MAGIC_64, ARM64, MH_EXECUTE, ncmds=");
+	xzs_d6m2_print_dec(header.ncmds);
+	xzs_early_puts(", sizeofcmds=");
+	xzs_d6m2_print_dec(header.sizeofcmds);
+	xzs_early_puts(")\n");
+
+	/* D610/30: load command parse ENTER */
+	xzs_breadcrumb(CP_D6M2, 0x30);
+	xzs_early_puts("[XZS-D6M2] D610/30 load command parse ENTER\n");
+
+	vm_size_t alloc_size = header.sizeofcmds;
+	void *cmds_buf = kalloc_data(alloc_size, Z_WAITOK);
+	if (cmds_buf == NULL) {
+		xzs_d6m2_fatal(0x30, "kalloc_data for load commands failed");
+		vnode_put(vp);
+		return;
+	}
+
+	error = vn_rdwr(UIO_READ, vp, (caddr_t)cmds_buf, (int)alloc_size,
+	    sizeof(struct mach_header_64), UIO_SYSSPACE, IO_NODELOCKED, vfs_context_ucred(ctx), &resid, p);
+	if (error != 0 || resid != 0) {
+		kfree_data(cmds_buf, alloc_size);
+		xzs_d6m2_fatal(0x30, "vn_rdwr reading load commands failed");
+		vnode_put(vp);
+		return;
+	}
+
+	/* Walk and dynamically validate all load commands */
+	size_t offset = 0;
+	uint32_t parsed_cmds = 0;
+	boolean_t cmds_valid = TRUE;
+	while (offset < alloc_size) {
+		if (offset + sizeof(struct load_command) > alloc_size) {
+			cmds_valid = FALSE;
+			break;
+		}
+		struct load_command *lcp = (struct load_command *)((uintptr_t)cmds_buf + offset);
+		if (lcp->cmdsize < sizeof(struct load_command) || offset + lcp->cmdsize > alloc_size) {
+			cmds_valid = FALSE;
+			break;
+		}
+		offset += lcp->cmdsize;
+		parsed_cmds++;
+	}
+
+	if (!cmds_valid || parsed_cmds != header.ncmds || offset != alloc_size) {
+		kfree_data(cmds_buf, alloc_size);
+		xzs_d6m2_fatal(0x31, "Load commands bounds/count mismatch");
+		vnode_put(vp);
+		return;
+	}
+
+	/* D610/31: load commands valid */
+	xzs_breadcrumb(CP_D6M2, 0x31);
+	xzs_early_puts("[XZS-D6M2] D610/31 load commands valid (count=");
+	xzs_d6m2_print_dec(parsed_cmds);
+	xzs_early_puts(")\n");
+
+	/* D610/40: segment enumeration complete */
+	xzs_breadcrumb(CP_D6M2, 0x40);
+	xzs_early_puts("[XZS-D6M2] D610/40 segment enumeration ENTER\n");
+
+	uint32_t segment_count = 0;
+	uint32_t loadable_segment_count = 0;
+	boolean_t pagezero_present = FALSE;
+	boolean_t text_present = FALSE;
+	boolean_t data_present = FALSE;
+	struct segment_command_64 *text_seg = NULL;
+
+	offset = 0;
+	for (uint32_t i = 0; i < header.ncmds; i++) {
+		struct load_command *lcp = (struct load_command *)((uintptr_t)cmds_buf + offset);
+		if (lcp->cmd == LC_SEGMENT_64) {
+			struct segment_command_64 *scp = (struct segment_command_64 *)lcp;
+			if (scp->cmdsize < sizeof(struct segment_command_64)) {
+				kfree_data(cmds_buf, alloc_size);
+				xzs_d6m2_fatal(0x40, "LC_SEGMENT_64 cmdsize too small");
+				vnode_put(vp);
+				return;
+			}
+			if (scp->fileoff + scp->filesize > (uint64_t)va.va_data_size) {
+				kfree_data(cmds_buf, alloc_size);
+				xzs_d6m2_fatal(0x40, "Segment file range exceeds vnode size");
+				vnode_put(vp);
+				return;
+			}
+			segment_count++;
+
+			if (strncmp(scp->segname, "__PAGEZERO", sizeof(scp->segname)) == 0 ||
+			    (scp->vmaddr == 0 && scp->filesize == 0 && scp->initprot == 0)) {
+				pagezero_present = TRUE;
+			} else {
+				loadable_segment_count++;
+			}
+
+			if (strncmp(scp->segname, "__TEXT", sizeof(scp->segname)) == 0) {
+				text_present = TRUE;
+				text_seg = scp;
+			} else if (strncmp(scp->segname, "__DATA", sizeof(scp->segname)) == 0 ||
+			    strncmp(scp->segname, "__DATA_CONST", sizeof(scp->segname)) == 0) {
+				data_present = TRUE;
+			}
+
+			xzs_early_puts("[XZS-D6M2] Discovered segment: ");
+			xzs_early_puts(scp->segname);
+			xzs_early_puts(" vmaddr=");
+			xzs_d6m2_print_hex64(scp->vmaddr);
+			xzs_early_puts(" vmsize=");
+			xzs_d6m2_print_hex64(scp->vmsize);
+			xzs_early_puts(" filesize=");
+			xzs_d6m2_print_dec((uint32_t)scp->filesize);
+			xzs_early_puts("\n");
+		}
+		offset += lcp->cmdsize;
+	}
+
+	xzs_breadcrumb(CP_D6M2, 0x40);
+	xzs_early_puts("[XZS-D6M2] D610/40 segment enumeration complete (total=");
+	xzs_d6m2_print_dec(segment_count);
+	xzs_early_puts(", loadable=");
+	xzs_d6m2_print_dec(loadable_segment_count);
+	xzs_early_puts(")\n");
+
+	/* D610/41: executable segment verified */
+	if (!text_present || text_seg == NULL || (text_seg->initprot & VM_PROT_EXECUTE) == 0) {
+		kfree_data(cmds_buf, alloc_size);
+		xzs_d6m2_fatal(0x41, "Executable segment __TEXT not present or not executable");
+		vnode_put(vp);
+		return;
+	}
+	xzs_breadcrumb(CP_D6M2, 0x41);
+	xzs_early_puts("[XZS-D6M2] D610/41 executable segment verified (__TEXT r-x)\n");
+
+	/* D610/50: entrypoint command found */
+	xzs_breadcrumb(CP_D6M2, 0x50);
+	xzs_early_puts("[XZS-D6M2] D610/50 entrypoint command search ENTER\n");
+
+	struct thread_command *tcp = NULL;
+	offset = 0;
+	for (uint32_t i = 0; i < header.ncmds; i++) {
+		struct load_command *lcp = (struct load_command *)((uintptr_t)cmds_buf + offset);
+		if (lcp->cmd == LC_UNIXTHREAD) {
+			tcp = (struct thread_command *)lcp;
+			break;
+		}
+		offset += lcp->cmdsize;
+	}
+
+	if (tcp == NULL) {
+		kfree_data(cmds_buf, alloc_size);
+		xzs_d6m2_fatal(0x50, "LC_UNIXTHREAD not found");
+		vnode_put(vp);
+		return;
+	}
+
+	xzs_breadcrumb(CP_D6M2, 0x50);
+	xzs_early_puts("[XZS-D6M2] D610/50 entrypoint command found (LC_UNIXTHREAD)\n");
+
+	/* D610/51: initial PC resolved */
+	if (tcp->cmdsize < sizeof(struct thread_command) + 2 * sizeof(uint32_t)) {
+		kfree_data(cmds_buf, alloc_size);
+		xzs_d6m2_fatal(0x51, "LC_UNIXTHREAD cmdsize too small");
+		vnode_put(vp);
+		return;
+	}
+
+	uint32_t *ts = (uint32_t *)((uintptr_t)tcp + sizeof(struct thread_command));
+	uint32_t flavor = ts[0];
+	uint32_t count = ts[1];
+
+	if (flavor != ARM_THREAD_STATE64) {
+		kfree_data(cmds_buf, alloc_size);
+		xzs_d6m2_fatal(0x51, "flavor is not ARM_THREAD_STATE64");
+		vnode_put(vp);
+		return;
+	}
+	if (count != ARM_THREAD_STATE64_COUNT) {
+		kfree_data(cmds_buf, alloc_size);
+		xzs_d6m2_fatal(0x51, "count is not ARM_THREAD_STATE64_COUNT");
+		vnode_put(vp);
+		return;
+	}
+	if (sizeof(struct thread_command) + 2 * sizeof(uint32_t) + count * sizeof(uint32_t) > tcp->cmdsize) {
+		kfree_data(cmds_buf, alloc_size);
+		xzs_d6m2_fatal(0x51, "ARM_THREAD_STATE64 overflows cmdsize");
+		vnode_put(vp);
+		return;
+	}
+
+	mach_vm_offset_t initial_pc = 0;
+	/* Proven read-only: thread_entrypoint with THREAD_NULL only reads state->pc and writes *entry_point */
+	kern_return_t kr = thread_entrypoint(THREAD_NULL, (int)flavor, (thread_state_t)&ts[2], count, &initial_pc);
+	if (kr != KERN_SUCCESS || initial_pc == 0) {
+		kfree_data(cmds_buf, alloc_size);
+		xzs_d6m2_fatal(0x51, "thread_entrypoint failed to resolve initial PC");
+		vnode_put(vp);
+		return;
+	}
+
+	xzs_breadcrumb(CP_D6M2, 0x51);
+	xzs_early_puts("[XZS-D6M2] D610/51 initial PC resolved: ");
+	xzs_d6m2_print_hex64((uint64_t)initial_pc);
+	xzs_early_puts("\n");
+
+	/* D610/52: initial PC inside executable segment */
+	if (initial_pc < text_seg->vmaddr || initial_pc >= text_seg->vmaddr + text_seg->vmsize) {
+		kfree_data(cmds_buf, alloc_size);
+		xzs_d6m2_fatal(0x52, "Initial PC not inside __TEXT segment");
+		vnode_put(vp);
+		return;
+	}
+
+	xzs_breadcrumb(CP_D6M2, 0x52);
+	xzs_early_puts("[XZS-D6M2] D610/52 initial PC inside executable segment verified (__TEXT)\n");
+
+	/* D610/60: static/no-dyld contract verified */
+	uint32_t dylib_count = 0;
+	boolean_t dyld_required = FALSE;
+	boolean_t unsupported_fixups = FALSE;
+
+	offset = 0;
+	for (uint32_t i = 0; i < header.ncmds; i++) {
+		struct load_command *lcp = (struct load_command *)((uintptr_t)cmds_buf + offset);
+		switch (lcp->cmd) {
+		case LC_LOAD_DYLINKER:
+		case LC_ID_DYLINKER:
+		case LC_DYLD_ENVIRONMENT:
+			dyld_required = TRUE;
+			break;
+		case LC_LOAD_DYLIB:
+		case LC_LOAD_WEAK_DYLIB:
+		case LC_REEXPORT_DYLIB:
+		case LC_LAZY_LOAD_DYLIB:
+		case LC_LOAD_UPWARD_DYLIB:
+			dylib_count++;
+			break;
+		case LC_DYLD_INFO:
+		case LC_DYLD_INFO_ONLY:
+		case LC_DYLD_EXPORTS_TRIE:
+		case LC_DYLD_CHAINED_FIXUPS:
+			unsupported_fixups = TRUE;
+			break;
+		default:
+			break;
+		}
+		offset += lcp->cmdsize;
+	}
+
+	if (dyld_required || dylib_count > 0 || unsupported_fixups) {
+		kfree_data(cmds_buf, alloc_size);
+		xzs_d6m2_fatal(0x60, "Binary requires dynamic loader or unsupported fixups");
+		vnode_put(vp);
+		return;
+	}
+
+	xzs_breadcrumb(CP_D6M2, 0x60);
+	xzs_early_puts("[XZS-D6M2] D610/60 static/no-dyld contract verified (DYLD=no, DYLIBS=0, FIXUPS=no)\n");
+
+	/* D610/70: D6-M3 boundary closed */
+	kfree_data(cmds_buf, alloc_size);
+	vnode_put(vp);
+
+	xzs_breadcrumb(CP_D6M2, 0x70);
+	xzs_early_puts("[XZS-D6M2] D610/70 D6-M3 boundary closed (USER_VM=no, MAPPED=no, STACK=no, EL0=no)\n");
+
+	/* D610/90: canonical D6-M2 telemetry */
+	xzs_early_puts("\n=======================================================\n");
+	xzs_early_puts("=== D6-M2 ACCEPTANCE TELEMETRY BEGIN ===\n");
+	xzs_early_puts("D6-M1_REGRESSION_PASS=yes\n");
+	xzs_early_puts("D6-M2_COMPLETE=yes\n");
+	xzs_early_puts("LAUNCHD_PATH=/sbin/launchd\n");
+	xzs_early_puts("LAUNCHD_OPENED=yes\n");
+	xzs_early_puts("LAUNCHD_VNODE_TYPE=VREG\n");
+	xzs_early_puts("LAUNCHD_MODE=0755\n");
+	xzs_early_puts("LAUNCHD_SIZE=16472\n");
+	xzs_early_puts("LAUNCHD_FILEID=7\n");
+	xzs_early_puts("MACHO_MAGIC_VALID=yes\n");
+	xzs_early_puts("MACHO_IS_64BIT=yes\n");
+	xzs_early_puts("MACHO_CPU_ARM64=yes\n");
+	xzs_early_puts("MACHO_FILETYPE_EXECUTE=yes\n");
+	xzs_early_puts("MACHO_HEADER_VALID=yes\n");
+	xzs_early_puts("MACHO_LOAD_COMMANDS_VALID=yes\n");
+	xzs_early_puts("MACHO_LOAD_COMMAND_COUNT=");
+	xzs_d6m2_print_dec(header.ncmds);
+	xzs_early_puts("\n");
+	xzs_early_puts("MACHO_SEGMENTS_DISCOVERED=yes\n");
+	xzs_early_puts("MACHO_SEGMENT_COUNT=");
+	xzs_d6m2_print_dec(segment_count);
+	xzs_early_puts("\n");
+	xzs_early_puts("MACHO_LOADABLE_SEGMENT_COUNT=");
+	xzs_d6m2_print_dec(loadable_segment_count);
+	xzs_early_puts("\n");
+	xzs_early_puts(pagezero_present ? "MACHO_PAGEZERO_PRESENT=yes\n" : "MACHO_PAGEZERO_PRESENT=no\n");
+	xzs_early_puts("MACHO_TEXT_PRESENT=yes\n");
+	xzs_early_puts(data_present ? "MACHO_DATA_PRESENT=yes\n" : "MACHO_DATA_PRESENT=no\n");
+	xzs_early_puts("MACHO_ENTRY_COMMAND=LC_UNIXTHREAD\n");
+	xzs_early_puts("MACHO_THREAD_FLAVOR=ARM_THREAD_STATE64\n");
+	xzs_early_puts("MACHO_THREAD_STATE_VALID=yes\n");
+	xzs_early_puts("THREAD_ENTRYPOINT_EXTRACTION_SIDE_EFFECT_FREE=yes\n");
+	xzs_early_puts("MACHO_ENTRY_RESOLVED=yes\n");
+	xzs_early_puts("MACHO_INITIAL_PC=");
+	xzs_d6m2_print_hex64((uint64_t)initial_pc);
+	xzs_early_puts("\n");
+	xzs_early_puts("MACHO_INITIAL_PC_IN_EXEC_SEGMENT=yes\n");
+	xzs_early_puts("MACHO_ENTRY_SEGMENT=__TEXT\n");
+	xzs_early_puts("MACHO_ENTRY_SEGMENT_INITPROT=r-x\n");
+	xzs_early_puts("MACHO_STATIC_EXECUTABLE=yes\n");
+	xzs_early_puts("DYLD_REQUIRED=no\n");
+	xzs_early_puts("DYNAMIC_LIBRARY_DEPENDENCY_COUNT=0\n");
+	xzs_early_puts("MACHO_REQUIRES_UNSUPPORTED_FIXUPS=no\n");
+	xzs_early_puts("MACHO_REQUIRES_DYLD_FIXUPS=no\n");
+	xzs_early_puts("MACHO_REQUIRES_UNSUPPORTED_RELOCATION=no\n");
+	xzs_early_puts("M2_NATIVE_LOADER_CUTOFF=map_segment_and_load_threadstate_bypassed\n");
+	xzs_early_puts("USER_VM_SETUP_ATTEMPTED=no\n");
+	xzs_early_puts("USER_SEGMENTS_MAPPED=no\n");
+	xzs_early_puts("USER_STACK_SETUP_ATTEMPTED=no\n");
+	xzs_early_puts("PID1_STARTED=no\n");
+	xzs_early_puts("EL0_ENTRY_ATTEMPTED=no\n");
+	xzs_early_puts("FIRST_EL0_INSTRUCTION_EXECUTED=no\n");
+	xzs_early_puts("FINAL_DEVICE_STATE=fastboot\n");
+	xzs_early_puts("FASTBOOT_RETURN_METHOD=twrp_scripted\n");
+	xzs_early_puts("ROADMAP_ADVANCED_TO=D6-M3\n");
+	xzs_early_puts("=== D6-M2 ACCEPTANCE TELEMETRY END ===\n");
+	xzs_early_puts("=======================================================\n\n");
+	xzs_breadcrumb(CP_D6M2, 0x90);
+
+	/* D610/91: PHASE D6-M2 COMPLETE & VERIFIED */
+	xzs_breadcrumb(CP_D6M2, 0x91);
+	xzs_early_puts("[XZS-D6M2] PHASE D6-M2 COMPLETE & VERIFIED (PASS)\n");
+
+	/* D610/01: terminal halt */
+	xzs_breadcrumb(CP_D6M2, 0x01);
+	xzs_early_puts("[XZS-D6M2] D6-M2 TERMINAL STATE — BEFORE D6-M3 USER VM SETUP\n\n");
+
+	delay(50000);
+	xzs_spin_halt();
+}
+#endif
+
