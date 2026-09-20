@@ -4547,6 +4547,7 @@ xzs_d6m2_macho_probe(proc_t p, task_t t, thread_t th)
 
 extern kern_return_t vm_map_protect(vm_map_t map, vm_map_offset_t start, vm_map_offset_t end, boolean_t set_max, vm_prot_t new_prot);
 extern void ipc_task_enable(task_t task);
+extern kern_return_t clear_wait(thread_t thread, wait_result_t result);
 
 volatile boolean_t xzs_d6m4_probe_armed = FALSE;
 thread_t xzs_d6m4_target_thread = THREAD_NULL;
@@ -5261,6 +5262,23 @@ xzs_d6m4_first_el0(proc_t p, task_t t, thread_t th)
 	xzs_breadcrumb(CP_D6M4, 0x32);
 	xzs_early_puts("[XZS-D6M4] D630/32 clearing PID1 return-wait gate after suspension release\n");
 	task_clear_return_wait(t, TCRW_CLEAR_ALL_WAIT);
+
+	/*
+	 * XZS workaround: the synthetic PID1 thread was created directly on the
+	 * initial return wait before its VM image existed.  Ensure that exact
+	 * target thread is detached from any residual creation wait after the
+	 * native event wake.  KERN_NOT_WAITING means the native wake already won.
+	 */
+	kern_return_t wake_kr = clear_wait(th, THREAD_AWAKENED);
+	if (wake_kr != KERN_SUCCESS && wake_kr != KERN_NOT_WAITING) {
+		xzs_breadcrumb(CP_D6M4, 0xEE32);
+		xzs_early_puts("[XZS-D6M4] FATAL: direct PID1 creation-wait clear failed\n");
+		delay(50000);
+		xzs_spin_halt();
+	}
+	xzs_early_puts(wake_kr == KERN_SUCCESS ?
+	    "[XZS-D6M4] PID1_DIRECT_WAIT_CLEAR=awakened\n" :
+	    "[XZS-D6M4] PID1_DIRECT_WAIT_CLEAR=already_awakened\n");
 
 	/*
 	 * Let bsd_utaskbootstrap() return through the native bootstrap path.

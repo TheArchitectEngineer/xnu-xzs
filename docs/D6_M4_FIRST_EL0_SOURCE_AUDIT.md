@@ -25,6 +25,13 @@ native main-thread wake model without trying to wake a still-suspended thread.
 The bootstrap parent then returns normally instead of occupying its context in
 a diagnostic busy-wait.
 
+Physical runs through `D630/32` showed that the synthetic PID1 main thread did
+not enter its continuation after the event wake. As an explicitly scoped XZS
+workaround, M4 follows the native wake with `clear_wait(target_thread,
+THREAD_AWAKENED)`. `KERN_SUCCESS` proves it removed the residual creation wait;
+`KERN_NOT_WAITING` is also safe and means the native wake won the race. No
+unrelated thread is touched.
+
 ## Positive first-instruction proof
 
 The static `/sbin/launchd` entry sequence is:
