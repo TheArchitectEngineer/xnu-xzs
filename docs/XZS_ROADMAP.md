@@ -18,11 +18,18 @@ Progress is strictly gated by physical hardware verification. Speculative percen
 | **Phase D3** | GUID Partition Table (GPT) discovery & partition enumeration | **COMPLETE** |
 | **Phase D4** | Block-storage driver integration (`bdevsw` / `disk0`) | **COMPLETE** |
 | **Phase D5** | Real root filesystem mount (RAMDisk XZSFS) | **COMPLETE / SEALED** |
-| **Phase D6** | PID 1 / First EL0 userspace (`initproc` / launchd) | **IN PROGRESS — D6-M1..M5 COMPLETE / SEALED; D6-M6 NEXT** |
-| **Phase D7** | Interactive serial shell (`/bin/sh` or micro-shell) | **NOT STARTED** |
-| **Phase G** | Restore deferred subsystems (Skywalk, DTrace, jetsam buffer) | **NOT STARTED** |
-| **Phase H** | Networking and platform device drivers | **NOT STARTED** |
-| **Phase I** | Userspace and multi-process expansion | **NOT STARTED** |
+| **Phase D6** | PID 1 / First EL0 userspace (`initproc` / launchd) | **D6-M1..M6 COMPLETE / SEALED; D6-M7 NEXT** |
+| **Phase D7** | Interactive serial shell (`/bin/sh` headless REPL) | **NEXT PHASE** |
+| **Phase D8** | Native display / framebuffer / touch / recovery console | **PLANNED** |
+| **Phase D9** | XZSPlatform hardware/platform compatibility layer | **PLANNED** |
+| **Phase D10**| Core native device drivers | **PLANNED** |
+| **Phase D11**| System hardware integration | **PLANNED** |
+| **Phase D12**| XZSAppleCompat (Apple-facing hardware compatibility layer) | **PLANNED** |
+| **Phase D13**| Darwin / iOS userland compatibility | **PLANNED** |
+| **Phase D14**| First old-iOS userland boot | **PLANNED** |
+| **Phase D15**| iOS service bring-up | **PLANNED** |
+| **Phase D16**| Graphical iOS userland / SpringBoard investigation | **PLANNED** |
+
 
 ---
 
@@ -225,107 +232,343 @@ Progress is strictly gated by physical hardware verification. Speculative percen
 
 ### Phase D6 — PID 1 / First EL0 Userspace
 * **Goal**: Bootstrap the first Mach/BSD userspace process (`initproc` / PID 1) from the root filesystem and transition from EL1 to EL0.
-* **Status**: **IN PROGRESS — D6-M1 THROUGH D6-M5 COMPLETE / SEALED ON HARDWARE; D6-M6 NOT STARTED**
+* **Status**: **COMPLETE / SEALED ON HARDWARE (D6-M1 THROUGH D6-M6 SEALED; D6-M7 NEXT)**
 * **Milestones**:
   - **D6-M1 (PID1 Skeleton)**: **COMPLETE / SEALED** (Created and validated BSD `initproc` (PID 1, PPID 0), Mach task (non-kernel), Mach thread, and embedded uthread; zero userspace execution; full D5 regression prefix).
   - **D6-M2 (Minimal Mach-O Loader)**: **COMPLETE / SEALED** (Opened `/sbin/launchd`, validated ARM64 Mach-O header/load commands, enumerated segments, resolved entry PC `0x1000002f0`; verified static/no-dyld contract; no VM mapping; zero EL0 entry).
   - **D6-M3 (User VM + Initial Stack)**: **COMPLETE / SEALED** (Mapped and content-verified `__TEXT`, finalized current and maximum protection to RX, preserved hard PAGEZERO, left `__LINKEDIT` unmapped, constructed a native Darwin initial frame on an RW/NX stack, installed and read back PC/SP, and verified zero unexpected RWX mappings while PID1 remained suspended).
   - **D6-M4 (First EL0 Transition)**: **COMPLETE / SEALED** (Released PID1 task/thread holds, verified full return-to-user path `D630/33`..`37` -> `eret`, executed canonical 5-instruction `/sbin/launchd` EL0 sequence on hardware, captured canonical `svc #0x80` before dispatch with full register signature; `FIRST_REAL_EL0_INSTRUCTION_HARDWARE_VERIFIED=yes`, `CANONICAL_SVC64_SIGNATURE_HARDWARE_VERIFIED=yes`).
   - **D6-M5 (First Syscall Round-Trip)**: **COMPLETE / SEALED** (Routed canonical `svc #0x80`, `x16=4` through normal `handle_svc()` and `unix_syscall()` dispatch to the real `sysent[4]` `write()` handler; hardware verified deterministic `EBADF=9` error ABI, normal return to EL0, and a post-return instruction signature at `ELR=0x100000310`).
-  - **D6-M6 (Minimal Stable PID1 Runtime)**: **NOT STARTED** (Execute minimal deterministic `/sbin/launchd` userspace runtime loop/exit).
-  - **D6-M7 (Final D6 Seal)**: **NOT STARTED** (Regression verification, independent verifier, evidence archive, and roadmap seal).
-* **D6-M1 Hardware Evidence**:
-  - Boot image SHA-256: `bd64531a83390b8c1cfd57efc8bfe712923a53c92d854a2e6bdfc3e0795c6f83`.
-  - Checkpoint sequence: `D530/00`..`91` -> `D540/00`..`01` -> `D550/00`..`01` -> `D600/00`..`91` and terminal `D600/01` (return time: +4s).
-  - `scripts/verify_d6m1_acceptance.py`: **100% PASS** for all D530, D540, D550, and D600 checkpoints and all canonical telemetry invariants.
-  - Process objects verified on silicon: `PID1_PROCESS_CREATED=yes`, `PID1_PROC_PID=1`, `PID1_PROC_PPID=0`, `PID1_TASK_CREATED=yes`, `PID1_TASK_IS_KERNEL_TASK=no`, `PID1_THREAD_CREATED=yes`, `PID1_UTHREAD_CREATED=yes`.
-  - Boundaries strictly preserved: `PID1_STARTED=no`, `EXECVE_ATTEMPTED=no`, `MACHO_LOAD_ATTEMPTED=no`, `USER_VM_SETUP_ATTEMPTED=no`, `EL0_ENTRY_ATTEMPTED=no`.
-* **D6-M2 Hardware Evidence**:
-  - Boot image SHA-256: `dfac7b14e0700a432ecb9fce95050838f9af21ed69f13edb5a46e6fd845a2f5d`.
-  - Checkpoint sequence: `D530/00`..`91` -> `D540/00`..`01` -> `D550/00`..`01` -> `D600/00`..`91` -> `D600/01` -> `D610/00`..`91` and terminal `D610/01` (return time: +4s).
-  - `scripts/verify_d6m2_acceptance.py`: **100% PASS** across all regression checkpoints and D6-M2 load commands/segments/entrypoint telemetry invariants.
-  - Validation results on silicon: `LAUNCHD_OPENED=yes`, `MACHO_HEADER_VALID=yes`, `MACHO_CPU_ARM64=yes`, `MACHO_FILETYPE_EXECUTE=yes`, `MACHO_LOAD_COMMAND_COUNT=7`, `MACHO_SEGMENT_COUNT=3`, `MACHO_LOADABLE_SEGMENT_COUNT=2`, `MACHO_PAGEZERO_PRESENT=yes`, `MACHO_TEXT_PRESENT=yes`, `MACHO_ENTRY_COMMAND=LC_UNIXTHREAD`, `MACHO_THREAD_FLAVOR=ARM_THREAD_STATE64`, `MACHO_INITIAL_PC=0x1000002f0`, `MACHO_INITIAL_PC_IN_EXEC_SEGMENT=yes`, `MACHO_ENTRY_SEGMENT=__TEXT`, `MACHO_ENTRY_SEGMENT_INITPROT=r-x`, `MACHO_STATIC_EXECUTABLE=yes`, `DYLD_REQUIRED=no`, `DYNAMIC_LIBRARY_DEPENDENCY_COUNT=0`, `MACHO_REQUIRES_UNSUPPORTED_FIXUPS=no`.
-  - Boundaries strictly preserved: `USER_VM_SETUP_ATTEMPTED=no`, `USER_SEGMENTS_MAPPED=no`, `USER_STACK_SETUP_ATTEMPTED=no`, `PID1_STARTED=no`, `EL0_ENTRY_ATTEMPTED=no`.
-* **D6-M3 Hardware Evidence**:
-  - Tested source commit: `ab019a3128659b097fd7ef5dd8a9e6f7a541e0b7`.
-  - Boot image SHA-256: `ba26b737ca32426176282bc6a1099e05bb9717ac5bf3a635df9aeee5ae6c8056`.
-  - Checkpoint sequence: `D620/00`, `/10`, `/20`, `/30`, `/31`, `/32`, `/40`, `/41`, `/50`, `/51`, `/52`, `/60`, `/61`, `/70`, `/71`, `/72`, `/90`, `/91`, `/01` (PASS; return to Fastboot at +7s).
-  - `scripts/verify_d6m3_acceptance.py`: **PASS**, exit status 0, including full D5/D6-M1/D6-M2 regression prefix.
-  - `__TEXT`: `vmaddr=0x100000000`, `vmsize=0x4000`, `fileoff=0`, `filesize=0x4000`, current `RX`, maximum `RX`, CRC32 `0x0a100b37`, writable after finalize `no`.
-  - Stack: `[0x16fde0000, 0x16fe00000)`, `RW`, `NX`; native initial frame with `argc=1`, `argv[0]=/sbin/launchd`; SP `0x16fdfffb0` is 16-byte aligned.
-  - Saved register state: PC `0x1000002f0`, SP `0x16fdfffb0`; PID1 task/thread remained suspended; EL0 not attempted.
-  - Final map audit: PAGEZERO overlap count 0, unexpected RWX count 0, `__LINKEDIT` unmapped.
-* **D6-M4 Hardware Evidence**:
-  - Tested source commit: `4bff94a46a01558746a04097d94c12ac51c27c2d`.
-  - Boot image SHA-256: `0a49fd191645b829fe356e777af84ef7009be875c076ee7f03c61c8f4815a0a0`.
-  - Checkpoint sequence: `D630/00`..`91` and terminal `D630/01` (PASS; automated return to Fastboot at +4s).
-  - `scripts/verify_d6m4_acceptance.py`: **100% PASS**, exit status 0, including full D5/D6-M1/D6-M2/D6-M3 regression prefix and D6-M4 acceptance assertions.
-  - Three-state descriptor transition verified: `0x00600000843a4ac3` (BEFORE) -> `0x00600000843a4ec3` (AFTER_NATIVE_AF) -> `0x00200000843a4ec3` (FINAL). `NATIVE_AF_DELTA_ONLY_AF=yes`, `XZS_EXEC_DELTA_ONLY_UXN=yes`, `TOTAL_BOOTSTRAP_DELTA_AF_AND_UXN=yes`, `UNRELATED_PTE_BITS_UNCHANGED=yes`.
-  - Hardware-verified first EL0 execution: `FIRST_REAL_EL0_INSTRUCTION_HARDWARE_VERIFIED=yes`, `CANONICAL_SVC64_SIGNATURE_HARDWARE_VERIFIED=yes`.
-  - Register state at `svc #0x80`: `ESR_EL1=0x56000080` (SVC64, imm=0x80), `ELR_EL1=0x100000304`, `SPSR_EL1=0x0`, `SP_EL0=0x16fdfffb0`, `x0=1`, `x1=0x100000320`, `x2=0x1a`, `x16=4` (SYS_write).
-  - Boundaries strictly preserved: `SYSCALL_DISPATCH_REACHED=no`, `FIRST_SYSCALL_ROUNDTRIP_COMPLETE=no`.
-* **D6-M5 Hardware Evidence**:
-  - Hardware-tested source commit: `6669437fbe9d4c9a5f33bb87fc1a443a4346b703`.
-  - Boot image SHA-256: `87d2b6c609f3b7348e347d53db7de6655eef849dffe51054c71ba2887098ccac`.
-  - Raw console log SHA-256: `dd084c9e3901b86fb4513fc0aadafc3dd7d4ef88917134cd05b09adb49f51747`.
-  - Checkpoint sequence: `D640/00`, `/10`, `/20`, `/30`, `/40`, `/50`, `/60`, `/70`, `/90`, `/91`, `/01` (PASS; automated return to Fastboot at +7s).
-  - `scripts/verify_d6m5_acceptance.py`: **PASS**, including full D5/D6-M1/D6-M2/D6-M3 prefix and D6-M4 regression mode.
-  - Real path: `sleh_synchronous` -> `handle_svc` -> `unix_syscall` -> `sysent[4]` -> `write` -> `arm_prepare_syscall_return` -> EL0.
-  - Hardware return: `SYSCALL_RETURN_VALUE=9`, `SYSCALL_RETURN_ERROR=EBADF`, carry set. PID1 fd 1 is not yet bound to `/dev/console`.
-  - Post-return proof: second SVC at `ELR=0x100000310`, `x0=0`, `x16=1`, carry set; `POST_SYSCALL_EL0_INSTRUCTION_EXECUTED=yes`.
-* **Hardware Acceptance Criteria**: **SATISFIED THROUGH D6-M5**. First real BSD syscall dispatcher/handler/return round-trip and subsequent EL0 execution verified on physical silicon.
-* **Known Blockers**: None for D6-M5. D6-M6 (Minimal Stable PID1 Runtime) is not started.
-* **Dependencies**: Phase D5 (COMPLETE / SEALED), Phase D6-M1 through D6-M5 (COMPLETE / SEALED).
+  - **D6-M6 (Minimal Stable PID1 Runtime)**: **COMPLETE / SEALED** (Configured native fd 0/1/2 mapped to `/dev/console` (cdev 0:0, VCHR), executed real EL0 `write(1)` of 26 bytes verified by telemetry, entered deterministic sustained loop performing 3,009 consecutive successful `getpid` round-trips without faulting).
+  - **D6-M7 (Final D6 Seal)**: **NEXT** (Consolidate documentation, run full regression sweep across M1-M6, independent verifier audit, and seal D6 userspace foundation).
+* **D6-M6 Hardware Evidence**:
+  - Tested source commits: `e64ce18b506bdafbd78c0c0d428a19d7dac85124` (implementation), `9f871c43f9325fbc8ebfd321be50a449b32c8964` (acceptance verifier seal).
+  - Raw console log: `artifacts/logs/xnu-console-extracted.log`.
+  - Checkpoint sequence: `D650/00`, `/10`, `/20`, `/30`, `/90`, `/91`, `/01` (PASS).
+  - `scripts/verify_d6m6_acceptance.py`: **100% PASS**, including full D5/D6-M1..M5 regression prefix.
+  - Process & descriptor state: `PID1_STARTED=yes`, `PID1_STABLE_RUNTIME=yes`, `fd 0 -> /dev/console`, `fd 1 -> /dev/console`, `fd 2 -> /dev/console` (`VCHR`, `0:0`).
+  - Real console write: `write(1, 0x100000320, 26)` -> `WRITE_RETURN_VALUE=26`, `PID1_CONSOLE_OUTPUT_VERIFIED=yes`.
+  - Sustained EL0 execution: `STABLE_RUNTIME_SYSCALL=getpid`, `STABLE_RUNTIME_ROUND_TRIPS=3009`.
+  - Console transport boundary: `UARTDM TX = working`, `UARTDM RX = not implemented`, `PHYSICAL_CONSOLE_RX_AVAILABLE=no`.
+  - Platform workaround: commit `3e417bb` (`devfs_getattr` pointer-hardening bypass, classification: `XZS PLATFORM WORKAROUND / BRING-UP COMPATIBILITY FIX`).
+* **Hardware Acceptance Criteria**: **SATISFIED THROUGH D6-M6**. Stable PID1 runtime and native EL0 console stdout verified on physical silicon.
+* **Dependencies**: Phase D5 (COMPLETE / SEALED). D6-M7 is NEXT.
 
 ---
 
-### Phase D7 — Interactive Serial Shell
-* **Goal**: Establish an interactive command-line environment over the serial console.
-* **Status**: **NOT STARTED**
-* **Hardware Acceptance Criteria**: Interactive `/bin/sh` or micro-shell accepting keystrokes from Qualcomm UARTDM and displaying command output.
-* **Completed Items**: None.
-* **Remaining Items**:
-  - TTY / devfs driver for `/dev/console` and `/dev/tty`.
-  - Terse micro-shell or BSD sh compiled for arm64 without Apple PAC.
-  - Basic POSIX utilities (`ls`, `cat`, `ps`, `uname`).
-* **Known Blockers**: None once Phase E is achieved.
-* **Dependencies**: Phase E.
+### Phase D6-M7 — Final D6 Regression and Seal
+* **Goal**: Small consolidation milestone to regress all D6 milestones and formally seal the userspace foundation.
+* **Scope**:
+  - Regress D6-M1 (PID1 skeleton)
+  - Regress D6-M2 (Mach-O loader)
+  - Regress D6-M3 (User VM and initial stack)
+  - Regress D6-M4 (First EL0 transition)
+  - Regress D6-M5 (First syscall round-trip)
+  - Regress D6-M6 (Stable PID1 runtime and native console)
+  - Consolidate architecture documentation and verify consistency
+  - Seal D6 userspace foundation
+* **Acceptance Gate**:
+  ```text
+  D6_COMPLETE=yes
+  D6_SEALED=yes
+  ```
+* **Suggested Git Tag**: `xzs-d6-userspace-complete` (applied upon milestone completion).
 
 ---
 
-### Phase G — Restore Deferred Subsystems
-* **Goal**: Re-enable and canonicalize subsystems that were temporarily deferred during early bring-up.
-* **Status**: **NOT STARTED**
-* **Hardware Acceptance Criteria**: All 14 items in `docs/XZS_WORKAROUNDS.md` classified as `XZS-WORKAROUND` reviewed, tested, and restored to canonical upstream behavior.
-* **Completed Items**: None.
-* **Remaining Items**:
-  - Restore canonical DTrace FBT and Profile providers.
-  - Restore dynamic `memorystatus_jetsam_snapshot` allocation.
-  - Restore TCP congestion control debug socket registration.
-  - Cleanup cosmetic telemetry prefixes (`0x0x`).
-* **Known Blockers**: None.
-* **Dependencies**: Phase F.
+### Phase D7 — Interactive EL0 Shell
+* **Goal**: Establish a headless interactive command-line environment over the serial console.
+* **Design Paradigm**: **HEADLESS INTERACTIVE SHELL FIRST**. The physical Xperia display is NOT required for D7.
+* **Canonical Boot Pipeline**:
+  ```text
+  fastboot boot
+      ↓
+  bootshim
+      ↓
+  XNU
+      ↓
+  XZSFS
+      ↓
+  PID1
+      ↓
+  /bin/sh
+      ↓
+  xzs#
+  ```
+* **Subtasks**:
+  - **D7-M1**: Shell artifact and dependency audit (`/bin/sh` Mach-O contract, library dependencies).
+  - **D7-M2**: PID1 -> `/bin/sh` handoff (`execve` or direct child fork/exec).
+  - **D7-M3**: Shell stdout (`/bin/sh` banner and prompt emission to `/dev/console`).
+  - **D7-M4**: Shell stdin (Qualcomm MSM8996 UARTDM RX driver bring-up).
+  - **D7-M5**: Interactive REPL / command loop (line editing, enter key handling).
+  - **D7-M6**: Filesystem commands (`pwd`, `ls`, `cat`).
+  - **D7-M7**: System commands (`uname`, `mount`, `reboot`).
+  - **D7-M8**: Stable normal boot (successful shell boot remains running interactively).
+  - **D7-M9**: Full D7 regression and final seal.
+* **Visual Identity & Banner**:
+  The xnu-xzs shell features a recognizable terminal ASCII banner upon entering `/bin/sh`:
+  ```text
+                     _.-""""-._
+                  .-'          '-.
+                 /                \
+                |                  |
+                 \                /
+                  '._          _.'
+                     '-.____.-'
+                   .-'        '-.
+                 .'              '.
+                /                  \
+               |                    |
+                \                  /
+                 '._            _.'
+                    '----------'
+
+  +------------------------------------------------------------+
+  |                         XNU-XZS                            |
+  |                                                            |
+  |        Native Darwin/XNU bring-up for Xperia XZs           |
+  |                                                            |
+  |        Sony G8231  |  MSM8996  |  ARM64  |  XNU           |
+  +------------------------------------------------------------+
+  | Kernel       native XNU                                    |
+  | CPUs         4 x Kryo                                      |
+  | Filesystem   XZSFS                                         |
+  | Userspace    EL0                                           |
+  | Syscalls     Darwin ARM64                                  |
+  | Console      /dev/console                                  |
+  | Shell        /bin/sh                                       |
+  +------------------------------------------------------------+
+
+               [ xnu-xzs userspace online ]
+
+  xzs#
+  ```
+* **Final Acceptance Criteria**:
+  ```text
+  SHELL_RUNNING_IN_EL0=yes
+  SHELL_PROMPT_VISIBLE=yes
+  SHELL_STDIN_WORKING=yes
+  SHELL_STDOUT_WORKING=yes
+  SHELL_MULTIPLE_COMMANDS_WORKING=yes
+  D7_COMPLETE=yes
+  D7_SEALED=yes
+  ```
 
 ---
 
-### Phase H — Networking & Device Drivers
-* **Goal**: Bring up network interfaces and hardware peripherals.
-* **Status**: **NOT STARTED**
-* **Hardware Acceptance Criteria**: `lo0` active; IP loopback ping functional; Qualcomm Wi-Fi (WCN3990 / ath10k) or USB gadget ethernet operational.
-* **Completed Items**: None.
-* **Remaining Items**:
-  - Restore `loopattach()` and `lo0`.
-  - Restore `ether_family_init()` and `gif_init()`.
-  - Restore `skywalk_init()` with proper memory arena backing.
-  - Restore TCP Fast Open with CoreCrypto AES provider.
-  - USB controller driver (Synopsys DWC3 USB 3.0 at `0x06a00000`).
-* **Known Blockers**: Qualcomm proprietary firmware blobs for Wi-Fi/Modem.
-* **Dependencies**: Phase G.
+### Phase D8 — Native Display / Recovery
+* **Goal**: Bring the Xperia XZs physical display (1080x1920 IPS LCD) to life under native XNU and render the console directly on-device.
+* **Important Constraint**: **GPU acceleration is NOT required for initial D8 framebuffer/text console.**
+* **Subtasks**:
+  - **D8-M1**: MSM8996 / Xperia display hardware audit (MDSS/MDP5, DSI controller, panel ID).
+  - **D8-M2**: Display clocks, power domains, and PMIC regulators.
+  - **D8-M3**: MDP5 framebuffer scanout configuration.
+  - **D8-M4**: DSI controller + panel initialization (Sony Novatek NT35596 / Synaptics).
+  - **D8-M5**: WLED display backlight driver.
+  - **D8-M6**: In-kernel CPU bitmap font / text renderer.
+  - **D8-M7**: Framebuffer terminal / on-screen console (`/dev/tty0`).
+  - **D8-M8**: Touchscreen input driver (Synaptics ClearPad I2C/SPI).
+  - **D8-M9**: Interactive on-device terminal with touch keyboard.
+  - **D8-M10**: Recovery UI foundation.
+  - **D8-M11**: D8 regression and final seal.
+* **Hardware Targets**:
+  `TEST_PATTERN_VISIBLE=yes` -> XNU-XZS text visible -> shell output visible -> interactive recovery.
 
 ---
 
-### Phase I — Userspace & Platform Expansion
-* **Goal**: Multi-process Darwin userspace environment.
-* **Status**: **NOT STARTED**
-* **Hardware Acceptance Criteria**: Multi-user execution, dynamic linking via `dyld`, networking services, and file management operating concurrently.
-* **Dependencies**: Phase H.
+### Phase D9 — XZSPlatform Hardware/Platform Compatibility Layer
+* **Goal**: Isolate Qualcomm/Xperia platform-specific code behind a clean platform abstraction layer, keeping generic XNU close to upstream semantics.
+* **Core Principle**: **KEEP GENERIC XNU AS CLOSE TO UPSTREAM SEMANTICS AS PRACTICAL.** Platform exceptions migrate into XZSPlatform and native drivers.
+* **Architecture**:
+  ```text
+                    XNU / IOKit
+                        |
+                   device drivers
+                        |
+                  XZSPlatform API
+                        |
+                    qcom-common
+                        |
+                   MSM8996 backend
+                        |
+                Xperia XZs board data
+                        |
+                     hardware
+  ```
+* **Subtasks**:
+  - **D9-M1**: Comprehensive inventory of current platform workarounds and hacks.
+  - **D9-M2**: Platform resource and device model.
+  - **D9-M3**: MMIO abstraction and mapping services.
+  - **D9-M4**: Clock and reset controller framework.
+  - **D9-M5**: Power domain and regulator (RPM/SPMI) framework.
+  - **D9-M6**: GPIO and pinmux (TLMM) framework.
+  - **D9-M7**: IRQ controller and interrupt routing abstraction.
+  - **D9-M8**: DMA and IOMMU (SMMU v2) abstraction.
+  - **D9-M9**: PHY and platform subsystem services.
+  - **D9-M10**: Migrate storage drivers to XZSPlatform.
+  - **D9-M11**: Migrate display and touch drivers to XZSPlatform.
+  - **D9-M12**: Regression, cleanup of generic XNU hooks, and seal.
+
+---
+
+### Phase D10 — Core Native Device Drivers
+* **Goal**: Develop native Darwin/IOKit drivers for Xperia XZs hardware peripherals.
+* **Prioritized Driver Inventory**:
+  - **Bring-up & Core**: UART/debug, RTC/timers, storage stabilization (eMMC / UFS), USB (DWC3).
+  - **Human Interface**: Display (MDP5), touch/HID (Synaptics), buttons (power/volume GPIO).
+  - **Power & Sensing**: Battery monitoring, PMIC charging, I2C, SPI, GPIO, thermal sensors.
+  - **Later Peripheral Integration**: Wi-Fi (WCN3990), Bluetooth, Audio (WCD9335), GPU (Adreno 530), Camera, Modem/cellular.
+* **Note**: Drivers are prioritized based on actual userland dependencies, not developed blindly ahead of need.
+
+---
+
+### Phase D11 — System Hardware Integration
+* **Goal**: Unify independent drivers into a coherent mobile device platform.
+* **Key Areas**:
+  - Sleep/wake and system power states.
+  - Dynamic power management and CPU frequency scaling (cpufreq / EAS).
+  - Thermal management and throttling zones.
+  - Battery health and charging state machines.
+  - USB device/gadget modes.
+  - Hardware buttons (power, volume up/down, camera shutter).
+  - Device orientation and inertial sensors.
+  - Persistent platform/NVRAM-like configuration storage.
+
+---
+
+### Phase D12 — XZSAppleCompat (Apple-Facing Hardware Compatibility Layer)
+* **Goal**: Provide standard Apple IOKit service contracts and platform properties to Darwin userland.
+* **Architectural Distinction**:
+  ```text
+  XZSPlatform
+  = How XNU controls Qualcomm/Sony hardware.
+
+  XZSAppleCompat
+  = How Apple/Darwin-facing software sees the service contracts and platform properties it expects.
+  ```
+* **Architecture Diagram**:
+  ```text
+  Apple/Darwin-facing component (launchd, dyld, daemons, user clients)
+            │
+            ▼
+  expected IOKit / platform contract (IORegistry, AppleARMPERoot, IOPower)
+            │
+            ▼
+      XZSAppleCompat
+            │
+            ▼
+       XZSPlatform
+            │
+            ▼
+  native Qualcomm/Sony driver
+  ```
+* **Compatibility Areas**:
+  - IORegistry topology emulation.
+  - Platform properties and device-tree-style queries (`/chosen`, `IOPlatformExpertDevice`).
+  - Standard Apple HID contracts.
+  - Display plane service contracts (`IOMobileFramebuffer`).
+  - Storage identity contracts (`IOBlockStorageDevice`).
+  - Power-source and battery services (`IOPMPowerSource`).
+  - USB device identity contracts.
+  - NVRAM / platform variable services.
+* **Scope Boundary**: The project does NOT claim or intend to fully emulate an Apple SoC; it provides compatibility shims for required IOKit contracts.
+
+---
+
+### Phase D13 — Darwin / iOS Userland Compatibility
+* **Goal**: Research and implement missing OS primitives and ABI contracts required to run genuine Darwin/iOS userland binaries.
+* **Target Research Areas**:
+  - Mach traps and ARM64 Mach system call table.
+  - BSD syscall compatibility and error code handling.
+  - Mach IPC messaging (`mach_msg_trap`, port rights, voucher ports).
+  - Bootstrap ports and launchd registration contracts.
+  - Dynamic linker (`dyld`) compatibility and Mach-O load command support.
+  - Dyld shared cache mapping and slide resolution.
+  - VM behavior, memory allocators, and guard pages.
+  - POSIX threading (`pthread`) kernel hooks and workqueues.
+  - Codesigning expectations and CS flags.
+  - Apple Mobile File Integrity (AMFI) dependencies and enforcement modes.
+  - Sandbox kernel hooks and policy evaluations.
+  - Notification services (`notifyd` kernel hooks).
+  - XPC and Mach service lookup semantics.
+  - Kernel sysctl trees and hardware capability queries.
+  - IOKit user clients and memory mapping APIs.
+
+---
+
+### Phase D14 — First Old-iOS Userland Boot
+* **Goal**: Boot an authentic older Apple iOS userland root filesystem on Sony Xperia XZs.
+* **Clarification of "Install iOS" Scope**:
+  "Installing iOS" in this project does **NOT** initially mean flashing an IPSW directly to Xperia, booting via Apple iBoot, or performing a Finder/iTunes restore.
+* **Intended Research Pipeline**:
+  ```text
+  Legally obtained Apple IPSW
+          ↓
+  Extract compatible iOS root/userland
+          ↓
+  Prepare project-specific root filesystem/image
+          ↓
+  Boot using xnu-xzs / target-compatible XNU
+          ↓
+  Mount iOS userland
+          ↓
+  Execute authentic Apple launchd
+  ```
+* **First Acceptance Targets**:
+  - `APPLE_LAUNCHD_MACHO_LOADED=yes`
+  - `APPLE_LAUNCHD_EL0_ENTRY=yes`
+* **Follow-on Targets**:
+  - `APPLE_LAUNCHD_STABLE=yes`
+  - `MACH_BOOTSTRAP_WORKING=yes`
+  - `FIRST_APPLE_DAEMON_STARTED=yes`
+
+---
+
+### Architectural Note: XNU Version Compatibility
+> [!IMPORTANT]
+> **XNU Version vs. iOS Userland Compatibility**:
+> An older iOS userland cannot automatically be assumed compatible with the current bring-up XNU kernel version (`xnu-12377.1.9` / macOS 15.0 / iOS 18 baseline).
+>
+> The project must eventually audit the strict version relationships:
+> ```text
+> Target iOS Version ↔ Darwin Version ↔ XNU Version ↔ dyld Version ↔ launchd Version ↔ IOKit ABI
+> ```
+> The long-term architecture decouples platform code so that **XZSPlatform**, **native drivers**, and **board support** can be re-targeted to an XNU branch closer to the selected iOS userland if required. This architectural independence is one of the primary reasons `XZSPlatform` (Phase D9) is mandatory.
+
+---
+
+### Phase D15 — iOS Service Bring-Up
+* **Goal**: Progressively bring up authentic Apple core system daemons under launchd.
+* **Scope**:
+  - `launchd` job descriptor parsing and service population.
+  - Core system daemons (`notifyd`, `syslogd`, `configd`).
+  - Mach IPC bootstrap and service lookup registry.
+  - Security subsystem dependencies.
+  - Power and device monitoring services.
+  - IOKit-facing service daemons.
+  - Prerequisites for the graphics subsystem.
+
+---
+
+### Phase D16 — Graphical iOS Userland / SpringBoard Investigation
+* **Goal**: Investigate and experiment with bringing up the graphical iOS interface.
+* **Scope**:
+  - Note: D16 replaces the previous incorrect "xnu-xzs SDK" milestone.
+  - Pipeline:
+    ```text
+    Apple launchd
+        ↓
+    Basic system services
+        ↓
+    IOKit compatibility
+        ↓
+    Graphics prerequisites (IOMobileFramebuffer)
+        ↓
+    GraphicsServices & related frameworks
+        ↓
+    SpringBoard investigation
+        ↓
+    First graphical iOS userland frame
+    ```
+* **Research Challenge Notice**:
+  Key graphics and UI components (UIKit, SpringBoard, CoreAnimation, GraphicsServices) contain substantial proprietary closed-source Apple components. This milestone is a research and integration effort; success is an experimental goal rather than a guaranteed outcome.
