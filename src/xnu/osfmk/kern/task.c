@@ -984,15 +984,22 @@ task_wait_to_return(void)
 {
 #if CONFIG_XZS_BRINGUP
 	/*
-	 * C640/60 Raw Lock-Free Persistent Marker:
+	 * R650/10 Raw Lock-Free Persistent Marker in TTBR1:
 	 * MUST be the very FIRST operation of task_wait_to_return before ANY regular
-	 * telemetry call, locking, or console logging to distinguish whether absence of
-	 * D630/33 was caused by a blocker before entry or by failure inside the checkpoint itself.
+	 * telemetry call, locking, or console logging.
+	 * TTBR0 is the user pmap, so DO NOT call xzs_breadcrumb or xzs_early_puts!
 	 */
+	extern struct xzs_c640_telemetry xzs_c640_telemetry;
+	extern struct xzs_d6m4_r650_telemetry xzs_d6m4_r650_telemetry;
 	xzs_c640_telemetry.task_wait_raw_entry = 0xC6400060;
 	xzs_c640_telemetry.marker = 0xC6400060;
 	__asm__ volatile("mov %0, sp" : "=r"(xzs_c640_telemetry.sp_task_wait));
 	__asm__ volatile("mrs %0, DAIF" : "=r"(xzs_c640_telemetry.daif_task_wait));
+
+	xzs_d6m4_r650_telemetry.marker = 0x10;
+	xzs_d6m4_r650_telemetry.task_wait_entered = 1;
+	__asm__ volatile("mov %0, sp" : "=r"(xzs_d6m4_r650_telemetry.sp_task_wait));
+	__asm__ volatile("mrs %0, MPIDR_EL1" : "=r"(xzs_d6m4_r650_telemetry.cpu_id));
 	__asm__ volatile("dmb ish" ::: "memory");
 #endif
 
@@ -1002,14 +1009,11 @@ task_wait_to_return(void)
 #if CONFIG_XZS_BRINGUP
 	extern volatile boolean_t xzs_d6m4_probe_armed;
 	extern thread_t xzs_d6m4_target_thread;
-	extern void xzs_breadcrumb(uint32_t cp, uint32_t err);
-	extern void xzs_early_puts(const char *s);
 	boolean_t xzs_d6m4_target = xzs_d6m4_probe_armed &&
 	    thread == xzs_d6m4_target_thread;
 	if (xzs_d6m4_target) {
 		xzs_c640_telemetry.d630_33_reached = 1;
-		xzs_breadcrumb(0xD630, 0x33);
-		xzs_early_puts("[XZS-D6M4] D630/33 PID1 entered task_wait_to_return\n");
+		__asm__ volatile("dmb ish" ::: "memory");
 	}
 #endif
 
@@ -1045,8 +1049,8 @@ task_wait_to_return(void)
 	turnstile_cleanup();
 #if CONFIG_XZS_BRINGUP
 	if (xzs_d6m4_target) {
-		xzs_breadcrumb(0xD630, 0x34);
-		xzs_early_puts("[XZS-D6M4] D630/34 PID1 return-wait flags cleared\n");
+		xzs_d6m4_r650_telemetry.returnwait_cleared = 1;
+		__asm__ volatile("dmb ish" ::: "memory");
 	}
 #endif
 
@@ -1058,8 +1062,8 @@ task_wait_to_return(void)
 	task_post_signature_processing_hook(task);
 #if CONFIG_XZS_BRINGUP
 	if (xzs_d6m4_target) {
-		xzs_breadcrumb(0xD630, 0x35);
-		xzs_early_puts("[XZS-D6M4] D630/35 PID1 post-signature hook complete\n");
+		xzs_d6m4_r650_telemetry.post_sig_complete = 1;
+		__asm__ volatile("dmb ish" ::: "memory");
 	}
 #endif
 #if CONFIG_MACF
@@ -1082,10 +1086,9 @@ task_wait_to_return(void)
 	task_set_ctrl_port_default(task, thread);
 #if CONFIG_XZS_BRINGUP
 	if (xzs_d6m4_target) {
-		xzs_breadcrumb(0xD630, 0x36);
-		xzs_early_puts("[XZS-D6M4] D630/36 PID1 control-port setup complete\n");
-		xzs_breadcrumb(0xD630, 0x37);
-		xzs_early_puts("[XZS-D6M4] D630/37 PID1 entering thread_bootstrap_return\n");
+		xzs_d6m4_r650_telemetry.marker = 0x20;
+		xzs_d6m4_r650_telemetry.before_bootstrap_ret = 1;
+		__asm__ volatile("dmb ish" ::: "memory");
 	}
 #endif
 

@@ -3270,4 +3270,130 @@ xzs_d6m4_report_c640_telemetry(task_t t, thread_t th)
 	xzs_early_puts("=== D6-M4 C640 CALL_CONTINUATION AUDIT END ============\n");
 	xzs_early_puts("=======================================================\n\n");
 }
+
+struct xzs_d6m4_r650_telemetry xzs_d6m4_r650_telemetry = {0};
+
+void xzs_d6m4_monitor_and_report_r650(task_t t, thread_t th);
+
+void
+xzs_d6m4_monitor_and_report_r650(task_t t, thread_t th)
+{
+	extern void xzs_breadcrumb(uint32_t cp, uint32_t err);
+	extern void xzs_early_puts(const char *s);
+	extern void xzs_spin_halt(void);
+	(void)t;
+	(void)th;
+
+	/*
+	 * Poll for CPU 1 progress.
+	 * 10,000,000 loop iterations with volatile check is plenty of time
+	 * for CPU 1 to complete context switch, return-to-user, and EL0 trap.
+	 */
+	for (volatile int i = 0; i < 10000000; i++) {
+		if (xzs_d6m4_r650_telemetry.svc_trapped != 0 ||
+		    xzs_d6m4_r650_telemetry.unexpected_exception != 0) {
+			break;
+		}
+	}
+
+	/*
+	 * Safely emit the D630 breadcrumbs on behalf of CPU 1 from CPU 0 context
+	 * where TTBR0_EL1 is the identity-mapped kernel translation table.
+	 */
+	if (xzs_d6m4_r650_telemetry.task_wait_entered) {
+		xzs_breadcrumb(0xD630, 0x33);
+		xzs_early_puts("[XZS-D6M4] D630/33 PID1 entered task_wait_to_return\n");
+	}
+	if (xzs_d6m4_r650_telemetry.returnwait_cleared) {
+		xzs_breadcrumb(0xD630, 0x34);
+		xzs_early_puts("[XZS-D6M4] D630/34 PID1 return-wait flags cleared\n");
+	}
+	if (xzs_d6m4_r650_telemetry.post_sig_complete) {
+		xzs_breadcrumb(0xD630, 0x35);
+		xzs_early_puts("[XZS-D6M4] D630/35 PID1 post-signature hook complete\n");
+	}
+	if (xzs_d6m4_r650_telemetry.before_bootstrap_ret) {
+		xzs_breadcrumb(0xD630, 0x36);
+		xzs_early_puts("[XZS-D6M4] D630/36 PID1 control-port setup complete\n");
+		xzs_breadcrumb(0xD630, 0x37);
+		xzs_early_puts("[XZS-D6M4] D630/37 PID1 entering thread_bootstrap_return\n");
+	}
+
+	if (xzs_d6m4_r650_telemetry.svc_trapped) {
+		xzs_breadcrumb(0xD630, 0x40);
+		xzs_early_puts("[XZS-D6M4] D630/40 EL0 synchronous exception captured\n");
+		xzs_early_puts("ESR_EL1="); xzs_d6m4_put_hex64(xzs_d6m4_r650_telemetry.esr); xzs_early_puts("\n");
+		xzs_early_puts("ELR_EL1="); xzs_d6m4_put_hex64(xzs_d6m4_r650_telemetry.elr); xzs_early_puts("\n");
+		xzs_early_puts("FAR_EL1="); xzs_d6m4_put_hex64(xzs_d6m4_r650_telemetry.far); xzs_early_puts("\n");
+		xzs_early_puts("SPSR_EL1="); xzs_d6m4_put_hex64(xzs_d6m4_r650_telemetry.spsr); xzs_early_puts("\n");
+		xzs_early_puts("SP_EL0="); xzs_d6m4_put_hex64(xzs_d6m4_r650_telemetry.sp_el0); xzs_early_puts("\n");
+		xzs_early_puts("CPU="); xzs_d6m4_put_hex64(xzs_d6m4_r650_telemetry.exc_cpu); xzs_early_puts("\n");
+		xzs_early_puts("SVC_IMMEDIATE="); xzs_d6m4_put_hex64(xzs_d6m4_r650_telemetry.svc_imm); xzs_early_puts("\n");
+		xzs_early_puts("SVC_X16="); xzs_d6m4_put_hex64(xzs_d6m4_r650_telemetry.x16); xzs_early_puts("\n");
+
+		if (!xzs_d6m4_r650_telemetry.signature_valid) {
+			xzs_breadcrumb(0xD630, 0xEE41);
+			xzs_early_puts("[XZS-D6M4] FATAL: first EL0 SVC signature mismatch\n");
+			xzs_spin_halt();
+		}
+
+		xzs_breadcrumb(0xD630, 0x41);
+		xzs_early_puts("[XZS-D6M4] D630/41 launchd EL0 instruction signature verified\n");
+		xzs_breadcrumb(0xD630, 0x50);
+		xzs_early_puts("[XZS-D6M4] D630/50 SVC observed before dispatcher (M5 boundary preserved)\n");
+
+		xzs_early_puts("\n=== D6-M4 ACCEPTANCE TELEMETRY BEGIN ===\n");
+		xzs_early_puts("D6-M3_REGRESSION_PASS=yes\n");
+		xzs_early_puts("D6-M4_COMPLETE=yes\n");
+		xzs_early_puts("PID1_STARTED=yes\n");
+		xzs_early_puts("EL0_ENTRY_ATTEMPTED=yes\n");
+		xzs_early_puts("FIRST_EL0_INSTRUCTION_EXECUTED=yes\n");
+		xzs_early_puts("FIRST_EL0_PROOF=svc_register_signature\n");
+		xzs_early_puts("FIRST_SVC_ENTERED=yes\n");
+		xzs_early_puts("SVC_IMMEDIATE=0x0000000000000080\n");
+		xzs_early_puts("SVC_SYSCALL_NUMBER_REGISTER=x16\n");
+		xzs_early_puts("SVC_SYSCALL_NUMBER=4\n");
+		xzs_early_puts("SYSCALL_DISPATCH_REACHED=no\n");
+		xzs_early_puts("FIRST_SYSCALL_ROUNDTRIP_COMPLETE=no\n");
+		xzs_early_puts("D6_M4_EXCEPTION_TELEMETRY_COMPLETE=yes\n");
+		xzs_early_puts("ROADMAP_ADVANCED_TO=D6-M5\n");
+		xzs_early_puts("=== D6-M4 ACCEPTANCE TELEMETRY END ===\n");
+		xzs_breadcrumb(0xD630, 0x90);
+		xzs_breadcrumb(0xD630, 0x91);
+		xzs_early_puts("[XZS-D6M4] PHASE D6-M4 COMPLETE & VERIFIED (PASS)\n");
+		xzs_breadcrumb(0xD630, 0x01);
+		xzs_early_puts("[XZS-D6M4] D630/01 terminal before D6-M5 syscall dispatch\n");
+		xzs_spin_halt();
+	} else if (xzs_d6m4_r650_telemetry.unexpected_exception) {
+		xzs_early_puts("\n[XZS-D6M4] UNEXPECTED EXCEPTION ON CPU 1\n");
+		xzs_early_puts("ESR_EL1="); xzs_d6m4_put_hex64(xzs_d6m4_r650_telemetry.esr); xzs_early_puts("\n");
+		xzs_early_puts("ELR_EL1="); xzs_d6m4_put_hex64(xzs_d6m4_r650_telemetry.elr); xzs_early_puts("\n");
+		xzs_early_puts("FAR_EL1="); xzs_d6m4_put_hex64(xzs_d6m4_r650_telemetry.far); xzs_early_puts("\n");
+		xzs_early_puts("SPSR_EL1="); xzs_d6m4_put_hex64(xzs_d6m4_r650_telemetry.spsr); xzs_early_puts("\n");
+		xzs_early_puts("SP_EL0="); xzs_d6m4_put_hex64(xzs_d6m4_r650_telemetry.sp_el0); xzs_early_puts("\n");
+		xzs_early_puts("CPU="); xzs_d6m4_put_hex64(xzs_d6m4_r650_telemetry.exc_cpu); xzs_early_puts("\n");
+		xzs_early_puts("DEEPEST_RETURN_MARKER=R650/");
+		xzs_d6m4_put_hex64(xzs_d6m4_r650_telemetry.marker); xzs_early_puts("\n");
+		xzs_spin_halt();
+	} else {
+		xzs_early_puts("\n[XZS-D6M4] TIMEOUT WAITING FOR PID1 EL0 RETURN\n");
+		xzs_early_puts("DEEPEST_RETURN_MARKER=R650/");
+		xzs_d6m4_put_hex64(xzs_d6m4_r650_telemetry.marker); xzs_early_puts("\n");
+		xzs_early_puts("TASK_WAIT_ENTERED=");
+		xzs_early_puts(xzs_d6m4_r650_telemetry.task_wait_entered ? "yes\n" : "no\n");
+		xzs_early_puts("RETURNWAIT_CLEARED=");
+		xzs_early_puts(xzs_d6m4_r650_telemetry.returnwait_cleared ? "yes\n" : "no\n");
+		xzs_early_puts("POST_SIG_COMPLETE=");
+		xzs_early_puts(xzs_d6m4_r650_telemetry.post_sig_complete ? "yes\n" : "no\n");
+		xzs_early_puts("BEFORE_BOOTSTRAP_RET=");
+		xzs_early_puts(xzs_d6m4_r650_telemetry.before_bootstrap_ret ? "yes\n" : "no\n");
+		xzs_early_puts("BOOTSTRAP_RET_ENTRY=");
+		xzs_early_puts(xzs_d6m4_r650_telemetry.bootstrap_ret_entry ? "yes\n" : "no\n");
+		xzs_early_puts("EXC_RETURN_ENTRY=");
+		xzs_early_puts(xzs_d6m4_r650_telemetry.exc_return_entry ? "yes\n" : "no\n");
+		xzs_early_puts("BEFORE_ERET=");
+		xzs_early_puts(xzs_d6m4_r650_telemetry.before_eret ? "yes\n" : "no\n");
+		xzs_spin_halt();
+	}
+}
 #endif

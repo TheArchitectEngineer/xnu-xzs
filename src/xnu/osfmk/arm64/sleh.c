@@ -770,69 +770,52 @@ sleh_synchronous(arm_context_t *context, uint64_t esr, vm_offset_t far, __unused
 #if CONFIG_XZS_BRINGUP
 	extern volatile boolean_t xzs_d6m4_probe_armed;
 	extern thread_t xzs_d6m4_target_thread;
-	if (xzs_d6m4_probe_armed && thread == xzs_d6m4_target_thread &&
-	    is_user && class == ESR_EC_SVC_64) {
-		extern void xzs_breadcrumb(uint32_t cp, uint32_t err);
-		extern void xzs_early_puts(const char *s);
-		extern void xzs_early_puthex64(uint64_t value);
-		extern void xzs_spin_halt(void);
+	extern struct xzs_d6m4_r650_telemetry xzs_d6m4_r650_telemetry;
+
+	if (xzs_d6m4_probe_armed && thread == xzs_d6m4_target_thread) {
 		arm_saved_state64_t *ss64 = saved_state64(state);
 		uint64_t elr = get_saved_state_pc(state);
 		uint64_t spsr = get_saved_state_cpsr(state);
 		uint64_t sp_el0 = get_saved_state_sp(state);
-		boolean_t signature_valid =
-		    ESR_ISS(esr) == 0x80 &&
-		    elr == 0x0000000100000304ULL &&
-		    ss64->x[0] == 1 &&
-		    ss64->x[1] == 0x0000000100000320ULL &&
-		    ss64->x[2] == 0x1a &&
-		    ss64->x[16] == 4;
 
-		xzs_breadcrumb(0xD630, 0x40);
-		xzs_early_puts("[XZS-D6M4] D630/40 EL0 synchronous exception captured\n");
-		xzs_early_puts("ESR_EL1="); xzs_early_puthex64(esr); xzs_early_puts("\n");
-		xzs_early_puts("ELR_EL1="); xzs_early_puthex64(elr); xzs_early_puts("\n");
-		xzs_early_puts("FAR_EL1="); xzs_early_puthex64(far); xzs_early_puts("\n");
-		xzs_early_puts("SPSR_EL1="); xzs_early_puthex64(spsr); xzs_early_puts("\n");
-		xzs_early_puts("SP_EL0="); xzs_early_puthex64(sp_el0); xzs_early_puts("\n");
-		xzs_early_puts("CPU="); xzs_early_puthex64((uint64_t)cpu_number()); xzs_early_puts("\n");
-		xzs_early_puts("SVC_IMMEDIATE="); xzs_early_puthex64(ESR_ISS(esr)); xzs_early_puts("\n");
-		xzs_early_puts("SVC_X16="); xzs_early_puthex64(ss64->x[16]); xzs_early_puts("\n");
+		xzs_d6m4_r650_telemetry.esr = esr;
+		xzs_d6m4_r650_telemetry.elr = elr;
+		xzs_d6m4_r650_telemetry.far = far;
+		xzs_d6m4_r650_telemetry.spsr = spsr;
+		xzs_d6m4_r650_telemetry.sp_el0 = sp_el0;
+		xzs_d6m4_r650_telemetry.x0 = ss64->x[0];
+		xzs_d6m4_r650_telemetry.x1 = ss64->x[1];
+		xzs_d6m4_r650_telemetry.x2 = ss64->x[2];
+		xzs_d6m4_r650_telemetry.x16 = ss64->x[16];
+		xzs_d6m4_r650_telemetry.svc_imm = ESR_ISS(esr);
+		xzs_d6m4_r650_telemetry.exc_cpu = (uint64_t)cpu_number();
 
-		if (!signature_valid) {
-			xzs_breadcrumb(0xD630, 0xEE41);
-			xzs_early_puts("[XZS-D6M4] FATAL: first EL0 SVC signature mismatch\n");
-			xzs_spin_halt();
+		if (is_user && class == ESR_EC_SVC_64) {
+			boolean_t signature_valid =
+			    ESR_ISS(esr) == 0x80 &&
+			    elr == 0x0000000100000304ULL &&
+			    ss64->x[0] == 1 &&
+			    ss64->x[1] == 0x0000000100000320ULL &&
+			    ss64->x[2] == 0x1a &&
+			    ss64->x[16] == 4;
+
+			xzs_d6m4_r650_telemetry.signature_valid = signature_valid ? 1 : 0;
+			xzs_d6m4_r650_telemetry.svc_trapped = 1;
+			__asm__ volatile("dmb ish" ::: "memory");
+		} else {
+			xzs_d6m4_r650_telemetry.unexpected_exception = 1;
+			__asm__ volatile("dmb ish" ::: "memory");
 		}
 
-		xzs_d6m4_probe_armed = FALSE;
-		xzs_breadcrumb(0xD630, 0x41);
-		xzs_early_puts("[XZS-D6M4] D630/41 launchd EL0 instruction signature verified\n");
-		xzs_breadcrumb(0xD630, 0x50);
-		xzs_early_puts("[XZS-D6M4] D630/50 SVC observed before dispatcher (M5 boundary preserved)\n");
-
-		xzs_early_puts("\n=== D6-M4 ACCEPTANCE TELEMETRY BEGIN ===\n");
-		xzs_early_puts("D6-M3_REGRESSION_PASS=yes\n");
-		xzs_early_puts("D6-M4_COMPLETE=yes\n");
-		xzs_early_puts("PID1_STARTED=yes\n");
-		xzs_early_puts("EL0_ENTRY_ATTEMPTED=yes\n");
-		xzs_early_puts("FIRST_EL0_INSTRUCTION_EXECUTED=yes\n");
-		xzs_early_puts("FIRST_EL0_PROOF=svc_register_signature\n");
-		xzs_early_puts("FIRST_SVC_ENTERED=yes\n");
-		xzs_early_puts("SVC_IMMEDIATE=0x0000000000000080\n");
-		xzs_early_puts("SVC_SYSCALL_NUMBER_REGISTER=x16\n");
-		xzs_early_puts("SVC_SYSCALL_NUMBER=4\n");
-		xzs_early_puts("SYSCALL_DISPATCH_REACHED=no\n");
-		xzs_early_puts("FIRST_SYSCALL_ROUNDTRIP_COMPLETE=no\n");
-		xzs_early_puts("D6_M4_EXCEPTION_TELEMETRY_COMPLETE=yes\n");
-		xzs_early_puts("ROADMAP_ADVANCED_TO=D6-M5\n");
-		xzs_early_puts("=== D6-M4 ACCEPTANCE TELEMETRY END ===\n");
-		xzs_breadcrumb(0xD630, 0x90);
-		xzs_breadcrumb(0xD630, 0x91);
-		xzs_early_puts("[XZS-D6M4] PHASE D6-M4 COMPLETE & VERIFIED (PASS)\n");
-		xzs_breadcrumb(0xD630, 0x01);
-		xzs_early_puts("[XZS-D6M4] D630/01 terminal before D6-M5 syscall dispatch\n");
-		xzs_spin_halt();
+		/*
+		 * CPU1 must NOT call xzs_spin_halt() or any telemetry helpers
+		 * because TTBR0_EL1 is the user pmap!
+		 * Mask interrupts and spin safely with WFE while CPU0 reports results.
+		 */
+		__asm__ volatile("msr DAIFSet, #0xf");
+		for (;;) {
+			__asm__ volatile("wfe");
+		}
 	}
 #endif
 

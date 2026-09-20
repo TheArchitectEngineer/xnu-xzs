@@ -5290,11 +5290,10 @@ xzs_d6m4_first_el0(proc_t p, task_t t, thread_t th)
 	extern void xzs_d6m4_report_c640_telemetry(task_t t, thread_t th);
 	xzs_d6m4_report_c640_telemetry(t, th);
 
-	/*
-	 * Let bsd_utaskbootstrap() return through the native bootstrap path.
-	 * The newly runnable PID1 main thread completes task_wait_to_return()
-	 * and reaches thread_bootstrap_return(), which performs the EL0 return.
-	 */
+	/* Monitor and report R650 return-to-user and EL0 SVC trap from safe CPU0 context */
+	extern void xzs_d6m4_monitor_and_report_r650(task_t t, thread_t th);
+	xzs_d6m4_monitor_and_report_r650(t, th);
+
 	return;
 }
 #endif
