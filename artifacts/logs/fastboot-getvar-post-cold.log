@@ -1,0 +1,15 @@
+(bootloader) version:0.5
+(bootloader) max-download-size:	0x10000000
+(bootloader) partition-type:cache:ext4
+(bootloader) partition-size:cache:	 0x10000000
+(bootloader) partition-type:userdata:ext4
+(bootloader) partition-size:userdata:	 0x534000000
+(bootloader) partition-type:system:ext4
+(bootloader) partition-size:system:	 0x1cb600000
+(bootloader) secure:no
+(bootloader) version-baseband:1306-8075_41.2.A.7.76
+(bootloader) version-bootloader:1299-4832 S1_Boot_MSM8996_LA2.0_N_117
+(bootloader) serialno:BH905SX976
+(bootloader) product:G8231
+all: 
+Finished. Total time: 0.134s
