@@ -5245,6 +5245,16 @@ xzs_d6m4_first_el0(proc_t p, task_t t, thread_t th)
 	extern void xzs_clear_thread_asts(thread_t thread);
 	xzs_clear_thread_asts(th);
 
+	/* Pre-set ARM_PTE_AF for PID1 user text and stack pages for Kryo ARMv8.0 */
+	extern void xzs_set_user_pte_af(pmap_t pmap, vm_map_address_t va);
+	pmap_t pmap = get_task_pmap(t);
+	for (vm_map_address_t va = 0x100000000ULL; va < 0x100000000ULL + 0x40000ULL; va += 0x4000ULL) {
+		xzs_set_user_pte_af(pmap, va);
+	}
+	for (vm_map_address_t va = 0x16FDE0000ULL; va < 0x16FE00000ULL; va += 0x4000ULL) {
+		xzs_set_user_pte_af(pmap, va);
+	}
+
 	kern_return_t kr = task_resume_internal(t);
 	if (kr != KERN_SUCCESS) {
 		xzs_breadcrumb(CP_D6M4, 0xEE30);

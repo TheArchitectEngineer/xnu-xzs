@@ -15139,3 +15139,18 @@ pmap_test_text_corruption_internal(pmap_paddr_t pa)
 }
 
 #endif /* DEVELOPMENT || DEBUG */
+
+#if CONFIG_XZS_BRINGUP
+void
+xzs_set_user_pte_af(pmap_t pmap, vm_map_address_t va)
+{
+	if (pmap == PMAP_NULL) {
+		return;
+	}
+	pt_entry_t *pte_p = pmap_pte(pmap, va);
+	if (pte_p != PT_ENTRY_NULL && *pte_p != ARM_PTE_EMPTY) {
+		*pte_p |= ARM_PTE_AF;
+		__asm__ volatile("dsb ish; isb sy" ::: "memory");
+	}
+}
+#endif

@@ -1087,6 +1087,9 @@ pmap_txm_allocate_page(void);
 
 #endif /* CONFIG_SPTM */
 
+#if CONFIG_XZS_BRINGUP
+extern void xzs_set_user_pte_af(pmap_t pmap, vm_map_address_t va);
+#endif
 
 #endif  /* KERNEL_PRIVATE */
 
