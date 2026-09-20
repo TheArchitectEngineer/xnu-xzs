@@ -3127,4 +3127,147 @@ xzs_d6m4_capture_scheduler_state(task_t t, thread_t th)
 	xzs_early_puts("=== D6-M4 SCHEDULER STATE AUDIT TELEMETRY END =========\n");
 	xzs_early_puts("=======================================================\n\n");
 }
+
+struct xzs_c640_telemetry {
+	uint64_t marker;               /* 0x00 */
+	uint64_t cpu_id;               /* 0x08 */
+	uint64_t sp_before;            /* 0x10 */
+	uint64_t sp_after;             /* 0x18 */
+	uint64_t continuation_target;  /* 0x20 */
+	uint64_t daif_before;          /* 0x28 */
+	uint64_t daif_after;           /* 0x30 */
+	uint64_t task_wait_raw_entry;  /* 0x38 */
+	uint64_t kstack_base;          /* 0x40 */
+	uint64_t kstack_top;           /* 0x48 */
+	uint64_t d630_33_reached;      /* 0x50 */
+	uint64_t sp_task_wait;         /* 0x58 */
+	uint64_t daif_task_wait;       /* 0x60 */
+	uint64_t hit_counter;          /* 0x68 */
+	uint64_t reserved[2];          /* 0x70, 0x78 */
+} __attribute__((aligned(128)));
+
+struct xzs_c640_telemetry xzs_c640_telemetry = {0};
+
+void xzs_d6m4_report_c640_telemetry(task_t t, thread_t th);
+
+void
+xzs_d6m4_report_c640_telemetry(task_t t, thread_t th)
+{
+	extern void xzs_early_puts(const char *s);
+	extern vm_size_t kernel_stack_size;
+	(void)t;
+
+	/* Brief delay to allow CPU 1 to complete Call_continuation dispatch */
+	for (volatile int i = 0; i < 2000000; i++) {
+		if (xzs_c640_telemetry.task_wait_raw_entry != 0 ||
+		    xzs_c640_telemetry.marker >= 0xC6400050) {
+			break;
+		}
+	}
+
+	uint64_t marker = xzs_c640_telemetry.marker;
+	uint64_t cpu_id = xzs_c640_telemetry.cpu_id;
+	uint64_t sp_before = xzs_c640_telemetry.sp_before;
+	uint64_t sp_after = xzs_c640_telemetry.sp_after;
+	uint64_t cont_target = xzs_c640_telemetry.continuation_target;
+	uint64_t daif_before = xzs_c640_telemetry.daif_before;
+	uint64_t daif_after = xzs_c640_telemetry.daif_after;
+	uint64_t raw_entry = xzs_c640_telemetry.task_wait_raw_entry;
+	uint64_t d630_33 = xzs_c640_telemetry.d630_33_reached;
+
+	vm_offset_t kstack = th->kernel_stack;
+	vm_size_t kstack_sz = kernel_stack_size;
+
+	boolean_t entry_reached = (marker >= 0xC6400010);
+	boolean_t stack_switch_reached = (marker >= 0xC6400030);
+	boolean_t sp_aligned = (sp_after != 0) && ((sp_after & 0xF) == 0);
+	boolean_t sp_range_valid = (kstack != 0) && (sp_after >= kstack) && (sp_after <= (kstack + kstack_sz));
+	boolean_t intr_before_reached = (marker >= 0xC6400040);
+	boolean_t intr_after_reached = (marker >= 0xC6400041);
+	boolean_t cont_branch_reached = (marker >= 0xC6400050);
+	boolean_t task_wait_raw = (raw_entry == 0xC6400060);
+	boolean_t d630_33_reached = (d630_33 != 0);
+
+	xzs_early_puts("\n=======================================================\n");
+	xzs_early_puts("=== D6-M4 C640 CALL_CONTINUATION AUDIT BEGIN ==========\n");
+	xzs_early_puts("=======================================================\n");
+
+	xzs_early_puts("CALL_CONTINUATION_ENTRY_REACHED=");
+	xzs_early_puts(entry_reached ? "yes\n" : "no\n");
+
+	xzs_early_puts("STACK_SWITCH_REACHED=");
+	xzs_early_puts(stack_switch_reached ? "yes\n\n" : "no\n\n");
+
+	xzs_early_puts("KERNEL_SP=");
+	xzs_d6m4_put_hex64(sp_after);
+	xzs_early_puts("\n");
+
+	xzs_early_puts("KERNEL_SP_ALIGNED=");
+	xzs_early_puts(sp_aligned ? "yes\n" : "no\n");
+
+	xzs_early_puts("KERNEL_SP_RANGE_VALID=");
+	xzs_early_puts(sp_range_valid ? "yes\n\n" : "no\n\n");
+
+	xzs_early_puts("INTERRUPT_ENABLE_BEFORE_REACHED=");
+	xzs_early_puts(intr_before_reached ? "yes\n" : "no\n");
+
+	xzs_early_puts("INTERRUPT_ENABLE_AFTER_REACHED=");
+	xzs_early_puts(intr_after_reached ? "yes\n\n" : "no\n\n");
+
+	xzs_early_puts("CONTINUATION_BRANCH_REACHED=");
+	xzs_early_puts(cont_branch_reached ? "yes\n\n" : "no\n\n");
+
+	xzs_early_puts("TASK_WAIT_TO_RETURN_RAW_ENTRY=");
+	xzs_early_puts(task_wait_raw ? "yes\n" : "no\n");
+
+	xzs_early_puts("D630_33_REACHED=");
+	xzs_early_puts(d630_33_reached ? "yes\n\n" : "no\n\n");
+
+	xzs_early_puts("DEEPEST_ASSEMBLY_MARKER=");
+	if (task_wait_raw) {
+		xzs_early_puts("C640/60 (task_wait_to_return raw entry)\n");
+	} else if (cont_branch_reached) {
+		xzs_early_puts("C640/50 (pre-continuation-branch)\n");
+	} else if (intr_after_reached) {
+		xzs_early_puts("C640/41 (post-interrupt-enable)\n");
+	} else if (intr_before_reached) {
+		xzs_early_puts("C640/40 (pre-interrupt-enable)\n");
+	} else if (marker >= 0xC6400020) {
+		xzs_early_puts("C640/20 (continuation-validated)\n");
+	} else if (stack_switch_reached) {
+		xzs_early_puts("C640/30 (kernel-sp-installed)\n");
+	} else if (entry_reached) {
+		xzs_early_puts("C640/10 (Call_continuation entry)\n");
+	} else {
+		xzs_early_puts("NONE (entry not reached)\n");
+	}
+
+	xzs_early_puts("CPU_ID=");
+	xzs_d6m4_put_signed((int)cpu_id);
+	xzs_early_puts("\n");
+
+	xzs_early_puts("SP_BEFORE=");
+	xzs_d6m4_put_hex64(sp_before);
+	xzs_early_puts("\n");
+
+	xzs_early_puts("SP_AFTER_STACK_SWITCH=");
+	xzs_d6m4_put_hex64(sp_after);
+	xzs_early_puts("\n");
+
+	xzs_early_puts("CONTINUATION_TARGET=");
+	xzs_d6m4_put_hex64(cont_target);
+	xzs_early_puts("\n");
+
+	xzs_early_puts("DAIF_BEFORE=");
+	xzs_d6m4_put_hex64(daif_before);
+	xzs_early_puts("\n");
+
+	xzs_early_puts("DAIF_AFTER=");
+	xzs_d6m4_put_hex64(daif_after);
+	xzs_early_puts("\n");
+
+	xzs_early_puts("=======================================================\n");
+	xzs_early_puts("=== D6-M4 C640 CALL_CONTINUATION AUDIT END ============\n");
+	xzs_early_puts("=======================================================\n\n");
+}
 #endif

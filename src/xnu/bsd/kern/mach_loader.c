@@ -5286,6 +5286,10 @@ xzs_d6m4_first_el0(proc_t p, task_t t, thread_t th)
 	/* Capture live scheduler state of the PID1 main thread immediately after D630/32 */
 	xzs_d6m4_capture_scheduler_state(t, th);
 
+	/* Capture assembly boundary telemetry of Call_continuation */
+	extern void xzs_d6m4_report_c640_telemetry(task_t t, thread_t th);
+	xzs_d6m4_report_c640_telemetry(t, th);
+
 	/*
 	 * Let bsd_utaskbootstrap() return through the native bootstrap path.
 	 * The newly runnable PID1 main thread completes task_wait_to_return()
