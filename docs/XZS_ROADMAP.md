@@ -18,8 +18,8 @@ Progress is strictly gated by physical hardware verification. Speculative percen
 | **Phase D3** | GUID Partition Table (GPT) discovery & partition enumeration | **COMPLETE** |
 | **Phase D4** | Block-storage driver integration (`bdevsw` / `disk0`) | **COMPLETE** |
 | **Phase D5** | Real root filesystem mount (RAMDisk XZSFS) | **COMPLETE / SEALED** |
-| **Phase D6 / Phase E** | PID 1 bootstrap (`initproc` / launchd exec) | **NEXT / NOT STARTED** |
-| **Phase F** | Interactive serial shell (`/bin/sh` or micro-shell) | **NOT STARTED** |
+| **Phase D6** | PID 1 / First EL0 userspace (`initproc` / launchd) | **NEXT / NOT STARTED** |
+| **Phase D7** | Interactive serial shell (`/bin/sh` or micro-shell) | **NOT STARTED** |
 | **Phase G** | Restore deferred subsystems (Skywalk, DTrace, jetsam buffer) | **NOT STARTED** |
 | **Phase H** | Networking and platform device drivers | **NOT STARTED** |
 | **Phase I** | Userspace and multi-process expansion | **NOT STARTED** |
@@ -223,22 +223,23 @@ Progress is strictly gated by physical hardware verification. Speculative percen
 
 ---
 
-### Phase D6 / Phase E — PID 1 Bootstrap (`initproc` / launchd)
-* **Goal**: Spawn the first Mach/BSD userspace process (`initproc` / PID 1) from the root filesystem.
+### Phase D6 — PID 1 / First EL0 Userspace
+* **Goal**: Bootstrap the first Mach/BSD userspace process (`initproc` / PID 1) from the root filesystem and transition from EL1 to EL0.
 * **Status**: **NEXT / NOT STARTED**
-* **Hardware Acceptance Criteria**: Kernel executes `bsd_utaskbootstrap()`; clones `initproc`; loads ARM64 Mach-O binary from `/sbin/launchd` via `execve()`; transitions to EL0 userspace.
-* **Completed Items**: PAC signing verification bypass in `bsd/kern/kern_exec.c`.
-* **Remaining Items**:
-  - Provide statically linked ARM64 Darwin userspace binary.
-  - Set up user address space, stack, and commpage in EL0.
-  - Implement exception return to EL0 (`eret`).
-  - Handle initial userspace system calls (`mach_trap` / BSD `syscall`).
-* **Known Blockers**: Missing userspace libraries (libSystem / dyld) if dynamically linked.
-* **Dependencies**: Phase D4.
+* **Milestones**:
+  - **D6-M1 (PID1 Skeleton)**: **NEXT / NOT STARTED** (Create first BSD process/task/thread structures; no userspace entry).
+  - **D6-M2 (Minimal Mach-O Loader)**: **NOT STARTED** (Open `/sbin/launchd`, validate ARM64 Mach-O header/load commands, map segments, resolve entry state; no EL0 entry).
+  - **D6-M3 (User VM + Initial Stack)**: **NOT STARTED** (Construct userspace VM map, pmap, user stack, argc/argv/env, and register state).
+  - **D6-M4 (First EL0 Transition)**: **NOT STARTED** (Execute exception return `eret` to EL0 and execute first userspace ARM64 instruction).
+  - **D6-M5 (First Syscall Round-Trip)**: **NOT STARTED** (Issue userspace `svc`, trap into XNU syscall dispatcher, execute kernel handler, and return to EL0).
+  - **D6-M6 (Minimal Stable PID1 Runtime)**: **NOT STARTED** (Execute minimal deterministic `/sbin/launchd` userspace runtime loop/exit).
+  - **D6-M7 (Final D6 Seal)**: **NOT STARTED** (Regression verification, independent verifier, evidence archive, and roadmap seal).
+* **Hardware Acceptance Criteria**: Kernel boots through D5 stack; executes `bsd_utaskbootstrap()`; resolves `/sbin/launchd`; creates PID 1; maps static ARM64 Mach-O; sets up user stack and registers; transitions to EL0 via `eret`; executes userspace code; performs syscall round-trip; maintains system stability without panicking or triggering watchdog faults.
+* **Dependencies**: Phase D5 (COMPLETE / SEALED).
 
 ---
 
-### Phase F — Interactive Shell
+### Phase D7 — Interactive Serial Shell
 * **Goal**: Establish an interactive command-line environment over the serial console.
 * **Status**: **NOT STARTED**
 * **Hardware Acceptance Criteria**: Interactive `/bin/sh` or micro-shell accepting keystrokes from Qualcomm UARTDM and displaying command output.
