@@ -30,6 +30,9 @@
 #include <mach/kern_return.h>
 #include <mach/thread_status.h>
 #include <kern/thread.h>
+#include <kern/task.h>
+#include <kern/processor.h>
+#include <kern/spl.h>
 #include <kern/kalloc.h>
 #include <arm/vmparam.h>
 #include <arm/cpu_data_internal.h>
@@ -2889,5 +2892,239 @@ xzs_vm_map_audit(
 		}
 	}
 	vm_map_unlock_read(map);
+}
+
+#define CP_D6M4_DIAG 0xD631
+
+static void
+xzs_d6m4_put_hex32(uint32_t val)
+{
+	extern void xzs_early_puts(const char *s);
+	char buf[11];
+	const char hex[] = "0123456789abcdef";
+	buf[0] = '0';
+	buf[1] = 'x';
+	for (int i = 7; i >= 0; i--) {
+		buf[2 + 7 - i] = hex[(val >> (i * 4)) & 0xf];
+	}
+	buf[10] = '\0';
+	xzs_early_puts(buf);
+}
+
+static void
+xzs_d6m4_put_hex64(uint64_t val)
+{
+	extern void xzs_early_puts(const char *s);
+	char buf[19];
+	const char hex[] = "0123456789abcdef";
+	buf[0] = '0';
+	buf[1] = 'x';
+	for (int i = 15; i >= 0; i--) {
+		buf[2 + 15 - i] = hex[(val >> (i * 4)) & 0xf];
+	}
+	buf[18] = '\0';
+	xzs_early_puts(buf);
+}
+
+static void
+xzs_d6m4_put_signed(int val)
+{
+	extern void xzs_early_puts(const char *s);
+	char buf[12];
+	int idx = 10;
+	buf[11] = '\0';
+	if (val < 0) {
+		xzs_early_puts("-");
+		val = -val;
+	}
+	if (val == 0) {
+		xzs_early_puts("0");
+		return;
+	}
+	while (val > 0 && idx >= 0) {
+		buf[idx--] = '0' + (val % 10);
+		val /= 10;
+	}
+	xzs_early_puts(&buf[idx + 1]);
+}
+
+static void
+xzs_d6m4_put_proc(processor_t proc)
+{
+	extern void xzs_early_puts(const char *s);
+	if (proc == PROCESSOR_NULL) {
+		xzs_early_puts("none\n");
+	} else {
+		xzs_early_puts("cpu");
+		if (proc->cpu_id < 0) {
+			xzs_early_puts("-");
+			xzs_d6m4_put_signed(-proc->cpu_id);
+		} else {
+			xzs_d6m4_put_signed(proc->cpu_id);
+		}
+		xzs_early_puts("\n");
+	}
+}
+
+void xzs_d6m4_capture_scheduler_state(task_t t, thread_t th);
+
+void
+xzs_d6m4_capture_scheduler_state(task_t t, thread_t th)
+{
+	extern void xzs_breadcrumb(uint32_t cp, uint32_t err);
+	extern void xzs_early_puts(const char *s);
+	extern processor_t thread_get_runq(thread_t thread);
+	extern void task_wait_to_return(void);
+
+	/* D631/10: scheduler snapshot begin */
+	xzs_breadcrumb(CP_D6M4_DIAG, 0x10);
+	xzs_early_puts("\n=======================================================\n");
+	xzs_early_puts("=== D6-M4 SCHEDULER STATE AUDIT TELEMETRY BEGIN =======\n");
+	xzs_early_puts("=======================================================\n");
+
+	spl_t s = splsched();
+	thread_lock(th);
+
+	int th_state = th->state;
+	wait_result_t th_wait_result = th->wait_result;
+	int16_t th_suspend_count = th->suspend_count;
+	int32_t th_user_stop_count = th->user_stop_count;
+	boolean_t th_runnable = (th_state & TH_RUN) != 0;
+	boolean_t th_waiting = (th_state & TH_WAIT) != 0;
+	boolean_t th_suspended = (th_state & TH_SUSP) != 0;
+
+	processor_t th_runq = thread_get_runq(th);
+	boolean_t th_on_runq = (th_runq != PROCESSOR_NULL);
+
+	processor_t th_bound = th->bound_processor;
+	processor_t th_last = th->last_processor;
+	processor_t th_chosen = th->chosen_processor;
+
+	int16_t th_sched_pri = th->sched_pri;
+	int16_t th_base_pri = th->base_pri;
+	sched_mode_t th_sched_mode = th->sched_mode;
+
+	vm_offset_t th_kstack = th->kernel_stack;
+	vm_offset_t th_rstack = th->reserved_stack;
+
+	thread_continue_t th_cont = th->continuation;
+
+	thread_unlock(th);
+	splx(s);
+
+	/* D631/11: thread state captured */
+	xzs_breadcrumb(CP_D6M4_DIAG, 0x11);
+
+	task_lock(t);
+	int t_suspend_count = t->suspend_count;
+	integer_t t_user_stop_count = t->user_stop_count;
+	boolean_t t_active = t->active;
+	task_unlock(t);
+
+	/* D631/12: runqueue state captured */
+	xzs_breadcrumb(CP_D6M4_DIAG, 0x12);
+
+	/* D631/13: kernel stack state captured */
+	xzs_breadcrumb(CP_D6M4_DIAG, 0x13);
+
+	/* D631/14: continuation state captured */
+	xzs_breadcrumb(CP_D6M4_DIAG, 0x14);
+
+	thread_continue_t expected_cont = (thread_continue_t)task_wait_to_return;
+	boolean_t cont_present = (th_cont != NULL);
+	boolean_t cont_match = (th_cont == expected_cont);
+
+	processor_t th_on_core = PROCESSOR_NULL;
+	if (th_last != PROCESSOR_NULL && th_last->active_thread == th) {
+		th_on_core = th_last;
+	}
+
+	xzs_early_puts("PID1_THREAD_STATE_FLAGS=");
+	xzs_d6m4_put_hex32((uint32_t)th_state);
+	xzs_early_puts("\n");
+
+	xzs_early_puts("PID1_THREAD_WAIT_RESULT=");
+	xzs_d6m4_put_hex32((uint32_t)th_wait_result);
+	xzs_early_puts("\n\n");
+
+	xzs_early_puts("PID1_THREAD_SUSPEND_COUNT=");
+	xzs_d6m4_put_signed(th_suspend_count);
+	xzs_early_puts("\n");
+
+	xzs_early_puts("PID1_THREAD_USER_STOP_COUNT=");
+	xzs_d6m4_put_signed(th_user_stop_count);
+	xzs_early_puts("\n\n");
+
+	xzs_early_puts("PID1_TASK_SUSPEND_COUNT=");
+	xzs_d6m4_put_signed(t_suspend_count);
+	xzs_early_puts("\n");
+
+	xzs_early_puts("PID1_TASK_USER_STOP_COUNT=");
+	xzs_d6m4_put_signed((int)t_user_stop_count);
+	xzs_early_puts("\n");
+
+	xzs_early_puts("PID1_TASK_ACTIVE=");
+	xzs_early_puts(t_active ? "yes\n\n" : "no\n\n");
+
+	xzs_early_puts("PID1_THREAD_RUNNABLE=");
+	xzs_early_puts(th_runnable ? "yes\n" : "no\n");
+
+	xzs_early_puts("PID1_THREAD_WAITING=");
+	xzs_early_puts(th_waiting ? "yes\n" : "no\n");
+
+	xzs_early_puts("PID1_THREAD_SUSPENDED=");
+	xzs_early_puts(th_suspended ? "yes\n\n" : "no\n\n");
+
+	xzs_early_puts("PID1_THREAD_ON_RUNQ=");
+	xzs_early_puts(th_on_runq ? "yes\n\n" : "no\n\n");
+
+	xzs_early_puts("PID1_THREAD_PROCESSOR=");
+	xzs_d6m4_put_proc(th_on_core);
+
+	xzs_early_puts("PID1_THREAD_BOUND_PROCESSOR=");
+	xzs_d6m4_put_proc(th_bound);
+
+	xzs_early_puts("PID1_THREAD_LAST_PROCESSOR=");
+	xzs_d6m4_put_proc(th_last);
+
+	xzs_early_puts("PID1_THREAD_CHOSEN_PROCESSOR=");
+	xzs_d6m4_put_proc(th_chosen);
+	xzs_early_puts("\n");
+
+	xzs_early_puts("PID1_THREAD_SCHED_PRI=");
+	xzs_d6m4_put_signed(th_sched_pri);
+	xzs_early_puts("\n");
+
+	xzs_early_puts("PID1_THREAD_BASE_PRI=");
+	xzs_d6m4_put_signed(th_base_pri);
+	xzs_early_puts("\n");
+
+	xzs_early_puts("PID1_THREAD_SCHED_MODE=");
+	xzs_d6m4_put_signed((int)th_sched_mode);
+	xzs_early_puts("\n\n");
+
+	xzs_early_puts("PID1_KERNEL_STACK_PRESENT=");
+	xzs_early_puts(th_kstack != 0 ? "yes\n" : "no\n");
+
+	xzs_early_puts("PID1_RESERVED_STACK_PRESENT=");
+	xzs_early_puts(th_rstack != 0 ? "yes\n\n" : "no\n\n");
+
+	xzs_early_puts("PID1_CONTINUATION_PRESENT=");
+	xzs_early_puts(cont_present ? "yes\n" : "no\n");
+
+	xzs_early_puts("PID1_CONTINUATION=");
+	xzs_d6m4_put_hex64((uint64_t)(uintptr_t)th_cont);
+	xzs_early_puts("\n");
+
+	xzs_early_puts("EXPECTED_CONTINUATION=task_wait_to_return\n");
+
+	xzs_early_puts("PID1_CONTINUATION_MATCH=");
+	xzs_early_puts(cont_match ? "yes\n" : "no\n");
+
+	/* D631/15: scheduler snapshot complete */
+	xzs_breadcrumb(CP_D6M4_DIAG, 0x15);
+	xzs_early_puts("=======================================================\n");
+	xzs_early_puts("=== D6-M4 SCHEDULER STATE AUDIT TELEMETRY END =========\n");
+	xzs_early_puts("=======================================================\n\n");
 }
 #endif

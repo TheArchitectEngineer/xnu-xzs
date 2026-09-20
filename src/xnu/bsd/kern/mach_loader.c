@@ -76,6 +76,7 @@
 #include <kern/task.h>
 #include <kern/thread.h>
 #include <kern/page_decrypt.h>
+#include <kern/processor.h>
 
 #include <mach-o/fat.h>
 #include <mach-o/loader.h>
@@ -4544,6 +4545,7 @@ xzs_d6m2_macho_probe(proc_t p, task_t t, thread_t th)
 
 #define CP_D6M3 0xD620
 #define CP_D6M4 0xD630
+#define CP_D6M4_DIAG 0xD631
 
 extern kern_return_t vm_map_protect(vm_map_t map, vm_map_offset_t start, vm_map_offset_t end, boolean_t set_max, vm_prot_t new_prot);
 extern void ipc_task_enable(task_t task);
@@ -4553,6 +4555,7 @@ volatile boolean_t xzs_d6m4_probe_armed = FALSE;
 thread_t xzs_d6m4_target_thread = THREAD_NULL;
 
 static void xzs_d6m4_first_el0(proc_t p, task_t t, thread_t th);
+extern void xzs_d6m4_capture_scheduler_state(task_t t, thread_t th);
 
 static void
 xzs_d6m3_fatal(uint32_t step, const char *msg)
@@ -5279,6 +5282,9 @@ xzs_d6m4_first_el0(proc_t p, task_t t, thread_t th)
 	xzs_early_puts(wake_kr == KERN_SUCCESS ?
 	    "[XZS-D6M4] PID1_DIRECT_WAIT_CLEAR=awakened\n" :
 	    "[XZS-D6M4] PID1_DIRECT_WAIT_CLEAR=already_awakened\n");
+
+	/* Capture live scheduler state of the PID1 main thread immediately after D630/32 */
+	xzs_d6m4_capture_scheduler_state(t, th);
 
 	/*
 	 * Let bsd_utaskbootstrap() return through the native bootstrap path.
