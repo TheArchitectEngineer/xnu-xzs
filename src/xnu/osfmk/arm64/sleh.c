@@ -802,15 +802,6 @@ sleh_synchronous(arm_context_t *context, uint64_t esr, vm_offset_t far, __unused
 			xzs_d6m4_r650_telemetry.signature_valid = signature_valid ? 1 : 0;
 			xzs_d6m4_r650_telemetry.svc_trapped = 1;
 			__asm__ volatile("dmb ish" ::: "memory");
-		} else if (is_user && (class == ESR_EC_IABORT_EL0 || class == ESR_EC_DABORT_EL0)) {
-			uint32_t fsc = ISS_IA_FSC(ESR_ISS(esr));
-			if (fsc == FSC_ACCESS_FLAG_FAULT_L1 || fsc == FSC_ACCESS_FLAG_FAULT_L2 || fsc == FSC_ACCESS_FLAG_FAULT_L3) {
-				extern void xzs_set_user_pte_af(pmap_t pmap, vm_map_address_t va);
-				xzs_set_user_pte_af(get_threadtask(thread)->map->pmap, far);
-				return;
-			}
-			xzs_d6m4_r650_telemetry.unexpected_exception = 1;
-			__asm__ volatile("dmb ish" ::: "memory");
 		} else {
 			xzs_d6m4_r650_telemetry.unexpected_exception = 1;
 			__asm__ volatile("dmb ish" ::: "memory");

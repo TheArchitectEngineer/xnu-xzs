@@ -15142,15 +15142,232 @@ pmap_test_text_corruption_internal(pmap_paddr_t pa)
 
 #if CONFIG_XZS_BRINGUP
 void
-xzs_set_user_pte_af(pmap_t pmap, vm_map_address_t va)
+xzs_audit_user_text_pte(pmap_t pmap, vm_map_address_t va, const char *tag)
 {
+	extern void xzs_early_puts(const char *s);
+	extern void xzs_d6m4_put_hex64(uint64_t val);
+
+	xzs_early_puts("\n=== XZS USER TEXT PAGE TABLE AUDIT (");
+	if (tag != NULL) {
+		xzs_early_puts(tag);
+	}
+	xzs_early_puts(") BEGIN ===\n");
+
 	if (pmap == PMAP_NULL) {
+		xzs_early_puts("AUDIT_PMAP=NULL\n");
+		xzs_early_puts("=== XZS USER TEXT PAGE TABLE AUDIT END ===\n\n");
 		return;
 	}
-	pt_entry_t *pte_p = pmap_pte(pmap, va);
-	if (pte_p != PT_ENTRY_NULL && *pte_p != ARM_PTE_EMPTY) {
-		*pte_p |= ARM_PTE_AF;
-		__asm__ volatile("dsb ish; isb sy" ::: "memory");
+
+	xzs_early_puts("AUDIT_VA=");
+	xzs_d6m4_put_hex64(va);
+	xzs_early_puts("\n");
+
+	tt_entry_t *tt1e_p = pmap_tt1e(pmap, va);
+	if (tt1e_p != TT_ENTRY_NULL) {
+		uint64_t tt1e = *tt1e_p;
+		xzs_early_puts("TEXT_L1_TTE_RAW=");
+		xzs_d6m4_put_hex64(tt1e);
+		xzs_early_puts("\n");
+
+		uint64_t l1_uxn = (tt1e & ARM_TTE_TABLE_XN) ? 1 : 0;
+		uint64_t l1_pxn = (tt1e & ARM_TTE_TABLE_PXN) ? 1 : 0;
+		xzs_early_puts("L1_UXN_TABLE=");
+		xzs_early_puts(l1_uxn ? "1\n" : "0\n");
+		xzs_early_puts("L1_PXN_TABLE=");
+		xzs_early_puts(l1_pxn ? "1\n" : "0\n");
+	} else {
+		xzs_early_puts("TEXT_L1_TTE_RAW=NULL\n");
+		xzs_early_puts("L1_UXN_TABLE=UNKNOWN\n");
+		xzs_early_puts("L1_PXN_TABLE=UNKNOWN\n");
 	}
+
+	tt_entry_t *tt2e_p = pmap_tt2e(pmap, va);
+	if (tt2e_p != TT_ENTRY_NULL) {
+		uint64_t tt2e = *tt2e_p;
+		xzs_early_puts("TEXT_L2_TTE_RAW=");
+		xzs_d6m4_put_hex64(tt2e);
+		xzs_early_puts("\n");
+
+		uint64_t l2_uxn = (tt2e & ARM_TTE_TABLE_XN) ? 1 : 0;
+		uint64_t l2_pxn = (tt2e & ARM_TTE_TABLE_PXN) ? 1 : 0;
+		xzs_early_puts("L2_UXN_TABLE=");
+		xzs_early_puts(l2_uxn ? "1\n" : "0\n");
+		xzs_early_puts("L2_PXN_TABLE=");
+		xzs_early_puts(l2_pxn ? "1\n" : "0\n");
+	} else {
+		xzs_early_puts("TEXT_L2_TTE_RAW=NULL\n");
+		xzs_early_puts("L2_UXN_TABLE=UNKNOWN\n");
+		xzs_early_puts("L2_PXN_TABLE=UNKNOWN\n");
+	}
+
+	boolean_t parent_el0_blocked = false;
+	if (tt1e_p != TT_ENTRY_NULL && (*tt1e_p & ARM_TTE_TABLE_XN)) {
+		parent_el0_blocked = true;
+	}
+	if (tt2e_p != TT_ENTRY_NULL && (*tt2e_p & ARM_TTE_TABLE_XN)) {
+		parent_el0_blocked = true;
+	}
+	xzs_early_puts("PARENT_EL0_EXEC_BLOCKED=");
+	xzs_early_puts(parent_el0_blocked ? "yes\n" : "no\n");
+
+	pt_entry_t *pte_p = pmap_pte(pmap, va);
+	if (pte_p != PT_ENTRY_NULL) {
+		uint64_t pte = *pte_p;
+		xzs_early_puts("TEXT_L3_PTE_RAW=");
+		xzs_d6m4_put_hex64(pte);
+		xzs_early_puts("\n");
+
+		boolean_t valid = ((pte & ARM_PTE_TYPE_VALID) == ARM_PTE_TYPE_VALID);
+		boolean_t af = ((pte & ARM_PTE_AF) != 0);
+		uint64_t ap_bits = (pte & ARM_PTE_APMASK) >> 6;
+		boolean_t uxn = ((pte & ARM_PTE_NX) != 0);
+		boolean_t pxn = ((pte & ARM_PTE_PNX) != 0);
+
+		xzs_early_puts("TEXT_PTE_VALID=");
+		xzs_early_puts(valid ? "yes\n" : "no\n");
+		xzs_early_puts("TEXT_AF=");
+		xzs_early_puts(af ? "yes\n" : "no\n");
+		xzs_early_puts("TEXT_AP=");
+		if (ap_bits == AP_RORO) {
+			xzs_early_puts("RORO\n");
+		} else if (ap_bits == AP_RWRW) {
+			xzs_early_puts("RWRW\n");
+		} else if (ap_bits == AP_RONA) {
+			xzs_early_puts("RONA\n");
+		} else if (ap_bits == AP_RWNA) {
+			xzs_early_puts("RWNA\n");
+		} else {
+			xzs_d6m4_put_hex64(ap_bits);
+			xzs_early_puts("\n");
+		}
+		xzs_early_puts("TEXT_UXN=");
+		xzs_early_puts(uxn ? "1\n" : "0\n");
+		xzs_early_puts("TEXT_PXN=");
+		xzs_early_puts(pxn ? "1\n" : "0\n");
+
+		boolean_t el0_read = (ap_bits == AP_RORO || ap_bits == AP_RWRW);
+		boolean_t el0_write = (ap_bits == AP_RWRW);
+		boolean_t el0_exec = valid && !uxn && el0_read && !parent_el0_blocked;
+		boolean_t el1_exec = valid && !pxn;
+
+		xzs_early_puts("EL0_READ_ALLOWED=");
+		xzs_early_puts(el0_read ? "yes\n" : "no\n");
+		xzs_early_puts("EL0_WRITE_ALLOWED=");
+		xzs_early_puts(el0_write ? "yes\n" : "no\n");
+		xzs_early_puts("EL0_EXECUTE_ALLOWED=");
+		xzs_early_puts(el0_exec ? "yes\n" : "no\n");
+		xzs_early_puts("EL1_EXECUTE_ALLOWED=");
+		xzs_early_puts(el1_exec ? "yes\n" : "no\n");
+	} else {
+		xzs_early_puts("TEXT_L3_PTE_RAW=NULL\n");
+	}
+	xzs_early_puts("=== XZS USER TEXT PAGE TABLE AUDIT END ===\n\n");
+}
+
+kern_return_t
+xzs_promote_launchd_text_exec(pmap_t pmap, vm_map_address_t va, vm_map_size_t size)
+{
+	extern void xzs_early_puts(const char *s);
+
+	/* Precondition 1: Non-null user pmap */
+	if (pmap == PMAP_NULL || pmap == kernel_pmap) {
+		xzs_early_puts("[XZS-EXEC-PROMOTE] FAILED: invalid pmap\n");
+		return KERN_INVALID_ARGUMENT;
+	}
+
+	/* Precondition 2: VA and size exactly match validated launchd __TEXT */
+	if (va != 0x100000000ULL || size != 0x4000ULL) {
+		xzs_early_puts("[XZS-EXEC-PROMOTE] FAILED: range mismatch (expected 0x100000000 / 0x4000)\n");
+		return KERN_INVALID_ARGUMENT;
+	}
+
+	/* Precondition 3: Parent L1 and L2 table descriptors exist and are valid */
+	tt_entry_t *tt1e_p = pmap_tt1e(pmap, va);
+	if (tt1e_p == TT_ENTRY_NULL || !tte_is_valid_table(*tt1e_p)) {
+		xzs_early_puts("[XZS-EXEC-PROMOTE] FAILED: invalid L1 table descriptor\n");
+		return KERN_FAILURE;
+	}
+	if ((*tt1e_p & ARM_TTE_TABLE_XN) != 0) {
+		xzs_early_puts("[XZS-EXEC-PROMOTE] FAILED: L1 table descriptor has UXNTable set\n");
+		return KERN_PROTECTION_FAILURE;
+	}
+
+	tt_entry_t *tt2e_p = pmap_tt2e(pmap, va);
+	if (tt2e_p == TT_ENTRY_NULL || !tte_is_valid_table(*tt2e_p)) {
+		xzs_early_puts("[XZS-EXEC-PROMOTE] FAILED: invalid L2 table descriptor\n");
+		return KERN_FAILURE;
+	}
+	if ((*tt2e_p & ARM_TTE_TABLE_XN) != 0) {
+		xzs_early_puts("[XZS-EXEC-PROMOTE] FAILED: L2 table descriptor has UXNTable set\n");
+		return KERN_PROTECTION_FAILURE;
+	}
+
+	/* Precondition 4: L3 leaf PTE exists */
+	pt_entry_t *pte_p = pmap_pte(pmap, va);
+	if (pte_p == PT_ENTRY_NULL || *pte_p == ARM_PTE_EMPTY) {
+		xzs_early_puts("[XZS-EXEC-PROMOTE] FAILED: L3 leaf PTE missing or empty\n");
+		return KERN_FAILURE;
+	}
+
+	/* Acquire native pmap lock exclusively */
+	pmap_lock(pmap, PMAP_LOCK_EXCLUSIVE);
+
+	/* Re-read leaf PTE while holding lock */
+	pt_entry_t spte = *pte_p;
+
+	/* Precondition 5: Revalidate all low-level descriptor invariants while locked */
+	if ((spte & ARM_PTE_TYPE_VALID) != ARM_PTE_TYPE_VALID) {
+		pmap_unlock(pmap, PMAP_LOCK_EXCLUSIVE);
+		xzs_early_puts("[XZS-EXEC-PROMOTE] FAILED: PTE VALID bit missing\n");
+		return KERN_PROTECTION_FAILURE;
+	}
+	if ((spte & ARM_PTE_AF) == 0) {
+		pmap_unlock(pmap, PMAP_LOCK_EXCLUSIVE);
+		xzs_early_puts("[XZS-EXEC-PROMOTE] FAILED: PTE AF bit missing\n");
+		return KERN_PROTECTION_FAILURE;
+	}
+	if ((spte & ARM_PTE_APMASK) != ARM_PTE_AP(AP_RORO)) {
+		pmap_unlock(pmap, PMAP_LOCK_EXCLUSIVE);
+		xzs_early_puts("[XZS-EXEC-PROMOTE] FAILED: PTE AP bits not AP_RORO\n");
+		return KERN_PROTECTION_FAILURE;
+	}
+	if ((spte & ARM_PTE_PNX) == 0) {
+		pmap_unlock(pmap, PMAP_LOCK_EXCLUSIVE);
+		xzs_early_puts("[XZS-EXEC-PROMOTE] FAILED: PTE PXN bit missing\n");
+		return KERN_PROTECTION_FAILURE;
+	}
+	if ((spte & ARM_PTE_NX) == 0) {
+		/* Already non-UXN */
+		pmap_unlock(pmap, PMAP_LOCK_EXCLUSIVE);
+		xzs_early_puts("[XZS-EXEC-PROMOTE] NOTE: PTE UXN bit already cleared\n");
+		return KERN_SUCCESS;
+	}
+
+	/* Calculate new PTE: clear UXN strictly (bit 54: 1 -> 0) */
+	pt_entry_t new_pte = spte & ~ARM_PTE_NX;
+
+	/* Write updated PTE using native primitive */
+	write_pte_fast(pte_p, new_pte);
+
+	/* Synchronize store to memory */
+	FLUSH_PTE_STRONG();
+
+	/* Perform ASID/VA-targeted TLB invalidation */
+	PMAP_UPDATE_TLBS(pmap, va, va + size, false, true);
+
+	/* Read back and verify while locked */
+	pt_entry_t readback = *pte_p;
+	boolean_t verified = (readback == new_pte) && ((readback ^ spte) == ARM_PTE_NX);
+
+	pmap_unlock(pmap, PMAP_LOCK_EXCLUSIVE);
+
+	if (!verified) {
+		xzs_early_puts("[XZS-EXEC-PROMOTE] FAILED: readback verification mismatch\n");
+		return KERN_FAILURE;
+	}
+
+	xzs_early_puts("[XZS-EXEC-PROMOTE] SUCCESS: UXN cleared (1->0), AP=RORO, PXN=1, AF=1 preserved\n");
+	return KERN_SUCCESS;
 }
 #endif

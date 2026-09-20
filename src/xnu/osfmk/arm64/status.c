@@ -2911,7 +2911,9 @@ xzs_d6m4_put_hex32(uint32_t val)
 	xzs_early_puts(buf);
 }
 
-static void
+void xzs_d6m4_put_hex64(uint64_t val);
+
+void
 xzs_d6m4_put_hex64(uint64_t val)
 {
 	extern void xzs_early_puts(const char *s);
