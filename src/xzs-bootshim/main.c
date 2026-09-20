@@ -447,8 +447,13 @@ void bootshim_main(uint64_t dtb_phys, uint64_t current_el, uint64_t mpidr) {
      */
     ba->virtBase = 0xfffffe0006200000ULL - (macho_base - 0x80000000ULL);
     ba->physBase = 0x80000000ULL;
-    ba->memSize = 0x100000000ULL;           /* 4 GB */
-    ba->memSizeActual = 0x100000000ULL;     /* 4 GB */
+    /*
+     * XNU treats memSize as one contiguous allocator-owned range.  Keep the
+     * boot-args contract in sync with /chosen/dram-size: the low 88 MB ends
+     * before the first MSM8996 firmware carveout at 0x85800000.
+     */
+    ba->memSize = 0x05800000ULL;
+    ba->memSizeActual = 0x05800000ULL;
     ba->topOfKernelData = macho_base + 0x01800000ULL; /* 24 MB kernel space */
 
     ba->deviceTreeP = (void *)ADT_BASE_ADDR;
