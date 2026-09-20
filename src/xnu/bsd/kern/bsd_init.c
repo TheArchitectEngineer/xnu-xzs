@@ -2743,6 +2743,12 @@ xzs_d5m2_r8_seal(dev_t root_dev, const char *root_name)
 	xzs_breadcrumb(0xD510, 0x58);
 	xzs_early_puts("  MD0_PADDING_ZERO_VERIFIED:               yes\n\n");
 
+	/* Release D5-M2 block vnode before starting D5-M3 driver probe */
+	if (vp != NULL) {
+		vnode_put(vp);
+		vp = NULL;
+	}
+
 	xzs_breadcrumb(0xD510, 0x60);
 
 	xzs_early_puts("=== D5-M2-R8 FINAL SEAL TELEMETRY BEGIN ===\n");
@@ -2773,8 +2779,14 @@ xzs_d5m2_r8_seal(dev_t root_dev, const char *root_name)
 	xzs_early_puts("D5_COMPLETE:                               no\n");
 	xzs_early_puts("=== D5-M2-R8 FINAL SEAL TELEMETRY END ===\n\n");
 
-	xzs_early_puts("[XZS-RAMDISK] PHASE D5-M2-R8 FINAL SEAL COMPLETE & VERIFIED (PASS)\n");
-	xzs_early_puts("[XZS-RAMDISK] TERMINAL STATE — TRIGGERING WARM RESET TO FASTBOOT\n\n");
+	xzs_early_puts("[XZS-RAMDISK] PHASE D5-M2-R8 FINAL SEAL COMPLETE & VERIFIED (PASS)\n\n");
+
+	/* Phase D5-M3: Native XZSFS Read-Only VFS Driver Probe */
+	extern int xzsfs_d5m3_probe(dev_t rootdev);
+	xzsfs_d5m3_probe(root_dev);
+
+	/* Safety fallback: never return to bsd_init / vfs_mountroot */
 	delay(50000);
 	xzs_spin_halt();
 }
+

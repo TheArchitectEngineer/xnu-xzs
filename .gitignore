@@ -30,3 +30,6 @@ src/xzs-*/*.o
 src/xzs-*/*.elf
 src/xzs-*/*.bin*
 src/xzs-*/*.dis
+
+# Test binaries
+tests/test_xzsfs_host
