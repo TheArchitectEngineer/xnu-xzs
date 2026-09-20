@@ -396,12 +396,6 @@ kmoutput(struct tty * tp)
 			/* output the buffer one charatcer at a time */
 			*cp = *cp & 0x7f;
 		}
-#if CONFIG_XZS_BRINGUP
-		for (int i = 0; i < cc; i++) {
-			extern void xzs_early_putc(char c);
-			xzs_early_putc((char)buf[i]);
-		}
-#endif
 		if (cc > 1) {
 			console_write((char *)buf, cc);
 		} else {
