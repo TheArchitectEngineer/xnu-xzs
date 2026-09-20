@@ -522,7 +522,16 @@ devfs_getattr(struct vnop_getattr_args *ap)
 	VATTR_RETURN(vap, va_nlink, file_node->dn_links);
 	VATTR_RETURN(vap, va_uid, file_node->dn_uid);
 	VATTR_RETURN(vap, va_gid, file_node->dn_gid);
+#if CONFIG_XZS_BRINGUP
+	/*
+	 * vm_kernel_addrhash() enters the generic SHA-256 pointer-hardening path,
+	 * which is not required for the single bring-up devfs instance and does
+	 * not return on MSM8996.  Use a stable non-pointer fsid component here.
+	 */
+	VATTR_RETURN(vap, va_fsid, (uint32_t)0x64657666); /* "devf" */
+#else
 	VATTR_RETURN(vap, va_fsid, (uint32_t)VM_KERNEL_ADDRHASH(file_node->dn_dvm));
+#endif
 	VATTR_RETURN(vap, va_fileid, (uintptr_t)file_node->dn_ino);
 	VATTR_RETURN(vap, va_data_size, file_node->dn_len);
 
