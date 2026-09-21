@@ -133,14 +133,14 @@ int main(int argc, char **argv) {
     assert(launchd_crc == 0xe212a8a2);
 
     /* Payload Verification: /bin/sh */
-    uint8_t *sh_buf = (uint8_t *)malloc(16472);
+    uint8_t *sh_buf = (uint8_t *)malloc(16552);
     const struct xzsfs_core_node *sh_node = NULL;
     xzsfs_core_lookup(&fs, 2, "sh", 2, &sh_node);
     err = xzsfs_core_read(host_block_read, &bctx, sh_node, 0, sh_node->data_length, sh_buf, &bytes_read);
-    assert(err == XZSFS_ERR_OK && bytes_read == 16472);
+    assert(err == XZSFS_ERR_OK && bytes_read == 16552);
     uint32_t sh_crc = xzsfs_crc32(0, sh_buf, bytes_read);
     printf("[PASS] /bin/sh: size=%zu, CRC32=0x%08x\n", bytes_read, sh_crc);
-    assert(sh_crc == 0xc0d8bfcb);
+    assert(sh_crc == 0x5f7036f1);
 
     /* Partial & Unaligned Read Tests */
     /* 1. First byte */

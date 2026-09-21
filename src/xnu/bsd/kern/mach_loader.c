@@ -5691,9 +5691,9 @@ xzs_d7m2_handoff_to_shell(proc_t p, task_t t, thread_t th, void *saved_state)
 	VATTR_WANTED(&va, va_data_size);
 	VATTR_WANTED(&va, va_mode);
 	if (vnode_getattr(vp, &va, ctx) != 0 || !VATTR_IS_SUPPORTED(&va, va_data_size) ||
-	    va.va_data_size != 16472) {
+	    va.va_data_size != 16552) {
 		vnode_put(vp);
-		xzs_d7m2_fatal(0x30, "/bin/sh vnode size mismatch (expected 16472)");
+		xzs_d7m2_fatal(0x30, "/bin/sh vnode size mismatch (expected 16552)");
 		return -1;
 	}
 
