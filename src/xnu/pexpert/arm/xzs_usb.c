@@ -117,6 +117,15 @@ static inline uint32_t xzs_mmio_read32(vm_offset_t base, uint32_t offset)
 	return v;
 }
 
+/* MSM8996 QUSB2 PLL_STATUS is byte-addressed in the source-audited PHY driver. */
+static inline uint8_t xzs_mmio_read8(vm_offset_t base, uint32_t offset)
+{
+	__asm__ volatile("dsb sy" ::: "memory");
+	uint8_t v = *(volatile uint8_t *)(base + offset);
+	__asm__ volatile("dmb ish" ::: "memory");
+	return v;
+}
+
 /* Event Buffer: 64 entries (256 bytes) */
 #define DWC3_EVENT_BUF_SIZE   256
 static uint32_t s_event_buffer[DWC3_EVENT_BUF_SIZE / sizeof(uint32_t)] __attribute__((aligned(64)));
@@ -889,7 +898,7 @@ int xzs_usb_init(void)
 	g_xzs_usb_qscratch_ss_phy_ctrl = g_xzs_usb_qscratch_ss_phy_ctrl_before;
 	g_xzs_usb_qscratch_pwr_event_irq_stat = xzs_mmio_read32(s_qcom_glue_base, QSCRATCH_PWR_EVENT_IRQ_STAT);
 	g_xzs_usb_qusb2_pll_test = xzs_mmio_read32(s_qusb2_phy_base, QUSB2PHY_PLL_TEST);
-	g_xzs_usb_qusb2_pll_status_before = xzs_mmio_read32(s_qusb2_phy_base, QUSB2PHY_PLL_STATUS);
+	g_xzs_usb_qusb2_pll_status_before = xzs_mmio_read8(s_qusb2_phy_base, QUSB2PHY_PLL_STATUS);
 	g_xzs_usb_qusb2_pll_status = g_xzs_usb_qusb2_pll_status_before;
 	g_xzs_usb_qusb2_port_powerdown_before = xzs_mmio_read32(s_qusb2_phy_base, QUSB2PHY_PORT_POWERDOWN);
 	g_xzs_usb_qusb2_port_powerdown = g_xzs_usb_qusb2_port_powerdown_before;
@@ -960,7 +969,7 @@ int xzs_usb_init(void)
 	g_xzs_usb_qscratch_general_cfg = xzs_mmio_read32(s_qcom_glue_base, QSCRATCH_GENERAL_CFG);
 	g_xzs_usb_qscratch_hs_phy_ctrl = xzs_mmio_read32(s_qcom_glue_base, QSCRATCH_HS_PHY_CTRL);
 	g_xzs_usb_qscratch_ss_phy_ctrl = xzs_mmio_read32(s_qcom_glue_base, QSCRATCH_SS_PHY_CTRL);
-	g_xzs_usb_qusb2_pll_status = xzs_mmio_read32(s_qusb2_phy_base, QUSB2PHY_PLL_STATUS);
+	g_xzs_usb_qusb2_pll_status = xzs_mmio_read8(s_qusb2_phy_base, QUSB2PHY_PLL_STATUS);
 	g_xzs_usb_qusb2_port_powerdown = xzs_mmio_read32(s_qusb2_phy_base, QUSB2PHY_PORT_POWERDOWN);
 	g_xzs_usb_gcc_qusb2phy_prim_bcr = xzs_mmio_read32(s_gcc_base, GCC_QUSB2PHY_PRIM_BCR);
 	g_xzs_usb_candidate2b_qscratch_unchanged =
