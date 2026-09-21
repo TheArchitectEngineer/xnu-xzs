@@ -37,6 +37,10 @@ echo "Target device found in Fastboot: $DEV"
 
 # Step 2: Boot XNU
 echo "[2/4] Booting artifacts/builds/xzs-xnu-boot.img..."
+
+# Background injector for D7-M4 external UART acceptance (ABC\n = 41 42 43 0a)
+python3 scripts/host_uart_injector.py 18.0 0.4 &
+
 fastboot boot artifacts/builds/xzs-xnu-boot.img
 sleep 3
 

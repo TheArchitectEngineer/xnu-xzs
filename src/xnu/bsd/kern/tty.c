@@ -2278,13 +2278,31 @@ loop:
 		goto sleep;
 	}
 	if (qp->c_cc <= 0) {
-sleep:
+sleep: ;
 		/*
 		 * There is no input, or not enough input and we can block.
 		 */
+#if CONFIG_XZS_BRINGUP
+		extern volatile int xzs_d7m4_armed;
+		extern volatile int xzs_d7m4_read_entered;
+		extern volatile int xzs_d7m4_read_blocked;
+		extern volatile int xzs_d7m4_read_awakened;
+		if (xzs_d7m4_armed && xzs_d7m4_read_entered &&
+		    p != PROC_NULL && proc_getpid(p) == 1) {
+			xzs_d7m4_read_blocked = 1;
+			__asm__ volatile("dmb ish" ::: "memory");
+		}
+#endif
 		error = ttysleep(tp, TSA_HUP_OR_INPUT(tp), TTIPRI | PCATCH,
 		    ISSET(tp->t_state, TS_CONNECTED) ?
 		    "ttyin" : "ttyhup", (int)slp);
+#if CONFIG_XZS_BRINGUP
+		if (xzs_d7m4_armed && xzs_d7m4_read_blocked && error == 0 &&
+		    p != PROC_NULL && proc_getpid(p) == 1) {
+			xzs_d7m4_read_awakened = 1;
+			__asm__ volatile("dmb ish" ::: "memory");
+		}
+#endif
 		if (error == EWOULDBLOCK) {
 			error = 0;
 		} else if (error) {

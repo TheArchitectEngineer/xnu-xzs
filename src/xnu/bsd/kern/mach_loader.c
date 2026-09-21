@@ -5475,9 +5475,9 @@ xzs_d7m2_breadcrumb(uint32_t cp, uint32_t err)
 	extern void xzs_breadcrumb(uint32_t cp, uint32_t err);
 	uint64_t saved_ttbr0;
 	__asm__ volatile("mrs %0, TTBR0_EL1" : "=r"(saved_ttbr0));
-	__asm__ volatile("msr TTBR0_EL1, %0; isb sy" :: "r"(g_xzs_ttbr0));
+	__asm__ volatile("msr TTBR0_EL1, %0\nisb sy" :: "r"(g_xzs_ttbr0) : "memory");
 	xzs_breadcrumb(cp, err);
-	__asm__ volatile("msr TTBR0_EL1, %0; isb sy" :: "r"(saved_ttbr0));
+	__asm__ volatile("msr TTBR0_EL1, %0\nisb sy" :: "r"(saved_ttbr0) : "memory");
 }
 
 static inline void
@@ -5487,9 +5487,9 @@ xzs_d7m2_puts(const char *s)
 	extern void xzs_early_puts(const char *s);
 	uint64_t saved_ttbr0;
 	__asm__ volatile("mrs %0, TTBR0_EL1" : "=r"(saved_ttbr0));
-	__asm__ volatile("msr TTBR0_EL1, %0; isb sy" :: "r"(g_xzs_ttbr0));
+	__asm__ volatile("msr TTBR0_EL1, %0\nisb sy" :: "r"(g_xzs_ttbr0) : "memory");
 	xzs_early_puts(s);
-	__asm__ volatile("msr TTBR0_EL1, %0; isb sy" :: "r"(saved_ttbr0));
+	__asm__ volatile("msr TTBR0_EL1, %0\nisb sy" :: "r"(saved_ttbr0) : "memory");
 }
 
 static void
@@ -5549,7 +5549,7 @@ xzs_d7m2_fatal(uint32_t step, const char *msg)
 	xzs_d7m2_puts(msg);
 	xzs_d7m2_puts("\n");
 	delay(50000);
-	__asm__ volatile("msr TTBR0_EL1, %0; isb sy" :: "r"(g_xzs_ttbr0));
+	__asm__ volatile("msr TTBR0_EL1, %0\nisb sy" :: "r"(g_xzs_ttbr0) : "memory");
 	xzs_spin_halt();
 }
 
@@ -5691,9 +5691,9 @@ xzs_d7m2_handoff_to_shell(proc_t p, task_t t, thread_t th, void *saved_state)
 	VATTR_WANTED(&va, va_data_size);
 	VATTR_WANTED(&va, va_mode);
 	if (vnode_getattr(vp, &va, ctx) != 0 || !VATTR_IS_SUPPORTED(&va, va_data_size) ||
-	    va.va_data_size != 16552) {
+	    va.va_data_size != 16584) {
 		vnode_put(vp);
-		xzs_d7m2_fatal(0x30, "/bin/sh vnode size mismatch (expected 16552)");
+		xzs_d7m2_fatal(0x30, "/bin/sh vnode size mismatch (expected 16584)");
 		return -1;
 	}
 
@@ -5996,6 +5996,15 @@ volatile int xzs_d7m3_post_prompt_proved = 0;
 volatile int xzs_d7m3_getpid_roundtrips = 0;
 volatile int xzs_d7m3_complete = 0;
 
+/* D7-M4 native stdin state.  These flags report the real syscall/tty path. */
+volatile int xzs_d7m4_armed = 0;
+volatile int xzs_d7m4_read_entered = 0;
+volatile int xzs_d7m4_read_blocked = 0;
+volatile int xzs_d7m4_read_awakened = 0;
+volatile int xzs_d7m4_read_returned = 0;
+volatile int xzs_d7m4_input_match = 0;
+volatile int xzs_d7m4_post_read_el0 = 0;
+
 void
 xzs_d7m3_report_completion(void)
 {
@@ -6135,7 +6144,7 @@ xzs_d7m2_report_completion(void)
 	__asm__ volatile("dmb ish" ::: "memory");
 
 	delay(50000);
-	__asm__ volatile("msr TTBR0_EL1, %0; isb sy" :: "r"(g_xzs_ttbr0));
+	__asm__ volatile("msr TTBR0_EL1, %0\nisb sy" :: "r"(g_xzs_ttbr0) : "memory");
 	xzs_spin_halt();
 }
 #endif

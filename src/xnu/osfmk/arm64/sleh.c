@@ -787,6 +787,11 @@ sleh_synchronous(arm_context_t *context, uint64_t esr, vm_offset_t far, __unused
 	extern volatile int xzs_d7m3_post_prompt_proved;
 	extern volatile int xzs_d7m3_getpid_roundtrips;
 	extern volatile int xzs_d7m3_complete;
+	extern volatile int xzs_d7m4_armed;
+	extern volatile int xzs_d7m4_read_entered;
+	extern volatile int xzs_d7m4_read_returned;
+	extern volatile int xzs_d7m4_input_match;
+	extern volatile int xzs_d7m4_post_read_el0;
 	extern int xzs_d7m2_handoff_to_shell(proc_t p, task_t t, thread_t th, void *saved_state);
 	extern void xzs_d7m2_report_completion(void);
 	extern void xzs_d7m3_report_completion(void);
@@ -865,6 +870,35 @@ sleh_synchronous(arm_context_t *context, uint64_t esr, vm_offset_t far, __unused
 			}
 			/* Subsequent known-safe getpid calls remain on the native path. */
 			goto xzs_d6m5_dispatch_first_svc;
+		} else if (is_user && class == ESR_EC_SVC_64 && xzs_d7m4_armed) {
+			if (!xzs_d7m4_read_entered &&
+			    ESR_ISS(esr) == 0x80 &&
+			    elr == 0x0000000100000888ULL &&
+			    ss64->x[0] == 0 &&
+			    ss64->x[1] == sp_el0 &&
+			    ss64->x[2] == 16 &&
+			    ss64->x[16] == 3) {
+				xzs_d7m4_read_entered = 1;
+				__asm__ volatile("dmb ish" ::: "memory");
+				goto xzs_d6m5_dispatch_first_svc;
+			} else if (xzs_d7m4_read_returned &&
+			    ESR_ISS(esr) == 0x80 &&
+			    elr == 0x00000001000008acULL &&
+			    ss64->x[16] == 20) {
+				/* Reaching this callsite proves the EL0 byte comparisons passed. */
+				xzs_d7m4_input_match = 1;
+				__asm__ volatile("dmb ish" ::: "memory");
+				goto xzs_d6m5_dispatch_first_svc;
+			} else if (xzs_d7m4_read_returned &&
+			    ESR_ISS(esr) == 0x80 &&
+			    elr == 0x00000001000008b8ULL &&
+			    ss64->x[16] == 20) {
+				/* Deterministic failure-side liveness marker; never acceptance. */
+				goto xzs_d6m5_dispatch_first_svc;
+			} else {
+				xzs_d6m4_r650_telemetry.unexpected_exception = 1;
+				__asm__ volatile("dmb ish" ::: "memory");
+			}
 		} else if (is_user && class == ESR_EC_SVC_64 && xzs_d7m3_armed) {
 			if (!xzs_d7m3_banner_trapped &&
 			    ESR_ISS(esr) == 0x80 &&
@@ -1132,8 +1166,26 @@ xzs_d6m5_dispatch_first_svc:
 						xzs_breadcrumb(0xD720, 0x50);
 						xzs_early_puts("[XZS-D7M3] D720/50 64th post-prompt getpid returned successfully\n");
 						xzs_d7m3_report_completion();
+						/* D7-M4 begins only after the sealed D720 contract is complete. */
+						xzs_d7m4_armed = 1;
+						set_saved_state_pc(state, 0x0000000100000870ULL);
+						__asm__ volatile("dmb ish" ::: "memory");
 					}
 				}
+			}
+		}
+		if (xzs_d7m4_armed && xzs_d7m4_read_entered && !xzs_d7m4_read_returned) {
+			arm_saved_state64_t *ss_ret = saved_state64(state);
+			xzs_d7m4_read_returned = 1;
+			__asm__ volatile("dmb ish" ::: "memory");
+			if (ss_ret->x[0] != 4 || (ss_ret->cpsr & 0x20000000ULL) != 0) {
+				xzs_d7m4_input_match = 0;
+			}
+		} else if (xzs_d7m4_armed && xzs_d7m4_input_match && !xzs_d7m4_post_read_el0) {
+			arm_saved_state64_t *ss_ret = saved_state64(state);
+			if (ss_ret->x[0] == 1 && (ss_ret->cpsr & 0x20000000ULL) == 0) {
+				xzs_d7m4_post_read_el0 = 1;
+				__asm__ volatile("dmb ish" ::: "memory");
 			}
 		}
 		if (xzs_d7m2_shell_active && xzs_d7m2_write_trapped && !xzs_d7m2_write_completed) {
@@ -2898,6 +2950,16 @@ sleh_irq(arm_saved_state_t *state)
 			cpu_signal_handler();
 		}
 
+		entropy_collect();
+		sleh_interrupt_handler_epilogue();
+		return;
+	}
+
+	/* Qualcomm BLSP2 UART2: DT SPI 114 maps to architectural INTID 146. */
+	if (irq_id == 146) {
+		extern void xzs_uart_rx_irq_handler(void);
+		xzs_uart_rx_irq_handler();
+		__asm__ volatile("msr ICC_EOIR1_EL1, %0\nisb" :: "r"(iar));
 		entropy_collect();
 		sleh_interrupt_handler_epilogue();
 		return;
