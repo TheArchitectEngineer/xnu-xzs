@@ -842,11 +842,6 @@ sleh_synchronous(arm_context_t *context, uint64_t esr, vm_offset_t far, __unused
 		    xzs_d6m4_r650_telemetry.post_signature_valid != 0 &&
 		    ESR_ISS(esr) == 0x80 &&
 		    elr == 0x000000010000030cULL && ss64->x[16] == 20) {
-			if (xzs_d7m2_armed && !xzs_d7m2_shell_active) {
-				/* Same PID1 thread enters kernel from sustained loop: handoff to shell */
-				(void)xzs_d7m2_handoff_to_shell(current_proc(), current_task(), current_thread(), state);
-				return;
-			}
 			/* Subsequent known-safe getpid calls remain on the native path. */
 			goto xzs_d6m5_dispatch_first_svc;
 		} else if (is_user && class == ESR_EC_SVC_64 && xzs_d7m2_shell_active) {
@@ -1025,6 +1020,14 @@ xzs_d6m5_dispatch_first_svc:
 		if (!is_saved_state64(state) || !is_user) {
 			panic("Invalid SVC_64 context");
 		}
+
+#if CONFIG_XZS_BRINGUP
+		if (xzs_d7m2_armed && !xzs_d7m2_shell_active) {
+			/* Same PID1 thread enters kernel in legal sleep/lock context: handoff to shell */
+			(void)xzs_d7m2_handoff_to_shell(current_proc(), current_task(), current_thread(), state);
+			break;
+		}
+#endif
 
 		handle_svc(state);
 #if CONFIG_XZS_BRINGUP
