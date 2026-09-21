@@ -624,6 +624,13 @@ void
 console_write_char(char c)
 {
 	console_write(&c, 1);
+#if defined(__arm64__)
+	extern volatile uint32_t g_xzs_usb_console_ready;
+	extern void xzs_usb_console_putc(char c);
+	if (g_xzs_usb_console_ready) {
+		xzs_usb_console_putc(c);
+	}
+#endif
 }
 
 /**

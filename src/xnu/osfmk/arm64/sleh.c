@@ -2965,6 +2965,16 @@ sleh_irq(arm_saved_state_t *state)
 		return;
 	}
 
+	/* Qualcomm DWC3 USB: DT SPI 131 maps to architectural INTID 163. */
+	if (irq_id == 163) {
+		extern void xzs_usb_irq_handler(void);
+		xzs_usb_irq_handler();
+		__asm__ volatile("msr ICC_EOIR1_EL1, %0\nisb" :: "r"(iar));
+		entropy_collect();
+		sleh_interrupt_handler_epilogue();
+		return;
+	}
+
 	if (irq_id == 27 || irq_id == 30) {
 		uint64_t cur_mpidr = 0;
 		__asm__ volatile("mrs %0, MPIDR_EL1" : "=r"(cur_mpidr));
