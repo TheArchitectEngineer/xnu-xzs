@@ -3647,7 +3647,9 @@ xzs_d6m4_monitor_and_report_r650(task_t t, thread_t th)
 		xzs_early_puts("[XZS-D7T1] D740/00 T1 minimal USB console entered\n");
 
 		int usb_rc = xzs_usb_init();
+		(void)usb_rc;
 		boolean_t gsnpsid_valid = ((g_xzs_usb_gsnpsid & 0xFFFF0000) == 0x55330000);
+		(void)gsnpsid_valid;
 
 		/* Wait / poll for host enumeration over USB-C */
 		extern void xzs_watchdog_pet(void);

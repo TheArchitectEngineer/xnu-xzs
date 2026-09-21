@@ -186,6 +186,39 @@ static int dwc3_ep_cmd(uint32_t epnum, uint32_t cmd, uint32_t p0, uint32_t p1, u
 }
 
 /*
+ * Issue DWC3 DEPCMD_STARTTRANSFER command
+ * DWC3 specification: PAR0 = upper 32 bits, PAR1 = lower 32 bits
+ */
+static int dwc3_start_transfer(uint32_t epnum, vm_offset_t pa_trb)
+{
+	dwc3_write32(DWC3_DEPCMDPAR0(epnum), (uint32_t)(pa_trb >> 32));
+	dwc3_write32(DWC3_DEPCMDPAR1(epnum), (uint32_t)pa_trb);
+	dwc3_write32(DWC3_DEPCMDPAR2(epnum), 0);
+	dwc3_write32(DWC3_DEPCMD(epnum), DEPCMD_STARTTRANSFER | DEPCMD_CMDACT);
+
+	for (int i = 0; i < 5000; i++) {
+		xzs_watchdog_pet();
+		uint32_t reg = dwc3_read32(DWC3_DEPCMD(epnum));
+		if (!(reg & DEPCMD_CMDACT)) {
+			int status = (int)(reg & 0x0F);
+			if (status != 0) {
+				xzs_early_puts("[XZS-USB] STARTTRANSFER error ep=");
+				xzs_d6m4_put_hex64(epnum);
+				xzs_early_puts(" status=");
+				xzs_d6m4_put_hex64(status);
+				xzs_early_puts("\n");
+			}
+			return (int)((reg >> 16) & 0x7F);
+		}
+		delay(10);
+	}
+	xzs_early_puts("[XZS-USB] STARTTRANSFER TIMEOUT ep=");
+	xzs_d6m4_put_hex64(epnum);
+	xzs_early_puts("\n");
+	return -1;
+}
+
+/*
  * Standard USB Descriptors
  */
 static const uint8_t s_device_descriptor[18] = {
@@ -331,19 +364,9 @@ static void dwc3_submit_ep0_setup(void)
 	flush_dcache((vm_offset_t)&s_ep0_setup_trb, sizeof(s_ep0_setup_trb), FALSE);
 	__asm__ volatile("dsb sy" ::: "memory");
 
-	dwc3_write32(DWC3_DEPCMDPAR0(DWC3_PHYS_EP_CTRL_OUT), (uint32_t)pa_trb);
-	dwc3_write32(DWC3_DEPCMDPAR1(DWC3_PHYS_EP_CTRL_OUT), (uint32_t)(pa_trb >> 32));
-	dwc3_write32(DWC3_DEPCMDPAR2(DWC3_PHYS_EP_CTRL_OUT), 0);
-	dwc3_write32(DWC3_DEPCMD(DWC3_PHYS_EP_CTRL_OUT), DEPCMD_STARTTRANSFER | DEPCMD_CMDACT);
-
-	for (int i = 0; i < 1000; i++) {
-		xzs_watchdog_pet();
-		uint32_t reg = dwc3_read32(DWC3_DEPCMD(DWC3_PHYS_EP_CTRL_OUT));
-		if (!(reg & DEPCMD_CMDACT)) {
-			s_ep0_out_rsc_idx = (uint8_t)((reg >> 16) & 0x7F);
-			break;
-		}
-		delay(10);
+	int rsc = dwc3_start_transfer(DWC3_PHYS_EP_CTRL_OUT, pa_trb);
+	if (rsc >= 0) {
+		s_ep0_out_rsc_idx = (uint8_t)rsc;
 	}
 }
 
@@ -369,12 +392,10 @@ static void dwc3_ep0_send_data(const void *data, uint32_t len)
 	flush_dcache((vm_offset_t)&s_ep0_data_trb, sizeof(s_ep0_data_trb), FALSE);
 	__asm__ volatile("dsb sy" ::: "memory");
 
-	dwc3_write32(DWC3_DEPCMDPAR0(DWC3_PHYS_EP_CTRL_IN), (uint32_t)pa_trb);
-	dwc3_write32(DWC3_DEPCMDPAR1(DWC3_PHYS_EP_CTRL_IN), (uint32_t)(pa_trb >> 32));
-	dwc3_write32(DWC3_DEPCMD(DWC3_PHYS_EP_CTRL_IN), DEPCMD_STARTTRANSFER | DEPCMD_CMDACT);
-
-	uint32_t reg = dwc3_read32(DWC3_DEPCMD(DWC3_PHYS_EP_CTRL_IN));
-	s_ep0_in_rsc_idx = (uint8_t)((reg >> 16) & 0x7F);
+	int rsc = dwc3_start_transfer(DWC3_PHYS_EP_CTRL_IN, pa_trb);
+	if (rsc >= 0) {
+		s_ep0_in_rsc_idx = (uint8_t)rsc;
+	}
 }
 
 /*
@@ -393,9 +414,7 @@ static void dwc3_ep0_send_status(uint32_t epnum, uint32_t trbctl)
 	flush_dcache((vm_offset_t)&s_ep0_status_trb, sizeof(s_ep0_status_trb), FALSE);
 	__asm__ volatile("dsb sy" ::: "memory");
 
-	dwc3_write32(DWC3_DEPCMDPAR0(epnum), (uint32_t)pa_trb);
-	dwc3_write32(DWC3_DEPCMDPAR1(epnum), (uint32_t)(pa_trb >> 32));
-	dwc3_write32(DWC3_DEPCMD(epnum), DEPCMD_STARTTRANSFER | DEPCMD_CMDACT);
+	dwc3_start_transfer(epnum, pa_trb);
 }
 
 static void dwc3_ep0_stall(void)
@@ -542,12 +561,10 @@ static void dwc3_submit_bulk_out(void)
 	flush_dcache((vm_offset_t)&s_bulk_out_trb, sizeof(s_bulk_out_trb), FALSE);
 	__asm__ volatile("dsb sy" ::: "memory");
 
-	dwc3_write32(DWC3_DEPCMDPAR0(DWC3_PHYS_EP_BULK_OUT), (uint32_t)pa_trb);
-	dwc3_write32(DWC3_DEPCMDPAR1(DWC3_PHYS_EP_BULK_OUT), (uint32_t)(pa_trb >> 32));
-	dwc3_write32(DWC3_DEPCMD(DWC3_PHYS_EP_BULK_OUT), DEPCMD_STARTTRANSFER | DEPCMD_CMDACT);
-
-	uint32_t reg = dwc3_read32(DWC3_DEPCMD(DWC3_PHYS_EP_BULK_OUT));
-	s_bulk_out_rsc_idx = (uint8_t)((reg >> 16) & 0x7F);
+	int rsc = dwc3_start_transfer(DWC3_PHYS_EP_BULK_OUT, pa_trb);
+	if (rsc >= 0) {
+		s_bulk_out_rsc_idx = (uint8_t)rsc;
+	}
 }
 
 /*
@@ -612,12 +629,10 @@ static void dwc3_flush_tx_to_bulk_in(void)
 	flush_dcache((vm_offset_t)&s_bulk_in_trb, sizeof(s_bulk_in_trb), FALSE);
 	__asm__ volatile("dsb sy" ::: "memory");
 
-	dwc3_write32(DWC3_DEPCMDPAR0(DWC3_PHYS_EP_BULK_IN), (uint32_t)pa_trb);
-	dwc3_write32(DWC3_DEPCMDPAR1(DWC3_PHYS_EP_BULK_IN), (uint32_t)(pa_trb >> 32));
-	dwc3_write32(DWC3_DEPCMD(DWC3_PHYS_EP_BULK_IN), DEPCMD_STARTTRANSFER | DEPCMD_CMDACT);
-
-	uint32_t reg = dwc3_read32(DWC3_DEPCMD(DWC3_PHYS_EP_BULK_IN));
-	s_bulk_in_rsc_idx = (uint8_t)((reg >> 16) & 0x7F);
+	int rsc = dwc3_start_transfer(DWC3_PHYS_EP_BULK_IN, pa_trb);
+	if (rsc >= 0) {
+		s_bulk_in_rsc_idx = (uint8_t)rsc;
+	}
 }
 
 /*

@@ -82,11 +82,11 @@ struct dwc3_trb {
 #define DWC3_TRB_CTRL_LST             (1u << 1)
 #define DWC3_TRB_CTRL_CHN             (1u << 2)
 #define DWC3_TRB_CTRL_CSP             (1u << 3)
-#define DWC3_TRB_CTRL_TRBCTL_NORMAL   (0u << 4)
-#define DWC3_TRB_CTRL_TRBCTL_CTRL_SETUP (1u << 4)
-#define DWC3_TRB_CTRL_TRBCTL_CTRL_STATUS2 (2u << 4)
-#define DWC3_TRB_CTRL_TRBCTL_CTRL_STATUS3 (3u << 4)
-#define DWC3_TRB_CTRL_TRBCTL_CTRL_DATA  (4u << 4)
+#define DWC3_TRB_CTRL_TRBCTL_NORMAL   (1u << 4)
+#define DWC3_TRB_CTRL_TRBCTL_CTRL_SETUP (2u << 4)
+#define DWC3_TRB_CTRL_TRBCTL_CTRL_STATUS2 (3u << 4)
+#define DWC3_TRB_CTRL_TRBCTL_CTRL_STATUS3 (4u << 4)
+#define DWC3_TRB_CTRL_TRBCTL_CTRL_DATA  (5u << 4)
 #define DWC3_TRB_CTRL_ISP_IMI         (1u << 10)
 #define DWC3_TRB_CTRL_IOC             (1u << 11)
 
@@ -127,6 +127,7 @@ void xzs_usb_console_putc(char c);
 int  xzs_usb_send_bulk_in(const uint8_t *data, uint32_t len);
 boolean_t xzs_usb_is_enumerated(void);
 boolean_t xzs_usb_is_console_ready(void);
+uint32_t  dwc3_read32_pub(uint32_t offset);
 
 /* Telemetry Exports */
 extern volatile uint32_t g_xzs_usb_gsnpsid;
