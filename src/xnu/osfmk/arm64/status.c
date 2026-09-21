@@ -3596,9 +3596,9 @@ xzs_d6m4_monitor_and_report_r650(task_t t, thread_t th)
 		xzs_early_puts("GIC_TRIGGER_TYPE=LEVEL_HIGH\n");
 		xzs_early_puts(g_xzs_uart_rx_irq_configured ? "UARTDM_RX_IRQ_CONFIGURED=yes\n" : "UARTDM_RX_IRQ_CONFIGURED=no\n");
 		xzs_early_puts(g_xzs_uart_rx_irq_count > 0 ? "UARTDM_RX_IRQ_WORKING=yes\n" : "UARTDM_RX_IRQ_WORKING=no\n");
-		xzs_early_puts("UARTDM_RX_IRQ_COUNT=0x"); xzs_d6m4_put_hex64(g_xzs_uart_rx_irq_count); xzs_early_puts("\n");
-		xzs_early_puts("UARTDM_RX_IRQ_BYTE_COUNT=0x"); xzs_d6m4_put_hex64(g_xzs_uart_rx_irq_byte_count); xzs_early_puts("\n");
-		xzs_early_puts("UARTDM_RX_IRQ_LAST_ISR=0x"); xzs_d6m4_put_hex64(g_xzs_uart_rx_irq_last_isr); xzs_early_puts("\n");
+		xzs_early_puts("UARTDM_RX_IRQ_COUNT="); xzs_d6m4_put_hex64(g_xzs_uart_rx_irq_count); xzs_early_puts("\n");
+		xzs_early_puts("UARTDM_RX_IRQ_BYTE_COUNT="); xzs_d6m4_put_hex64(g_xzs_uart_rx_irq_byte_count); xzs_early_puts("\n");
+		xzs_early_puts("UARTDM_RX_IRQ_LAST_ISR="); xzs_d6m4_put_hex64(g_xzs_uart_rx_irq_last_isr); xzs_early_puts("\n");
 		xzs_early_puts("UARTDM_RX_MODE=IRQ_WITH_BOUNDED_POLL_FALLBACK\n");
 		xzs_early_puts(received == 4 ? "UARTDM_RECEIVE_READY_WORKING=yes\n" : "UARTDM_RECEIVE_READY_WORKING=no\n");
 		xzs_early_puts(received == 4 ? "UARTDM_RECEIVE_DATA_WORKING=yes\n" : "UARTDM_RECEIVE_DATA_WORKING=no\n");
