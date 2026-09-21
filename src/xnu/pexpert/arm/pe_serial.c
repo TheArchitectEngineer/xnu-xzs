@@ -28,6 +28,7 @@
 #include <arm64/proc_reg.h>
 #include <pexpert/arm/protos.h>
 #include <kern/sched_prim.h>
+#include <kern/thread_call.h>
 #ifdef PL011_UART
 #include <pexpert/arm/pl011.h>
 #endif /* PL011_UART */
@@ -867,6 +868,7 @@ volatile uint32_t g_xzs_uart_rx_irq_byte_count = 0;
 volatile uint32_t g_xzs_uart_rx_irq_tty_count = 0;
 volatile uint32_t g_xzs_uart_rx_irq_last_isr = 0;
 volatile uint32_t g_xzs_uart_rx_irq_configured = 0;
+static thread_call_t g_xzs_uart_rx_tty_call = NULL;
 
 void
 xzs_uart_rx_ring_init(void)
@@ -1381,6 +1383,22 @@ xzs_uart_gic_enable_spi114(void)
 	return (*(volatile uint32_t *)(gicd_base + 0x0100U + word * 4U) & bit) != 0;
 }
 
+static void
+xzs_uart_rx_tty_deferred(thread_call_param_t param0 __unused,
+    thread_call_param_t param1 __unused)
+{
+	extern void cons_cinput(char ch);
+	uint32_t consumed = 0;
+	int ch;
+
+	while ((ch = xzs_uart_rx_ring_get()) != -1) {
+		cons_cinput((char)ch);
+		consumed++;
+	}
+	g_xzs_uart_rx_irq_tty_count += consumed;
+	__asm__ volatile("dmb ish" ::: "memory");
+}
+
 /*
  * Prepare the one-shot D7-M4 IRQ acceptance source.  Polling helpers remain
  * intact as the bounded diagnostic fallback, but this path relies on RXSTALE
@@ -1394,6 +1412,12 @@ xzs_uart_rx_irq_prepare_internal_loopback(void)
 	}
 
 	msm_uart_write(MSM_UART_IMR, 0);
+	if (g_xzs_uart_rx_tty_call == NULL) {
+		g_xzs_uart_rx_tty_call = thread_call_allocate(xzs_uart_rx_tty_deferred, NULL);
+		if (g_xzs_uart_rx_tty_call == NULL) {
+			return 0;
+		}
+	}
 	xzs_uart_rx_ring_init();
 	msm_uart_init_rx_transfer();
 	msm_uart_write(MSM_UART_MR2, msm_uart_read(MSM_UART_MR2) | 0x80U);
@@ -1455,11 +1479,9 @@ xzs_uart_internal_loopback_trigger_irq(const uint8_t *bytes, uint32_t length)
 void
 xzs_uart_rx_irq_handler(void)
 {
-	extern void cons_cinput(char ch);
 	uint32_t isr = msm_uart_read(MSM_UART_ISR);
 	uint32_t sr = msm_uart_read(MSM_UART_SR);
 	uint32_t produced = 0;
-	uint32_t consumed = 0;
 
 	g_xzs_uart_rx_irq_count++;
 	g_xzs_uart_rx_irq_last_isr = isr;
@@ -1477,13 +1499,10 @@ xzs_uart_rx_irq_handler(void)
 		}
 	}
 
-	int ch;
-	while ((ch = xzs_uart_rx_ring_get()) != -1) {
-		cons_cinput((char)ch);
-		consumed++;
+	if (produced > 0 && g_xzs_uart_rx_tty_call != NULL) {
+		(void)thread_call_enter(g_xzs_uart_rx_tty_call);
 	}
 	g_xzs_uart_rx_irq_byte_count += produced;
-	g_xzs_uart_rx_irq_tty_count += consumed;
 	__asm__ volatile("dmb ish" ::: "memory");
 }
 
