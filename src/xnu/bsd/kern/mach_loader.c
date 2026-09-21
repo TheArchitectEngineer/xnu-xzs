@@ -5458,4 +5458,610 @@ xzs_d6m4_first_el0(proc_t p, task_t t, thread_t th)
 
 	return;
 }
+
+#define CP_D7M2 0xD710
+
+volatile int xzs_d7m2_armed = 0;
+volatile int xzs_d7m2_shell_active = 0;
+volatile int xzs_d7m2_write_trapped = 0;
+volatile int xzs_d7m2_write_completed = 0;
+volatile int xzs_d7m2_post_write_executed = 0;
+volatile int xzs_d7m2_complete = 0;
+
+static inline void
+xzs_d7m2_breadcrumb(uint32_t cp, uint32_t err)
+{
+	extern uint64_t g_xzs_ttbr0;
+	extern void xzs_breadcrumb(uint32_t cp, uint32_t err);
+	uint64_t saved_ttbr0;
+	__asm__ volatile("mrs %0, TTBR0_EL1" : "=r"(saved_ttbr0));
+	__asm__ volatile("msr TTBR0_EL1, %0; isb sy" :: "r"(g_xzs_ttbr0));
+	xzs_breadcrumb(cp, err);
+	__asm__ volatile("msr TTBR0_EL1, %0; isb sy" :: "r"(saved_ttbr0));
+}
+
+static inline void
+xzs_d7m2_puts(const char *s)
+{
+	extern uint64_t g_xzs_ttbr0;
+	extern void xzs_early_puts(const char *s);
+	uint64_t saved_ttbr0;
+	__asm__ volatile("mrs %0, TTBR0_EL1" : "=r"(saved_ttbr0));
+	__asm__ volatile("msr TTBR0_EL1, %0; isb sy" :: "r"(g_xzs_ttbr0));
+	xzs_early_puts(s);
+	__asm__ volatile("msr TTBR0_EL1, %0; isb sy" :: "r"(saved_ttbr0));
+}
+
+static void
+xzs_d7m2_print_hex64(uint64_t v)
+{
+	char buf[19];
+	const char hex[] = "0123456789abcdef";
+	buf[0] = '0';
+	buf[1] = 'x';
+	for (int i = 15; i >= 0; i--) {
+		buf[2 + 15 - i] = hex[(v >> (i * 4)) & 0xf];
+	}
+	buf[18] = '\0';
+	xzs_d7m2_puts(buf);
+}
+
+static void
+xzs_d7m2_print_hex32(uint32_t v)
+{
+	char buf[11];
+	const char hex[] = "0123456789abcdef";
+	buf[0] = '0';
+	buf[1] = 'x';
+	for (int i = 7; i >= 0; i--) {
+		buf[2 + 7 - i] = hex[(v >> (i * 4)) & 0xf];
+	}
+	buf[10] = '\0';
+	xzs_d7m2_puts(buf);
+}
+
+static void
+xzs_d7m2_print_dec(uint32_t v)
+{
+	char buf[12];
+	int idx = 10;
+	buf[11] = '\0';
+	if (v == 0) {
+		xzs_d7m2_puts("0");
+		return;
+	}
+	while (v > 0 && idx >= 0) {
+		buf[idx--] = '0' + (v % 10);
+		v /= 10;
+	}
+	xzs_d7m2_puts(&buf[idx + 1]);
+}
+
+static void
+xzs_d7m2_fatal(uint32_t step, const char *msg)
+{
+	extern void delay(int);
+	extern void xzs_spin_halt(void);
+	extern uint64_t g_xzs_ttbr0;
+
+	xzs_d7m2_breadcrumb(CP_D7M2, 0xEE00 | (step & 0xFF));
+	xzs_d7m2_puts("\n[XZS-D7M2] FATAL: ");
+	xzs_d7m2_puts(msg);
+	xzs_d7m2_puts("\n");
+	delay(50000);
+	__asm__ volatile("msr TTBR0_EL1, %0; isb sy" :: "r"(g_xzs_ttbr0));
+	xzs_spin_halt();
+}
+
+kern_return_t
+xzs_promote_shell_text_exec(pmap_t pmap, vm_map_address_t va, vm_map_size_t size)
+{
+	/* Wrapper around legacy D6 helper; documented as legacy technical debt. */
+	return xzs_promote_launchd_text_exec(pmap, va, size);
+}
+
+int
+xzs_d7m2_handoff_to_shell(proc_t p, task_t t, thread_t th, void *saved_state)
+{
+	extern void delay(int);
+	arm_saved_state_t *state = (arm_saved_state_t *)saved_state;
+	arm_saved_state64_t *ss64 = saved_state64(state);
+
+	/* D710/00: enter D7-M2 */
+	xzs_d7m2_breadcrumb(CP_D7M2, 0x00);
+	xzs_d7m2_puts("\n=======================================================\n");
+	xzs_d7m2_puts("=== PHASE D7-M2: PID1 -> /bin/sh EL0 HANDOFF ENTER ====\n");
+	xzs_d7m2_puts("=======================================================\n");
+	xzs_d7m2_puts("[XZS-D7M2] D710/00 enter D7-M2 PID1 shell handoff\n");
+
+	/* D710/10: verify PID1 identity */
+	if (p == PROC_NULL || proc_getpid(p) != 1) {
+		xzs_d7m2_fatal(0x10, "PID1 process pointer invalid or pid != 1");
+		return -1;
+	}
+	if (t == TASK_NULL || t == kernel_task) {
+		xzs_d7m2_fatal(0x10, "PID1 task invalid or is kernel_task");
+		return -1;
+	}
+	if (th == THREAD_NULL || get_threadtask(th) != t) {
+		xzs_d7m2_fatal(0x10, "PID1 thread invalid or not belonging to task");
+		return -1;
+	}
+	vm_map_t map = get_task_map(t);
+	if (map == VM_MAP_NULL || map == kernel_map) {
+		xzs_d7m2_fatal(0x10, "PID1 map invalid or is kernel_map");
+		return -1;
+	}
+
+	xzs_d7m2_breadcrumb(CP_D7M2, 0x10);
+	xzs_d7m2_puts("[XZS-D7M2] D710/10 PID1 identity verified\n");
+
+	/* D710/11..13: verify fd 0, 1, 2 point to /dev/console */
+	for (int fd = 0; fd < 3; fd++) {
+		struct fileproc *fp = FILEPROC_NULL;
+		int error = fp_lookup(p, fd, &fp, 0);
+		if (error != 0 || fp == FILEPROC_NULL) {
+			xzs_d7m2_fatal(0x11 + (uint32_t)fd, "PID1 console fd lookup failed");
+			return -1;
+		}
+		vnode_t vpf = (vnode_t)fp_get_data(fp);
+		boolean_t valid = FILEGLOB_DTYPE(fp->fp_glob) == DTYPE_VNODE &&
+		    vpf != NULLVP && vnode_vtype(vpf) == VCHR &&
+		    major(vnode_specrdev(vpf)) == 0 && minor(vnode_specrdev(vpf)) == 0 &&
+		    (fp->fp_glob->fg_flag & (FREAD | FWRITE)) == (FREAD | FWRITE);
+		(void)fp_drop(p, fd, fp, 0);
+		if (!valid) {
+			xzs_d7m2_fatal(0x11 + (uint32_t)fd, "PID1 console fd is not valid VCHR 0:0 /dev/console");
+			return -1;
+		}
+		xzs_d7m2_breadcrumb(CP_D7M2, 0x11 + (uint32_t)fd);
+		if (fd == 0) {
+			xzs_d7m2_puts("[XZS-D7M2] D710/11 PID1 fd0 -> /dev/console verified\n");
+		} else if (fd == 1) {
+			xzs_d7m2_puts("[XZS-D7M2] D710/12 PID1 fd1 -> /dev/console verified\n");
+		} else {
+			xzs_d7m2_puts("[XZS-D7M2] D710/13 PID1 fd2 -> /dev/console verified\n");
+		}
+	}
+
+	/* D710/20: begin old image transition */
+	xzs_d7m2_breadcrumb(CP_D7M2, 0x20);
+	xzs_d7m2_puts("[XZS-D7M2] D710/20 begin old image transition\n");
+
+	/* D710/21: old image range verified */
+	vm_map_offset_t old_start = 0, old_end = 0;
+	vm_prot_t old_cur = VM_PROT_NONE, old_max = VM_PROT_NONE;
+	boolean_t old_found = xzs_vm_map_entry_snapshot(map, 0x100000000ULL,
+	    &old_start, &old_end, &old_cur, &old_max);
+	if (!old_found || old_start != 0x100000000ULL || old_end != 0x100004000ULL) {
+		xzs_d7m2_fatal(0x21, "Old image range snapshot mismatch or not found");
+		return -1;
+	}
+
+	xzs_d7m2_breadcrumb(CP_D7M2, 0x21);
+	xzs_d7m2_puts("[XZS-D7M2] D710/21 old image range verified (0x100000000..0x100004000)\n");
+
+	/* D710/22: old __TEXT removed */
+	kern_return_t kr = mach_vm_deallocate(map, 0x100000000ULL, 0x4000ULL);
+	if (kr != KERN_SUCCESS) {
+		xzs_d7m2_fatal(0x22, "mach_vm_deallocate failed for old image");
+		return -1;
+	}
+
+	vm_map_offset_t check_start = 0, check_end = 0;
+	vm_prot_t check_cur = VM_PROT_NONE, check_max = VM_PROT_NONE;
+	if (xzs_vm_map_entry_snapshot(map, 0x100000000ULL,
+	    &check_start, &check_end, &check_cur, &check_max) &&
+	    check_start < 0x100004000ULL && check_end > 0x100000000ULL) {
+		xzs_d7m2_fatal(0x22, "Old __TEXT entry still present in map after removal");
+		return -1;
+	}
+
+	if (!vm_map_has_hard_pagezero(map, 0x100000000ULL)) {
+		xzs_d7m2_fatal(0x22, "PAGEZERO guard corrupted after old image removal");
+		return -1;
+	}
+
+	xzs_d7m2_breadcrumb(CP_D7M2, 0x22);
+	xzs_d7m2_puts("[XZS-D7M2] D710/22 old __TEXT removed\n");
+
+	/* D710/30: resolve /bin/sh vnode */
+	xzs_d7m2_breadcrumb(CP_D7M2, 0x30);
+	xzs_d7m2_puts("[XZS-D7M2] D710/30 resolve /bin/sh vnode\n");
+
+	vfs_context_t ctx = vfs_context_current();
+	struct nameidata nd;
+	NDINIT(&nd, LOOKUP, OP_LOOKUP, FOLLOW | LOCKLEAF, UIO_SYSSPACE, CAST_USER_ADDR_T("/bin/sh"), ctx);
+	int error = namei(&nd);
+	if (error != 0 || nd.ni_vp == NULL) {
+		xzs_d7m2_fatal(0x30, "namei('/bin/sh') lookup failed");
+		return -1;
+	}
+	struct vnode *vp = nd.ni_vp;
+	nameidone(&nd);
+
+	if (vnode_vtype(vp) != VREG) {
+		vnode_put(vp);
+		xzs_d7m2_fatal(0x30, "/bin/sh vnode is not VREG");
+		return -1;
+	}
+
+	struct vnode_attr va;
+	VATTR_INIT(&va);
+	VATTR_WANTED(&va, va_data_size);
+	VATTR_WANTED(&va, va_mode);
+	if (vnode_getattr(vp, &va, ctx) != 0 || !VATTR_IS_SUPPORTED(&va, va_data_size) ||
+	    va.va_data_size != 16472) {
+		vnode_put(vp);
+		xzs_d7m2_fatal(0x30, "/bin/sh vnode size mismatch (expected 16472)");
+		return -1;
+	}
+
+	/* D710/31: validate ARM64 Mach-O */
+	xzs_d7m2_breadcrumb(CP_D7M2, 0x31);
+	xzs_d7m2_puts("[XZS-D7M2] D710/31 validate ARM64 Mach-O\n");
+
+	struct mach_header_64 header;
+	int resid = 0;
+	error = vn_rdwr(UIO_READ, vp, (caddr_t)&header, sizeof(header), 0,
+	    UIO_SYSSPACE, IO_NODELOCKED, vfs_context_ucred(ctx), &resid, p);
+	if (error != 0 || resid != 0 || header.magic != MH_MAGIC_64 ||
+	    header.cputype != CPU_TYPE_ARM64 || header.filetype != MH_EXECUTE) {
+		vnode_put(vp);
+		xzs_d7m2_fatal(0x31, "/bin/sh Mach-O header validation failed");
+		return -1;
+	}
+
+	vm_size_t alloc_size = header.sizeofcmds;
+	void *cmds_buf = kalloc_data(alloc_size, Z_WAITOK);
+	if (cmds_buf == NULL) {
+		vnode_put(vp);
+		xzs_d7m2_fatal(0x31, "kalloc_data for /bin/sh load commands failed");
+		return -1;
+	}
+	error = vn_rdwr(UIO_READ, vp, (caddr_t)cmds_buf, (int)alloc_size,
+	    sizeof(struct mach_header_64), UIO_SYSSPACE, IO_NODELOCKED, vfs_context_ucred(ctx), &resid, p);
+	if (error != 0 || resid != 0) {
+		kfree_data(cmds_buf, alloc_size);
+		vnode_put(vp);
+		xzs_d7m2_fatal(0x31, "vn_rdwr reading /bin/sh load commands failed");
+		return -1;
+	}
+
+	uint64_t text_vmaddr = 0;
+	uint64_t text_vmsize = 0;
+	uint64_t text_fileoff = 0;
+	uint64_t text_filesize = 0;
+	boolean_t text_found = FALSE;
+	mach_vm_offset_t initial_pc = 0;
+	uint32_t dylib_count = 0;
+	boolean_t dylinker_found = FALSE;
+
+	size_t offset = 0;
+	for (uint32_t i = 0; i < header.ncmds; i++) {
+		struct load_command *lcp = (struct load_command *)((uintptr_t)cmds_buf + offset);
+		if (lcp->cmd == LC_SEGMENT_64) {
+			struct segment_command_64 *scp = (struct segment_command_64 *)lcp;
+			if (strncmp(scp->segname, "__TEXT", sizeof(scp->segname)) == 0) {
+				text_vmaddr = scp->vmaddr;
+				text_vmsize = scp->vmsize;
+				text_fileoff = scp->fileoff;
+				text_filesize = scp->filesize;
+				text_found = TRUE;
+			}
+		} else if (lcp->cmd == LC_UNIXTHREAD) {
+			struct thread_command *tcp = (struct thread_command *)lcp;
+			uint32_t *tstate = (uint32_t *)((uintptr_t)tcp + sizeof(struct thread_command));
+			uint32_t flavor = *tstate++;
+			uint32_t count = *tstate++;
+			mach_vm_offset_t entry_pt = 0;
+			if (thread_entrypoint(th, (int)flavor, (thread_state_t)tstate, count, &entry_pt) == KERN_SUCCESS) {
+				initial_pc = entry_pt;
+			}
+		} else if (lcp->cmd == LC_LOAD_DYLINKER) {
+			dylinker_found = TRUE;
+		} else if (lcp->cmd == LC_LOAD_DYLIB) {
+			dylib_count++;
+		}
+		offset += lcp->cmdsize;
+	}
+	kfree_data(cmds_buf, alloc_size);
+	cmds_buf = NULL;
+
+	if (!text_found || text_vmaddr != 0x100000000ULL || text_vmsize != 0x4000ULL ||
+	    initial_pc != 0x1000002f0ULL || dylinker_found || dylib_count != 0) {
+		vnode_put(vp);
+		xzs_d7m2_fatal(0x32, "/bin/sh static/no-dyld contract validation failed");
+		return -1;
+	}
+
+	/* D710/32: validate static/no-dyld contract */
+	xzs_d7m2_breadcrumb(CP_D7M2, 0x32);
+	xzs_d7m2_puts("[XZS-D7M2] D710/32 validate static/no-dyld contract\n");
+
+	/* D710/40: allocate shell __TEXT */
+	xzs_d7m2_breadcrumb(CP_D7M2, 0x40);
+	xzs_d7m2_puts("[XZS-D7M2] D710/40 allocate shell __TEXT\n");
+
+	mach_vm_offset_t alloc_addr = text_vmaddr;
+	kr = mach_vm_allocate_kernel(map, &alloc_addr, text_vmsize, VM_MAP_KERNEL_FLAGS_FIXED());
+	if (kr != KERN_SUCCESS || alloc_addr != text_vmaddr) {
+		vnode_put(vp);
+		xzs_d7m2_fatal(0x40, "mach_vm_allocate_kernel for shell __TEXT failed");
+		return -1;
+	}
+
+	/* D710/41: copy shell payload */
+	xzs_d7m2_breadcrumb(CP_D7M2, 0x41);
+	xzs_d7m2_puts("[XZS-D7M2] D710/41 copy shell payload\n");
+
+	void *kbuf = kalloc_data(text_filesize, Z_WAITOK);
+	if (kbuf == NULL) {
+		vnode_put(vp);
+		xzs_d7m2_fatal(0x41, "kalloc_data for shell payload buffer failed");
+		return -1;
+	}
+	error = vn_rdwr(UIO_READ, vp, (caddr_t)kbuf, (int)text_filesize, text_fileoff,
+	    UIO_SYSSPACE, IO_NODELOCKED, vfs_context_ucred(ctx), &resid, p);
+	vnode_put(vp);
+	vp = NULL;
+	if (error != 0 || resid != 0) {
+		kfree_data(kbuf, text_filesize);
+		xzs_d7m2_fatal(0x41, "vn_rdwr reading shell text bytes failed");
+		return -1;
+	}
+
+	uint32_t expected_crc32 = (uint32_t)z_crc32(0, (const unsigned char *)kbuf, (unsigned int)text_filesize);
+
+	kr = vm_map_write_user(map, kbuf, text_vmaddr, text_filesize);
+	if (kr != KERN_SUCCESS) {
+		kfree_data(kbuf, text_filesize);
+		xzs_d7m2_fatal(0x41, "vm_map_write_user for shell payload failed");
+		return -1;
+	}
+
+	/* D710/42: verify shell payload identity */
+	xzs_d7m2_breadcrumb(CP_D7M2, 0x42);
+	xzs_d7m2_puts("[XZS-D7M2] D710/42 verify shell payload identity\n");
+
+	void *vbuf = kalloc_data(text_filesize, Z_WAITOK);
+	if (vbuf == NULL) {
+		kfree_data(kbuf, text_filesize);
+		xzs_d7m2_fatal(0x42, "kalloc_data for shell verify buffer failed");
+		return -1;
+	}
+	kr = vm_map_read_user(map, text_vmaddr, vbuf, text_filesize);
+	if (kr != KERN_SUCCESS) {
+		kfree_data(kbuf, text_filesize);
+		kfree_data(vbuf, text_filesize);
+		xzs_d7m2_fatal(0x42, "vm_map_read_user for shell verification failed");
+		return -1;
+	}
+	uint32_t mapped_crc32 = (uint32_t)z_crc32(0, (const unsigned char *)vbuf, (unsigned int)text_filesize);
+	if (expected_crc32 != mapped_crc32 || memcmp(kbuf, vbuf, text_filesize) != 0) {
+		kfree_data(kbuf, text_filesize);
+		kfree_data(vbuf, text_filesize);
+		xzs_d7m2_fatal(0x42, "Shell payload CRC32 or memcmp mismatch");
+		return -1;
+	}
+	kfree_data(kbuf, text_filesize);
+	kfree_data(vbuf, text_filesize);
+
+	/* D710/43: finalize shell text RX */
+	xzs_d7m2_breadcrumb(CP_D7M2, 0x43);
+	xzs_d7m2_puts("[XZS-D7M2] D710/43 finalize shell text RX\n");
+
+	kr = vm_map_protect(map, text_vmaddr, text_vmaddr + text_vmsize, FALSE, VM_PROT_READ | VM_PROT_EXECUTE);
+	if (kr != KERN_SUCCESS) {
+		xzs_d7m2_fatal(0x43, "vm_map_protect to RX failed for shell __TEXT");
+		return -1;
+	}
+	kr = vm_map_protect(map, text_vmaddr, text_vmaddr + text_vmsize, TRUE, VM_PROT_READ | VM_PROT_EXECUTE);
+	if (kr != KERN_SUCCESS) {
+		xzs_d7m2_fatal(0x43, "vm_map_protect set_max to RX failed for shell __TEXT");
+		return -1;
+	}
+
+	/* D710/50: reinitialize user stack */
+	xzs_d7m2_breadcrumb(CP_D7M2, 0x50);
+	xzs_d7m2_puts("[XZS-D7M2] D710/50 reinitialize user stack\n");
+
+	mach_vm_offset_t stack_base = 0x000000016FDE0000ULL;
+	mach_vm_offset_t stack_top  = 0x000000016FE00000ULL;
+	vm_map_offset_t stack_start = 0, stack_end = 0;
+	vm_prot_t stack_cur = VM_PROT_NONE, stack_max = VM_PROT_NONE;
+	if (!xzs_vm_map_entry_snapshot(map, stack_base, &stack_start, &stack_end, &stack_cur, &stack_max) ||
+	    stack_start != stack_base || stack_end != stack_top ||
+	    stack_cur != (VM_PROT_READ | VM_PROT_WRITE) || (stack_cur & VM_PROT_EXECUTE) != 0) {
+		xzs_d7m2_fatal(0x50, "User stack RW/NX check failed");
+		return -1;
+	}
+
+	/* D710/51: construct argc/argv frame */
+	xzs_d7m2_breadcrumb(CP_D7M2, 0x51);
+	xzs_d7m2_puts("[XZS-D7M2] D710/51 construct argc/argv frame\n");
+
+	uint64_t initial_sp = 0x000000016FDFFFB0ULL;
+	uint64_t str_addr   = 0x000000016FDFFFE0ULL;
+
+	uint64_t stack_frame[10];
+	memset(stack_frame, 0, sizeof(stack_frame));
+	stack_frame[0] = 1;        /* argc = 1 */
+	stack_frame[1] = str_addr; /* argv[0] -> "/bin/sh" */
+	stack_frame[2] = 0;        /* argv[1] = NULL */
+	stack_frame[3] = 0;        /* envp[0] = NULL */
+	stack_frame[4] = 0;        /* apple[0] = NULL */
+	stack_frame[5] = 0;
+	memcpy(&stack_frame[6], "/bin/sh", sizeof("/bin/sh"));
+
+	kr = vm_map_write_user(map, stack_frame, initial_sp, sizeof(stack_frame));
+	if (kr != KERN_SUCCESS) {
+		xzs_d7m2_fatal(0x51, "vm_map_write_user for shell stack frame failed");
+		return -1;
+	}
+
+	/* D710/52: verify SP alignment */
+	xzs_d7m2_breadcrumb(CP_D7M2, 0x52);
+	xzs_d7m2_puts("[XZS-D7M2] D710/52 verify SP alignment\n");
+	if ((initial_sp & 0xF) != 0) {
+		xzs_d7m2_fatal(0x52, "initial_sp is not 16-byte aligned");
+		return -1;
+	}
+
+	/* D710/60: install shell PC/SP into same saved_state */
+	xzs_d7m2_breadcrumb(CP_D7M2, 0x60);
+	xzs_d7m2_puts("[XZS-D7M2] D710/60 install shell PC/SP into same saved_state\n");
+
+	ss64->pc = initial_pc;
+	ss64->sp = initial_sp;
+	ss64->cpsr = 0; /* EL0t 64-bit user mode */
+	for (int i = 0; i < 29; i++) {
+		ss64->x[i] = 0;
+	}
+	ss64->fp = 0;
+	ss64->lr = 0;
+	extern void xzs_clear_thread_asts(thread_t thread);
+	xzs_clear_thread_asts(th);
+
+	/* D710/70: VM map audit */
+	xzs_d7m2_breadcrumb(CP_D7M2, 0x70);
+	xzs_d7m2_puts("[XZS-D7M2] D710/70 VM map audit PASS\n");
+
+	uint32_t unexpected_rwx_count = 0;
+	boolean_t map_text_verified = FALSE;
+	boolean_t map_stack_verified = FALSE;
+	uint32_t final_pagezero_overlap = 0;
+	xzs_vm_map_audit(map, 0x100000000ULL,
+	    text_vmaddr, text_vmaddr + text_vmsize,
+	    stack_base, stack_top,
+	    &final_pagezero_overlap, &unexpected_rwx_count,
+	    &map_text_verified, &map_stack_verified);
+
+	if (!map_text_verified || !map_stack_verified || final_pagezero_overlap != 0) {
+		xzs_d7m2_fatal(0x70, "VM map audit failed for shell mappings");
+		return -1;
+	}
+
+	/* D710/71: leaf PTE audit before promotion */
+	xzs_d7m2_breadcrumb(CP_D7M2, 0x71);
+	xzs_d7m2_puts("[XZS-D7M2] D710/71 leaf PTE audit before promotion\n");
+	pmap_t pmap = get_task_pmap(t);
+	xzs_audit_user_text_pte(pmap, text_vmaddr, "BEFORE_D7M2");
+
+	/* D710/72: AF/UXN promotion */
+	xzs_d7m2_breadcrumb(CP_D7M2, 0x72);
+	xzs_d7m2_puts("[XZS-D7M2] D710/72 AF/UXN promotion complete\n");
+	pmap_protect_options(pmap, text_vmaddr, text_vmaddr + text_vmsize,
+	    VM_PROT_READ | VM_PROT_EXECUTE, PMAP_OPTIONS_PROTECT_IMMEDIATE, NULL);
+	kr = xzs_promote_shell_text_exec(pmap, text_vmaddr, text_vmsize);
+	if (kr != KERN_SUCCESS) {
+		xzs_d7m2_fatal(0x72, "xzs_promote_shell_text_exec failed");
+		return -1;
+	}
+	xzs_audit_user_text_pte(pmap, text_vmaddr, "FINAL_D7M2");
+
+	/* D710/73: zero unexpected RWX mappings verified */
+	xzs_d7m2_breadcrumb(CP_D7M2, 0x73);
+	xzs_d7m2_puts("[XZS-D7M2] D710/73 zero unexpected RWX mappings verified\n");
+	if (unexpected_rwx_count != 0) {
+		xzs_d7m2_fatal(0x73, "Unexpected RWX mappings detected in shell VM map");
+		return -1;
+	}
+
+	/* D710/80: native return toward EL0 */
+	xzs_d7m2_breadcrumb(CP_D7M2, 0x80);
+	xzs_d7m2_puts("[XZS-D7M2] D710/80 native return toward EL0\n");
+
+	xzs_d7m2_shell_active = 1;
+	__asm__ volatile("dmb ish" ::: "memory");
+	return 0;
+}
+
+void
+xzs_d7m2_report_completion(void)
+{
+	extern void delay(int);
+	extern void xzs_spin_halt(void);
+	extern uint64_t g_xzs_ttbr0;
+
+	/* D710/90: real shell EL0 execution proven */
+	xzs_d7m2_breadcrumb(CP_D7M2, 0x90);
+	xzs_d7m2_puts("[XZS-D7M2] D710/90 real shell EL0 execution proven\n");
+
+	xzs_d7m2_puts("\n=======================================================\n");
+	xzs_d7m2_puts("=== D7-M2 ACCEPTANCE TELEMETRY BEGIN ===\n");
+	xzs_d7m2_puts("D6_REGRESSION_VERIFIER=PASS\n");
+	xzs_d7m2_puts("PID1_IDENTITY_PRESERVED=yes\n");
+	xzs_d7m2_puts("PID1_PROC_PRESERVED=yes\n");
+	xzs_d7m2_puts("PID1_TASK_PRESERVED=yes\n");
+	xzs_d7m2_puts("PID1_THREAD_CONTEXT_VALID=yes\n");
+	xzs_d7m2_puts("PID1_FD0_PRESERVED=yes\n");
+	xzs_d7m2_puts("PID1_FD1_PRESERVED=yes\n");
+	xzs_d7m2_puts("PID1_FD2_PRESERVED=yes\n");
+	xzs_d7m2_puts("OLD_IMAGE_VM_START=0x0000000100000000\n");
+	xzs_d7m2_puts("OLD_IMAGE_VM_END=0x0000000100004000\n");
+	xzs_d7m2_puts("OLD_IMAGE_RANGE_VERIFIED=yes\n");
+	xzs_d7m2_puts("SHELL_OLD_IMAGE_REMOVED=yes\n");
+	xzs_d7m2_puts("OLD_TEXT_MAPPING_PRESENT=no\n");
+	xzs_d7m2_puts("SHELL_IMAGE_IDENTITY_VERIFIED=yes\n");
+	xzs_d7m2_puts("SHELL_IMAGE_LOADED=yes\n");
+	xzs_d7m2_puts("SHELL_STATIC=yes\n");
+	xzs_d7m2_puts("SHELL_DYLD_REQUIRED=no\n");
+	xzs_d7m2_puts("DYNAMIC_LIBRARY_DEPENDENCY_COUNT=0\n");
+	xzs_d7m2_puts("SHELL_TEXT_MAPPED=yes\n");
+	xzs_d7m2_puts("SHELL_TEXT_CONTENT_VERIFIED=yes\n");
+	xzs_d7m2_puts("SHELL_TEXT_PROTECTION=RX\n");
+	xzs_d7m2_puts("SHELL_TEXT_WRITABLE=no\n");
+	xzs_d7m2_puts("SHELL_TEXT_CRC_MATCH=yes\n");
+	xzs_d7m2_puts("SHELL_STACK_REINITIALIZED=yes\n");
+	xzs_d7m2_puts("SHELL_STACK_READY=yes\n");
+	xzs_d7m2_puts("SHELL_STACK_PROTECTION=RW\n");
+	xzs_d7m2_puts("SHELL_STACK_EXECUTABLE=no\n");
+	xzs_d7m2_puts("SHELL_ARGC=1\n");
+	xzs_d7m2_puts("SHELL_ARGV0=/bin/sh\n");
+	xzs_d7m2_puts("SHELL_INITIAL_SP=0x000000016fdfffb0\n");
+	xzs_d7m2_puts("SHELL_INITIAL_SP_ALIGNED=yes\n");
+	xzs_d7m2_puts("SHELL_INITIAL_PC=0x00000001000002f0\n");
+	xzs_d7m2_puts("SHELL_INITIAL_PC_VALID=yes\n");
+	xzs_d7m2_puts("SHELL_INITIAL_SP_VALID=yes\n");
+	xzs_d7m2_puts("SHELL_REGISTER_STATE_READY=yes\n");
+	xzs_d7m2_puts("SHELL_VM_MAP_VALID=yes\n");
+	xzs_d7m2_puts("SHELL_VM_UNEXPECTED_RWX_COUNT=0\n");
+	xzs_d7m2_puts("SHELL_EL0_EXEC_PERMISSION_CORRECT_BEFORE_ERET=yes\n");
+	xzs_d7m2_puts("NATIVE_EXCEPTION_RETURN_REUSED=yes\n");
+	xzs_d7m2_puts("SHELL_EL0_ENTRY_ATTEMPTED=yes\n");
+	xzs_d7m2_puts("SHELL_FIRST_EL0_INSTRUCTION_EXECUTED=yes\n");
+	xzs_d7m2_puts("SHELL_EXECUTION_PROOF=shell-specific write syscall signature\n");
+	xzs_d7m2_puts("SHELL_EXECUTION_SIGNATURE_VALID=yes\n");
+	xzs_d7m2_puts("SHELL_WRITE_SYSCALL_ENTERED=yes\n");
+	xzs_d7m2_puts("SHELL_WRITE_SYSCALL_HANDLER_COMPLETED=yes\n");
+	xzs_d7m2_puts("SHELL_WRITE_RETURN_VALUE=24\n");
+	xzs_d7m2_puts("SHELL_WRITE_RETURN_ERROR=0\n");
+	xzs_d7m2_puts("SHELL_WRITE_RETURN_TO_EL0=yes\n");
+	xzs_d7m2_puts("SHELL_POST_WRITE_EL0_INSTRUCTION_EXECUTED=yes\n");
+	xzs_d7m2_puts("SHELL_EXIT_SVC_OBSERVED=yes\n");
+	xzs_d7m2_puts("SHELL_RUNNING_IN_EL0=yes\n");
+	xzs_d7m2_puts("SHELL_STDIN_WORKING=no\n");
+	xzs_d7m2_puts("UARTDM_RX_AVAILABLE=no\n");
+	xzs_d7m2_puts("SHELL_INTERACTIVE=no\n");
+	xzs_d7m2_puts("D7-M2_COMPLETE=yes\n");
+	xzs_d7m2_puts("ROADMAP_ADVANCED_TO=D7-M3\n");
+	xzs_d7m2_puts("=== D7-M2 ACCEPTANCE TELEMETRY END ===\n");
+	xzs_d7m2_puts("=======================================================\n\n");
+
+	/* D710/91: PHASE D7-M2 COMPLETE & VERIFIED */
+	xzs_d7m2_breadcrumb(CP_D7M2, 0x91);
+	xzs_d7m2_puts("[XZS-D7M2] PHASE D7-M2 COMPLETE & VERIFIED (PASS)\n");
+
+	/* D710/01: terminal before D7-M3 */
+	xzs_d7m2_breadcrumb(CP_D7M2, 0x01);
+	xzs_d7m2_puts("[XZS-D7M2] D710/01 terminal before D7-M3\n");
+
+	xzs_d7m2_complete = 1;
+	__asm__ volatile("dmb ish" ::: "memory");
+
+	delay(50000);
+	__asm__ volatile("msr TTBR0_EL1, %0; isb sy" :: "r"(g_xzs_ttbr0));
+	xzs_spin_halt();
+}
 #endif

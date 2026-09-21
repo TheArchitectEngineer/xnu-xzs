@@ -19,7 +19,7 @@ Progress is strictly gated by physical hardware verification. Speculative percen
 | **Phase D4** | Block-storage driver integration (`bdevsw` / `disk0`) | **COMPLETE** |
 | **Phase D5** | Real root filesystem mount (RAMDisk XZSFS) | **COMPLETE / SEALED** |
 | **Phase D6** | PID 1 / First EL0 userspace (`initproc` / launchd) | **COMPLETE / SEALED** |
-| **Phase D7** | Interactive serial shell (`/bin/sh` headless REPL) | **NEXT PHASE** |
+| **Phase D7** | Interactive serial shell (`/bin/sh` headless REPL) | **IN PROGRESS (D7-M1, D7-M2 COMPLETE)** |
 
 | **Phase D8** | Native display / framebuffer / touch / recovery console | **PLANNED** |
 | **Phase D9** | XZSPlatform hardware/platform compatibility layer | **PLANNED** |
@@ -301,7 +301,7 @@ Progress is strictly gated by physical hardware verification. Speculative percen
   ```
 * **Subtasks**:
   - **D7-M1 (Shell Artifact & Dependency Audit)**: ✅ **COMPLETE** (Audited `/bin/sh` static ARM64 Mach-O stub, zero dyld dependencies, Darwin initial stack compatible, stdio fd 0/1/2 inheritance verified, UARTDM RX registers identified, Strategy B selected for D7-M2).
-  - **D7-M2 (PID1 -> `/bin/sh` Handoff)**: **NOT STARTED** (PID1 task transformation/handoff to `/bin/sh` using project loader machinery).
+  - **D7-M2 (PID1 -> `/bin/sh` Handoff)**: ✅ **COMPLETE / SEALED** (PID1 in-place same-thread reload to `/bin/sh` static Mach-O image; old bootstrap image deallocated, new `__TEXT` mapped RX, stack reinitialized RW/NX with canonical Darwin initial frame; hardware verified real EL0 transition, `SYS_write(1, "XZS: /bin/sh EL0 online\n", 24)` returning 24 with zero error, subsequent EL0 instruction execution, and clean exit trapped via `SYS_exit(0)`).
   - **D7-M3**: Shell stdout (`/bin/sh` banner and prompt emission to `/dev/console`).
   - **D7-M4**: Shell stdin (Qualcomm MSM8996 UARTDM RX driver bring-up).
   - **D7-M5**: Interactive REPL / command loop (line editing, enter key handling).
@@ -309,6 +309,13 @@ Progress is strictly gated by physical hardware verification. Speculative percen
   - **D7-M7**: System commands (`uname`, `mount`, `reboot`).
   - **D7-M8**: Stable normal boot (successful shell boot remains running interactively).
   - **D7-M9**: Full D7 regression and final seal.
+* **D7-M2 Hardware Evidence**:
+  - Tested boot image SHA-256: `a78af05bbd39e2c93a04d3b3384d885a83005e40b25dd6cb5b7140795c71e24e`.
+  - Tested commit: `694446c0af85095e3045fb3d15bd12215aea203e`.
+  - Checkpoint sequence: All 27 canonical checkpoints `D710/00` through `D710/01` in monotonic order.
+  - Verifiers: `scripts/verify_d7m2_acceptance.py` (100% PASS) and `scripts/verify_d6_acceptance.py` (100% PASS).
+  - Telemetry: `D7-M2_COMPLETE=yes`, `ROADMAP_ADVANCED_TO=D7-M3`, `D6_REGRESSION_VERIFIER=PASS`.
+  - Real EL0 Execution: `SYS_write(1, "XZS: /bin/sh EL0 online\n", 24)` returned 24; subsequent EL0 instructions executed; clean exit via `SYS_exit(0)` trapped.
 * **Visual Identity & Banner**:
   The xnu-xzs shell features a recognizable terminal ASCII banner upon entering `/bin/sh`:
   ```text

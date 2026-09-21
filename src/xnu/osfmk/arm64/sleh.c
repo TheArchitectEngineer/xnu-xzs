@@ -771,8 +771,16 @@ sleh_synchronous(arm_context_t *context, uint64_t esr, vm_offset_t far, __unused
 	extern volatile boolean_t xzs_d6m4_probe_armed;
 	extern thread_t xzs_d6m4_target_thread;
 	extern struct xzs_d6m4_r650_telemetry xzs_d6m4_r650_telemetry;
+	extern volatile int xzs_d7m2_armed;
+	extern volatile int xzs_d7m2_shell_active;
+	extern volatile int xzs_d7m2_write_trapped;
+	extern volatile int xzs_d7m2_write_completed;
+	extern volatile int xzs_d7m2_post_write_executed;
+	extern volatile int xzs_d7m2_complete;
+	extern int xzs_d7m2_handoff_to_shell(proc_t p, task_t t, thread_t th, void *saved_state);
+	extern void xzs_d7m2_report_completion(void);
 
-	if (xzs_d6m4_probe_armed && thread == xzs_d6m4_target_thread) {
+	if (is_user && xzs_d6m4_probe_armed && thread == xzs_d6m4_target_thread) {
 		arm_saved_state64_t *ss64 = saved_state64(state);
 		uint64_t elr = get_saved_state_pc(state);
 		uint64_t spsr = get_saved_state_cpsr(state);
@@ -834,8 +842,39 @@ sleh_synchronous(arm_context_t *context, uint64_t esr, vm_offset_t far, __unused
 		    xzs_d6m4_r650_telemetry.post_signature_valid != 0 &&
 		    ESR_ISS(esr) == 0x80 &&
 		    elr == 0x000000010000030cULL && ss64->x[16] == 20) {
+			if (xzs_d7m2_armed && !xzs_d7m2_shell_active) {
+				/* Enable interrupts so vm_map rwlock and allocations are legal */
+				ml_set_interrupts_enabled(TRUE);
+				/* Same PID1 thread enters kernel from sustained loop: handoff to shell */
+				(void)xzs_d7m2_handoff_to_shell(current_proc(), current_task(), current_thread(), state);
+				return;
+			}
 			/* Subsequent known-safe getpid calls remain on the native path. */
 			goto xzs_d6m5_dispatch_first_svc;
+		} else if (is_user && class == ESR_EC_SVC_64 && xzs_d7m2_shell_active) {
+			if (!xzs_d7m2_write_trapped &&
+			    ESR_ISS(esr) == 0x80 &&
+			    elr == 0x0000000100000304ULL &&
+			    ss64->x[0] == 1 &&
+			    ss64->x[1] == 0x0000000100000320ULL &&
+			    ss64->x[2] == 24 &&
+			    ss64->x[16] == 4) {
+				xzs_d7m2_write_trapped = 1;
+				__asm__ volatile("dmb ish" ::: "memory");
+				goto xzs_d6m5_dispatch_first_svc;
+			} else if (xzs_d7m2_write_completed &&
+			    ESR_ISS(esr) == 0x80 &&
+			    elr == 0x0000000100000310ULL &&
+			    ss64->x[0] == 0 &&
+			    ss64->x[16] == 1) {
+				xzs_d7m2_post_write_executed = 1;
+				__asm__ volatile("dmb ish" ::: "memory");
+				xzs_d7m2_report_completion();
+				return;
+			} else {
+				xzs_d6m4_r650_telemetry.unexpected_exception = 1;
+				__asm__ volatile("dmb ish" ::: "memory");
+			}
 		} else {
 			xzs_d6m4_r650_telemetry.unexpected_exception = 1;
 			__asm__ volatile("dmb ish" ::: "memory");
@@ -991,6 +1030,13 @@ xzs_d6m5_dispatch_first_svc:
 
 		handle_svc(state);
 #if CONFIG_XZS_BRINGUP
+		if (xzs_d7m2_shell_active && xzs_d7m2_write_trapped && !xzs_d7m2_write_completed) {
+			arm_saved_state64_t *ss_ret = saved_state64(state);
+			if (ss_ret->x[0] == 24 && (ss_ret->cpsr & 0x20000000ULL) == 0) {
+				xzs_d7m2_write_completed = 1;
+				__asm__ volatile("dmb ish" ::: "memory");
+			}
+		}
 		if (xzs_d6m4_probe_armed && thread == xzs_d6m4_target_thread &&
 		    xzs_d6m4_r650_telemetry.dispatcher_reached != 0) {
 			xzs_d6m4_r650_telemetry.sleh_return_ready = 1;

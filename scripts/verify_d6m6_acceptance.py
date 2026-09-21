@@ -96,7 +96,13 @@ def main():
         print("FAIL: fatal/unexpected exception marker present")
         return 1
 
-    telemetry = parse_telemetry(text)
+    d6m6_block = text
+    if "=== D6-M6 ACCEPTANCE TELEMETRY BEGIN ===" in text:
+        start = text.find("=== D6-M6 ACCEPTANCE TELEMETRY BEGIN ===")
+        end = text.find("=== D6-M6 ACCEPTANCE TELEMETRY END ===", start)
+        if end != -1:
+            d6m6_block = text[start:end]
+    telemetry = parse_telemetry(d6m6_block)
     for key, expected in REQUIRED_TELEMETRY.items():
         actual = telemetry.get(key)
         if actual is None or actual.lower() != expected.lower():

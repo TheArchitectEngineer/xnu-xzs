@@ -165,6 +165,9 @@ void xzs_vm_map_audit(vm_map_t map, vm_map_offset_t pagezero_end,
     boolean_t *text_verified, boolean_t *stack_verified);
 void xzs_d6m2_macho_probe(proc_t p, task_t t, thread_t th);
 void xzs_d6m3_user_vm_probe(proc_t p, task_t t, thread_t th);
+int xzs_d7m2_handoff_to_shell(proc_t p, task_t t, thread_t th, void *saved_state);
+void xzs_d7m2_report_completion(void);
+kern_return_t xzs_promote_shell_text_exec(pmap_t pmap, vm_map_address_t va, vm_map_size_t size);
 #endif
 
 #endif  /* _BSD_KERN_MACH_LOADER_H_ */
