@@ -300,8 +300,8 @@ Progress is strictly gated by physical hardware verification. Speculative percen
   xzs#
   ```
 * **Subtasks**:
-  - **D7-M1**: Shell artifact and dependency audit (`/bin/sh` Mach-O contract, library dependencies).
-  - **D7-M2**: PID1 -> `/bin/sh` handoff (`execve` or direct child fork/exec).
+  - **D7-M1 (Shell Artifact & Dependency Audit)**: ✅ **COMPLETE** (Audited `/bin/sh` static ARM64 Mach-O stub, zero dyld dependencies, Darwin initial stack compatible, stdio fd 0/1/2 inheritance verified, UARTDM RX registers identified, Strategy B selected for D7-M2).
+  - **D7-M2 (PID1 -> `/bin/sh` Handoff)**: **NOT STARTED** (PID1 task transformation/handoff to `/bin/sh` using project loader machinery).
   - **D7-M3**: Shell stdout (`/bin/sh` banner and prompt emission to `/dev/console`).
   - **D7-M4**: Shell stdin (Qualcomm MSM8996 UARTDM RX driver bring-up).
   - **D7-M5**: Interactive REPL / command loop (line editing, enter key handling).
