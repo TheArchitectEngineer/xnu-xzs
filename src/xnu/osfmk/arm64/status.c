@@ -3650,7 +3650,9 @@ xzs_d6m4_monitor_and_report_r650(task_t t, thread_t th)
 		boolean_t gsnpsid_valid = ((g_xzs_usb_gsnpsid & 0xFFFF0000) == 0x55330000);
 
 		/* Wait / poll for host enumeration over USB-C */
+		extern void xzs_watchdog_pet(void);
 		for (int i = 0; i < 15000; i++) {
+			xzs_watchdog_pet();
 			xzs_usb_poll_events();
 			if (g_xzs_usb_configured) {
 				break;
@@ -3668,6 +3670,7 @@ xzs_d6m4_monitor_and_report_r650(task_t t, thread_t th)
 
 		/* Service USB traffic for a period */
 		for (int i = 0; i < 5000; i++) {
+			xzs_watchdog_pet();
 			xzs_usb_poll_events();
 			delay(1000);
 		}
@@ -3716,6 +3719,7 @@ xzs_d6m4_monitor_and_report_r650(task_t t, thread_t th)
 
 		/* Keep servicing USB console indefinitely */
 		for (;;) {
+			xzs_watchdog_pet();
 			xzs_usb_poll_events();
 			delay(1000);
 		}

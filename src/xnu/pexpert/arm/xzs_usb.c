@@ -156,6 +156,8 @@ static void xzs_usb_rx_tty_deferred(thread_call_param_t p0 __unused, thread_call
 	}
 }
 
+extern void xzs_watchdog_pet(void);
+
 /*
  * Issue DWC3 endpoint command with bounded wait
  */
@@ -168,12 +170,18 @@ static int dwc3_ep_cmd(uint32_t epnum, uint32_t cmd, uint32_t p0, uint32_t p1, u
 	dwc3_write32(DWC3_DEPCMD(epnum), cmd | DEPCMD_CMDACT);
 
 	for (int i = 0; i < 5000; i++) {
+		xzs_watchdog_pet();
 		uint32_t reg = dwc3_read32(DWC3_DEPCMD(epnum));
 		if (!(reg & DEPCMD_CMDACT)) {
 			return (int)(reg & 0x0F);
 		}
 		delay(10);
 	}
+	xzs_early_puts("[XZS-USB] DEPCMD TIMEOUT ep=");
+	xzs_d6m4_put_hex64(epnum);
+	xzs_early_puts(" cmd=");
+	xzs_d6m4_put_hex64(cmd);
+	xzs_early_puts("\n");
 	return -1;
 }
 
@@ -261,20 +269,25 @@ static const uint8_t s_str_serial[32] = {
  */
 static void dwc3_configure_endpoints(void)
 {
-	/* DEPSTARTCFG on EP0 */
-	dwc3_ep_cmd(DWC3_PHYS_EP_CTRL_OUT, DEPCMD_STARTNEWCFG, 0, 0, 0);
+	xzs_early_puts("[XZS-USB] DEPSTARTCFG on EP0\n");
+	int rc = dwc3_ep_cmd(DWC3_PHYS_EP_CTRL_OUT, DEPCMD_STARTNEWCFG, 0, 0, 0);
+	xzs_early_puts("[XZS-USB] DEPSTARTCFG rc="); xzs_d6m4_put_hex64(rc); xzs_early_puts("\n");
 
 	/* Configure EP0 OUT (Control, maxpacket 64) */
 	uint32_t p0 = (0 << 1) | (64 << 3) | (0 << 17);
 	uint32_t p1 = (0 << 26) | (1 << 25);
-	dwc3_ep_cmd(DWC3_PHYS_EP_CTRL_OUT, DEPCMD_SETEPCONFIG, p0, p1, 0);
-	dwc3_ep_cmd(DWC3_PHYS_EP_CTRL_OUT, DEPCMD_SETTRANSXFR, 1, 0, 0);
+	rc = dwc3_ep_cmd(DWC3_PHYS_EP_CTRL_OUT, DEPCMD_SETEPCONFIG, p0, p1, 0);
+	xzs_early_puts("[XZS-USB] EP0 OUT SETEPCONFIG rc="); xzs_d6m4_put_hex64(rc); xzs_early_puts("\n");
+	rc = dwc3_ep_cmd(DWC3_PHYS_EP_CTRL_OUT, DEPCMD_SETTRANSXFR, 1, 0, 0);
+	xzs_early_puts("[XZS-USB] EP0 OUT SETTRANSXFR rc="); xzs_d6m4_put_hex64(rc); xzs_early_puts("\n");
 
 	/* Configure EP0 IN (Control, maxpacket 64) */
 	p0 = (0 << 1) | (64 << 3) | (0 << 17);
 	p1 = (1 << 26) | (1 << 25);
-	dwc3_ep_cmd(DWC3_PHYS_EP_CTRL_IN, DEPCMD_SETEPCONFIG, p0, p1, 0);
-	dwc3_ep_cmd(DWC3_PHYS_EP_CTRL_IN, DEPCMD_SETTRANSXFR, 1, 0, 0);
+	rc = dwc3_ep_cmd(DWC3_PHYS_EP_CTRL_IN, DEPCMD_SETEPCONFIG, p0, p1, 0);
+	xzs_early_puts("[XZS-USB] EP0 IN SETEPCONFIG rc="); xzs_d6m4_put_hex64(rc); xzs_early_puts("\n");
+	rc = dwc3_ep_cmd(DWC3_PHYS_EP_CTRL_IN, DEPCMD_SETTRANSXFR, 1, 0, 0);
+	xzs_early_puts("[XZS-USB] EP0 IN SETTRANSXFR rc="); xzs_d6m4_put_hex64(rc); xzs_early_puts("\n");
 
 	/* Configure Bulk OUT (Physical EP2, Bulk, maxpacket 512, FIFO 2) */
 	p0 = (2 << 1) | (512 << 3) | (2 << 17);
@@ -292,7 +305,9 @@ static void dwc3_configure_endpoints(void)
 	dwc3_write32(DWC3_DALEPENA, (1u << DWC3_PHYS_EP_CTRL_OUT) | (1u << DWC3_PHYS_EP_CTRL_IN));
 
 	/* Prepare EP0 Setup transfer */
+	xzs_early_puts("[XZS-USB] Submitting EP0 Setup TRB\n");
 	dwc3_submit_ep0_setup();
+	xzs_early_puts("[XZS-USB] EP0 Setup TRB submitted\n");
 }
 
 /*
@@ -318,10 +333,18 @@ static void dwc3_submit_ep0_setup(void)
 
 	dwc3_write32(DWC3_DEPCMDPAR0(DWC3_PHYS_EP_CTRL_OUT), (uint32_t)pa_trb);
 	dwc3_write32(DWC3_DEPCMDPAR1(DWC3_PHYS_EP_CTRL_OUT), (uint32_t)(pa_trb >> 32));
+	dwc3_write32(DWC3_DEPCMDPAR2(DWC3_PHYS_EP_CTRL_OUT), 0);
 	dwc3_write32(DWC3_DEPCMD(DWC3_PHYS_EP_CTRL_OUT), DEPCMD_STARTTRANSFER | DEPCMD_CMDACT);
 
-	uint32_t reg = dwc3_read32(DWC3_DEPCMD(DWC3_PHYS_EP_CTRL_OUT));
-	s_ep0_out_rsc_idx = (uint8_t)((reg >> 16) & 0x7F);
+	for (int i = 0; i < 1000; i++) {
+		xzs_watchdog_pet();
+		uint32_t reg = dwc3_read32(DWC3_DEPCMD(DWC3_PHYS_EP_CTRL_OUT));
+		if (!(reg & DEPCMD_CMDACT)) {
+			s_ep0_out_rsc_idx = (uint8_t)((reg >> 16) & 0x7F);
+			break;
+		}
+		delay(10);
+	}
 }
 
 /*
@@ -784,9 +807,9 @@ int xzs_usb_init(void)
 	dwc3_write32(DWC3_GEVNTSIZ0, sizeof(s_event_buffer));
 	dwc3_write32(DWC3_GEVNTCNT0, 0);
 
-	/* Configure Endpoints */
-	xzs_breadcrumb(0xD740, 0x20);
-	dwc3_configure_endpoints();
+	xzs_early_puts("[XZS-USB] EVENT_BUFFER_PA=0x");
+	xzs_d6m4_put_hex64((uint64_t)pa_event);
+	xzs_early_puts("\n");
 
 	/* Enable Device Events in DEVTEN: Disconnect, Reset, ConnectDone */
 	dwc3_write32(DWC3_DEVTEN, (1u << 0) | (1u << 1) | (1u << 2));
@@ -795,6 +818,14 @@ int xzs_usb_init(void)
 	uint32_t dctl = dwc3_read32(DWC3_DCTL);
 	dctl |= (1u << 31);
 	dwc3_write32(DWC3_DCTL, dctl);
+	xzs_early_puts("[XZS-USB] DCTL RUN_STOP=1 written\n");
+
+	delay(2000);
+
+	/* Configure Endpoints */
+	xzs_breadcrumb(0xD740, 0x20);
+	xzs_early_puts("[XZS-USB] D740/20 Configuring EP0 endpoints\n");
+	dwc3_configure_endpoints();
 
 	xzs_early_puts("[XZS-USB] DWC3 device running, waiting for host enumeration\n");
 	return 0;
