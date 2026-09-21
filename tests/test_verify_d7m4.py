@@ -16,6 +16,7 @@ SPEC.loader.exec_module(VERIFY)
 
 def internal_log(**overrides):
     telemetry = dict(VERIFY.INTERNAL_REQUIRED)
+    telemetry.update({"UARTDM_RX_IRQ_COUNT": "0x1", "UARTDM_RX_IRQ_BYTE_COUNT": "0x4"})
     telemetry.update(overrides)
     crumbs = "\n".join(
         f"CP=0x0000d730, ERR=0x{checkpoint:02x}"
@@ -49,6 +50,12 @@ class D7M4VerifierTests(unittest.TestCase):
     def test_wrong_el0_bytes_fail(self):
         passed, _ = VERIFY.validate_mode(
             internal_log(EL0_READ_HEX="41 42 44 0a"), "internal"
+        )
+        self.assertFalse(passed)
+
+    def test_zero_irq_count_fails(self):
+        passed, _ = VERIFY.validate_mode(
+            internal_log(UARTDM_RX_IRQ_COUNT="0x0"), "internal"
         )
         self.assertFalse(passed)
 

@@ -3517,33 +3517,43 @@ xzs_d6m4_monitor_and_report_r650(task_t t, thread_t th)
 		extern volatile int xzs_d7m4_read_returned;
 		extern volatile int xzs_d7m4_input_match;
 		extern volatile int xzs_d7m4_post_read_el0;
-		extern int xzs_uart_internal_loopback_fill_ring(const uint8_t *, uint32_t);
-		extern int xzs_uart_rx_drain_ring_to_tty(void);
+		extern volatile uint32_t g_xzs_uart_rx_irq_count;
+		extern volatile uint32_t g_xzs_uart_rx_irq_byte_count;
+		extern volatile uint32_t g_xzs_uart_rx_irq_tty_count;
+		extern volatile uint32_t g_xzs_uart_rx_irq_last_isr;
+		extern volatile uint32_t g_xzs_uart_rx_irq_configured;
+		extern int xzs_uart_rx_irq_prepare_internal_loopback(void);
+		extern int xzs_uart_internal_loopback_trigger_irq(const uint8_t *, uint32_t);
 		static const uint8_t test_line[] = { 0x41, 0x42, 0x43, 0x0a };
 
 		for (int i = 0; i < 5000 && !xzs_d7m4_read_blocked; i++) {
 			delay(1000);
 		}
 
+		int irq_ready = xzs_uart_rx_irq_prepare_internal_loopback();
 		xzs_breadcrumb(0xD730, 0x00);
 		xzs_early_puts("[XZS-D7M4] D730/00 M4 internal pipeline entered\n");
 		xzs_breadcrumb(0xD730, 0x10);
 		xzs_early_puts("[XZS-D7M4] D730/10 UARTDM RX low-level ready\n");
 		xzs_breadcrumb(0xD730, 0x11);
-		xzs_early_puts("[XZS-D7M4] D730/11 internal loopback source armed\n");
+		xzs_early_puts("[XZS-D7M4] D730/11 internal loopback IRQ source armed\n");
 
-		int received = 0;
-		int delivered = 0;
-		if (xzs_d7m4_read_entered && xzs_d7m4_read_blocked) {
-			received = xzs_uart_internal_loopback_fill_ring(test_line, sizeof(test_line));
-			if (received == (int)sizeof(test_line)) {
+		int sent = 0;
+		if (irq_ready && xzs_d7m4_read_entered && xzs_d7m4_read_blocked) {
+			sent = xzs_uart_internal_loopback_trigger_irq(test_line, sizeof(test_line));
+		}
+		for (int i = 0; i < 5000 && g_xzs_uart_rx_irq_tty_count < sizeof(test_line); i++) {
+			delay(1000);
+		}
+		int received = (int)g_xzs_uart_rx_irq_byte_count;
+		int delivered = (int)g_xzs_uart_rx_irq_tty_count;
+		if (sent == (int)sizeof(test_line) && received == (int)sizeof(test_line)) {
 				xzs_breadcrumb(0xD730, 0x20);
-				xzs_early_puts("[XZS-D7M4] D730/20 UARTDM bytes received\n");
+				xzs_early_puts("[XZS-D7M4] D730/20 UARTDM IRQ bytes received\n");
 				xzs_breadcrumb(0xD730, 0x21);
 				xzs_early_puts("[XZS-D7M4] D730/21 UARTDM bytes validated: 41 42 43 0a\n");
 				xzs_breadcrumb(0xD730, 0x30);
-				xzs_early_puts("[XZS-D7M4] D730/30 RX ring enqueue complete\n");
-				delivered = xzs_uart_rx_drain_ring_to_tty();
+				xzs_early_puts("[XZS-D7M4] D730/30 IRQ RX ring enqueue complete\n");
 				if (delivered == (int)sizeof(test_line)) {
 					xzs_breadcrumb(0xD730, 0x31);
 					xzs_early_puts("[XZS-D7M4] D730/31 RX ring FIFO dequeue complete\n");
@@ -3551,7 +3561,6 @@ xzs_d6m4_monitor_and_report_r650(task_t t, thread_t th)
 					xzs_early_puts("[XZS-D7M4] D730/40 tty input accepted\n");
 					xzs_breadcrumb(0xD730, 0x41);
 					xzs_early_puts("[XZS-D7M4] D730/41 native tty wakeup issued\n");
-				}
 			}
 		}
 
@@ -3559,8 +3568,10 @@ xzs_d6m4_monitor_and_report_r650(task_t t, thread_t th)
 			delay(1000);
 		}
 
-		boolean_t internal_pass =
+		boolean_t internal_pass = irq_ready && g_xzs_uart_rx_irq_configured &&
+		    g_xzs_uart_rx_irq_count > 0 &&
 		    xzs_d7m4_read_entered && xzs_d7m4_read_blocked &&
+		    sent == (int)sizeof(test_line) &&
 		    received == (int)sizeof(test_line) &&
 		    delivered == (int)sizeof(test_line) &&
 		    xzs_d7m4_read_awakened && xzs_d7m4_read_returned &&
@@ -3580,6 +3591,15 @@ xzs_d6m4_monitor_and_report_r650(task_t t, thread_t th)
 		xzs_early_puts("D7M4_SHELL_IMAGE_SHA256=fd9e0db28b88834c70c9e413a7c3ecf1e1f07e5aac167de4a05373e18ce92988\n");
 		xzs_early_puts("D7M4_SHELL_READ_ENTRY=0x0000000100000870\n");
 		xzs_early_puts("UARTDM_INTERNAL_LOOPBACK_VERIFIED=yes\n");
+		xzs_early_puts("UARTDM_RX_IRQ=146\n");
+		xzs_early_puts("GIC_INTERRUPT_TYPE=SPI_114\n");
+		xzs_early_puts("GIC_TRIGGER_TYPE=LEVEL_HIGH\n");
+		xzs_early_puts(g_xzs_uart_rx_irq_configured ? "UARTDM_RX_IRQ_CONFIGURED=yes\n" : "UARTDM_RX_IRQ_CONFIGURED=no\n");
+		xzs_early_puts(g_xzs_uart_rx_irq_count > 0 ? "UARTDM_RX_IRQ_WORKING=yes\n" : "UARTDM_RX_IRQ_WORKING=no\n");
+		xzs_early_puts("UARTDM_RX_IRQ_COUNT=0x"); xzs_d6m4_put_hex64(g_xzs_uart_rx_irq_count); xzs_early_puts("\n");
+		xzs_early_puts("UARTDM_RX_IRQ_BYTE_COUNT=0x"); xzs_d6m4_put_hex64(g_xzs_uart_rx_irq_byte_count); xzs_early_puts("\n");
+		xzs_early_puts("UARTDM_RX_IRQ_LAST_ISR=0x"); xzs_d6m4_put_hex64(g_xzs_uart_rx_irq_last_isr); xzs_early_puts("\n");
+		xzs_early_puts("UARTDM_RX_MODE=IRQ_WITH_BOUNDED_POLL_FALLBACK\n");
 		xzs_early_puts(received == 4 ? "UARTDM_RECEIVE_READY_WORKING=yes\n" : "UARTDM_RECEIVE_READY_WORKING=no\n");
 		xzs_early_puts(received == 4 ? "UARTDM_RECEIVE_DATA_WORKING=yes\n" : "UARTDM_RECEIVE_DATA_WORKING=no\n");
 		xzs_early_puts(received == 4 ? "RX_BUFFER_WORKING=yes\n" : "RX_BUFFER_WORKING=no\n");

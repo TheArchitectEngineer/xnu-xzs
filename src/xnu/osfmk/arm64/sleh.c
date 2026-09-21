@@ -2955,6 +2955,16 @@ sleh_irq(arm_saved_state_t *state)
 		return;
 	}
 
+	/* Qualcomm BLSP2 UART2: DT SPI 114 maps to architectural INTID 146. */
+	if (irq_id == 146) {
+		extern void xzs_uart_rx_irq_handler(void);
+		xzs_uart_rx_irq_handler();
+		__asm__ volatile("msr ICC_EOIR1_EL1, %0\nisb" :: "r"(iar));
+		entropy_collect();
+		sleh_interrupt_handler_epilogue();
+		return;
+	}
+
 	if (irq_id == 27 || irq_id == 30) {
 		uint64_t cur_mpidr = 0;
 		__asm__ volatile("mrs %0, MPIDR_EL1" : "=r"(cur_mpidr));

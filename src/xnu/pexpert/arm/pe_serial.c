@@ -859,6 +859,15 @@ struct xzs_uart_rx_ring {
 
 static struct xzs_uart_rx_ring g_xzs_rx_ring;
 
+/* D7-M4 UARTDM SPI 114 is GICv3 INTID 146 (SPI base 32 + 114). */
+#define XZS_UARTDM_GIC_INTID 146U
+
+volatile uint32_t g_xzs_uart_rx_irq_count = 0;
+volatile uint32_t g_xzs_uart_rx_irq_byte_count = 0;
+volatile uint32_t g_xzs_uart_rx_irq_tty_count = 0;
+volatile uint32_t g_xzs_uart_rx_irq_last_isr = 0;
+volatile uint32_t g_xzs_uart_rx_irq_configured = 0;
+
 void
 xzs_uart_rx_ring_init(void)
 {
@@ -1328,6 +1337,154 @@ xzs_uart_rx_drain_ring_to_tty(void)
 		count++;
 	}
 	return count;
+}
+
+static bool
+xzs_uart_gic_enable_spi114(void)
+{
+	extern vm_offset_t gicd_base;
+	const uint32_t intid = XZS_UARTDM_GIC_INTID;
+	const uint32_t word = intid / 32U;
+	const uint32_t bit = 1U << (intid % 32U);
+	const uint32_t cfg_word = intid / 16U;
+	const uint32_t cfg_shift = (intid % 16U) * 2U;
+	const uint32_t prio_word = intid / 4U;
+	const uint32_t prio_shift = (intid % 4U) * 8U;
+
+	if (gicd_base == 0) {
+		return false;
+	}
+
+	/* Disable and clear pending state before changing group/configuration. */
+	*(volatile uint32_t *)(gicd_base + 0x0180U + word * 4U) = bit;
+	*(volatile uint32_t *)(gicd_base + 0x0280U + word * 4U) = bit;
+
+	volatile uint32_t *group = (volatile uint32_t *)(gicd_base + 0x0080U + word * 4U);
+	*group = *group | bit; /* Group 1 Non-secure */
+
+	volatile uint32_t *cfg = (volatile uint32_t *)(gicd_base + 0x0c00U + cfg_word * 4U);
+	*cfg = *cfg & ~(2U << cfg_shift); /* level-sensitive */
+
+	volatile uint32_t *prio = (volatile uint32_t *)(gicd_base + 0x0400U + prio_word * 4U);
+	uint32_t prio_value = *prio;
+	prio_value &= ~(0xffU << prio_shift);
+	prio_value |= 0x80U << prio_shift;
+	*prio = prio_value;
+
+	/* Route the SPI to Aff0=0, Aff1=0 (CPU0). */
+	*(volatile uint64_t *)(gicd_base + 0x6000U + (uint64_t)intid * 8U) = 0;
+	__asm__ volatile("dsb sy\nisb sy" ::: "memory");
+
+	*(volatile uint32_t *)(gicd_base + 0x0100U + word * 4U) = bit;
+	__asm__ volatile("dsb sy\nisb sy" ::: "memory");
+
+	return (*(volatile uint32_t *)(gicd_base + 0x0100U + word * 4U) & bit) != 0;
+}
+
+/*
+ * Prepare the one-shot D7-M4 IRQ acceptance source.  Polling helpers remain
+ * intact as the bounded diagnostic fallback, but this path relies on RXSTALE
+ * to latch RX_TOTAL_SNAP and raise SPI 114 through GICv3.
+ */
+int
+xzs_uart_rx_irq_prepare_internal_loopback(void)
+{
+	if (!msm_uart_base) {
+		return 0;
+	}
+
+	msm_uart_write(MSM_UART_IMR, 0);
+	xzs_uart_rx_ring_init();
+	msm_uart_init_rx_transfer();
+	msm_uart_write(MSM_UART_MR2, msm_uart_read(MSM_UART_MR2) | 0x80U);
+	if ((msm_uart_read(MSM_UART_MR2) & 0x80U) == 0) {
+		return 0;
+	}
+
+	g_xzs_uart_rx_irq_count = 0;
+	g_xzs_uart_rx_irq_byte_count = 0;
+	g_xzs_uart_rx_irq_tty_count = 0;
+	g_xzs_uart_rx_irq_last_isr = 0;
+	g_xzs_uart_rx_irq_configured = xzs_uart_gic_enable_spi114() ? 1U : 0U;
+	if (!g_xzs_uart_rx_irq_configured) {
+		msm_uart_write(MSM_UART_MR2, 0x34);
+		return 0;
+	}
+
+	/* RXSTALE is sufficient for canonical-line PIO and provides exact length. */
+	msm_uart_write(MSM_UART_IMR, MSM_UART_INTR_RXSTALE);
+	__asm__ volatile("dsb sy" ::: "memory");
+	return 1;
+}
+
+int
+xzs_uart_internal_loopback_trigger_irq(const uint8_t *bytes, uint32_t length)
+{
+	uint32_t sent = 0;
+	if (!g_xzs_uart_rx_irq_configured || bytes == NULL || length == 0) {
+		return 0;
+	}
+
+	for (uint32_t i = 0; i < length; i++) {
+		uint32_t timeout = 50000;
+		while (!(msm_uart_read(MSM_UART_SR) & MSM_UART_SR_TX_EMPTY)) {
+			if (--timeout == 0) {
+				break;
+			}
+		}
+		if (timeout == 0) {
+			break;
+		}
+		msm_uart_write(UARTDM_NCF_TX, 1);
+		(void)msm_uart_read(UARTDM_NCF_TX);
+		timeout = 50000;
+		while (!(msm_uart_read(MSM_UART_SR) & MSM_UART_SR_TX_READY)) {
+			if (--timeout == 0) {
+				break;
+			}
+		}
+		if (timeout == 0) {
+			break;
+		}
+		msm_uart_write(UARTDM_TF, bytes[i]);
+		sent++;
+	}
+	return (int)sent;
+}
+
+void
+xzs_uart_rx_irq_handler(void)
+{
+	extern void cons_cinput(char ch);
+	uint32_t isr = msm_uart_read(MSM_UART_ISR);
+	uint32_t sr = msm_uart_read(MSM_UART_SR);
+	uint32_t produced = 0;
+	uint32_t consumed = 0;
+
+	g_xzs_uart_rx_irq_count++;
+	g_xzs_uart_rx_irq_last_isr = isr;
+
+	if (sr & (MSM_UART_SR_OVERRUN | MSM_UART_SR_PAR_FRAME_ERR)) {
+		msm_uart_write(MSM_UART_CR, MSM_UART_CMD_RESET_ERR);
+	}
+
+	if (isr & (MSM_UART_INTR_RXSTALE | MSM_UART_INTR_RXLEV)) {
+		while (produced < 64U && msm_uart_receive_ready()) {
+			if (!xzs_uart_rx_ring_put(msm_uart_receive_data())) {
+				break;
+			}
+			produced++;
+		}
+	}
+
+	int ch;
+	while ((ch = xzs_uart_rx_ring_get()) != -1) {
+		cons_cinput((char)ch);
+		consumed++;
+	}
+	g_xzs_uart_rx_irq_byte_count += produced;
+	g_xzs_uart_rx_irq_tty_count += consumed;
+	__asm__ volatile("dmb ish" ::: "memory");
 }
 
 static void

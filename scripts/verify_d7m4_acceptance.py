@@ -36,6 +36,12 @@ INTERNAL_REQUIRED = {
     **COMMON_REQUIRED,
     "D7M4_INPUT_SOURCE": "INTERNAL_LOOPBACK",
     "UARTDM_INTERNAL_LOOPBACK_VERIFIED": "yes",
+    "UARTDM_RX_IRQ": "146",
+    "GIC_INTERRUPT_TYPE": "SPI_114",
+    "GIC_TRIGGER_TYPE": "LEVEL_HIGH",
+    "UARTDM_RX_IRQ_CONFIGURED": "yes",
+    "UARTDM_RX_IRQ_WORKING": "yes",
+    "UARTDM_RX_MODE": "IRQ_WITH_BOUNDED_POLL_FALLBACK",
     "D7M4_INTERNAL_PIPELINE_COMPLETE": "yes",
     "EXTERNAL_UART_PIPELINE_PASS": "no",
     "SHELL_STDIN_WORKING": "no",
@@ -102,6 +108,14 @@ def validate_mode(text, mode):
         actual = telemetry.get(key)
         if actual != expected:
             return False, f"{key}={actual!r}, expected {expected!r}"
+    if mode == "internal":
+        for key in ("UARTDM_RX_IRQ_COUNT", "UARTDM_RX_IRQ_BYTE_COUNT"):
+            try:
+                value = int(telemetry.get(key, "0"), 0)
+            except ValueError:
+                return False, f"{key} is not an integer"
+            if value <= 0:
+                return False, f"{key} must be greater than zero"
     if mode == "external" and telemetry.get("D7M4_INPUT_SOURCE") != "EXTERNAL_UART":
         return False, "internal loopback evidence cannot seal external acceptance"
     return True, "PASS"
