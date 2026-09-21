@@ -780,7 +780,7 @@ sleh_synchronous(arm_context_t *context, uint64_t esr, vm_offset_t far, __unused
 	extern int xzs_d7m2_handoff_to_shell(proc_t p, task_t t, thread_t th, void *saved_state);
 	extern void xzs_d7m2_report_completion(void);
 
-	if (xzs_d6m4_probe_armed && thread == xzs_d6m4_target_thread) {
+	if (is_user && xzs_d6m4_probe_armed && thread == xzs_d6m4_target_thread) {
 		arm_saved_state64_t *ss64 = saved_state64(state);
 		uint64_t elr = get_saved_state_pc(state);
 		uint64_t spsr = get_saved_state_cpsr(state);
@@ -1027,14 +1027,6 @@ xzs_d6m5_dispatch_first_svc:
 		if (!is_saved_state64(state) || !is_user) {
 			panic("Invalid SVC_64 context");
 		}
-
-#if CONFIG_XZS_BRINGUP
-		if (xzs_d7m2_armed && !xzs_d7m2_shell_active) {
-			/* Same PID1 thread enters kernel in legal sleep/lock context: handoff to shell */
-			(void)xzs_d7m2_handoff_to_shell(current_proc(), current_task(), current_thread(), state);
-			break;
-		}
-#endif
 
 		handle_svc(state);
 #if CONFIG_XZS_BRINGUP

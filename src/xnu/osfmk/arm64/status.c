@@ -3499,10 +3499,16 @@ xzs_d6m4_monitor_and_report_r650(task_t t, thread_t th)
 		/* CPU0 waits safely while PID1 thread executes D7-M2 on CPU1 */
 		extern void delay(int);
 		for (int s = 0; s < 15000; s++) {
-			if (xzs_d7m2_complete) {
+			if (xzs_d7m2_complete || xzs_d6m4_r650_telemetry.unexpected_exception) {
 				break;
 			}
 			delay(1000);
+		}
+		if (xzs_d6m4_r650_telemetry.unexpected_exception) {
+			xzs_early_puts("\n[XZS-D7M2] UNEXPECTED EXCEPTION ON CPU 1\n");
+			xzs_early_puts("ESR_EL1="); xzs_d6m4_put_hex64(xzs_d6m4_r650_telemetry.esr); xzs_early_puts("\n");
+			xzs_early_puts("ELR_EL1="); xzs_d6m4_put_hex64(xzs_d6m4_r650_telemetry.elr); xzs_early_puts("\n");
+			xzs_early_puts("FAR_EL1="); xzs_d6m4_put_hex64(xzs_d6m4_r650_telemetry.far); xzs_early_puts("\n");
 		}
 		xzs_spin_halt();
 	} else if (xzs_d6m4_r650_telemetry.unexpected_exception) {
