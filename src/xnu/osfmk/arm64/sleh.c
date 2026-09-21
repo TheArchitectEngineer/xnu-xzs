@@ -768,6 +768,8 @@ sleh_synchronous(arm_context_t *context, uint64_t esr, vm_offset_t far, __unused
 	bool is_user = PSR64_IS_USER(get_saved_state_cpsr(state));
 
 #if CONFIG_XZS_BRINGUP
+	extern void xzs_breadcrumb(uint32_t cp, uint32_t err);
+	extern void xzs_early_puts(const char *s);
 	extern volatile boolean_t xzs_d6m4_probe_armed;
 	extern thread_t xzs_d6m4_target_thread;
 	extern struct xzs_d6m4_r650_telemetry xzs_d6m4_r650_telemetry;
@@ -777,8 +779,17 @@ sleh_synchronous(arm_context_t *context, uint64_t esr, vm_offset_t far, __unused
 	extern volatile int xzs_d7m2_write_completed;
 	extern volatile int xzs_d7m2_post_write_executed;
 	extern volatile int xzs_d7m2_complete;
+	extern volatile int xzs_d7m3_armed;
+	extern volatile int xzs_d7m3_banner_trapped;
+	extern volatile int xzs_d7m3_banner_completed;
+	extern volatile int xzs_d7m3_prompt_trapped;
+	extern volatile int xzs_d7m3_prompt_completed;
+	extern volatile int xzs_d7m3_post_prompt_proved;
+	extern volatile int xzs_d7m3_getpid_roundtrips;
+	extern volatile int xzs_d7m3_complete;
 	extern int xzs_d7m2_handoff_to_shell(proc_t p, task_t t, thread_t th, void *saved_state);
 	extern void xzs_d7m2_report_completion(void);
+	extern void xzs_d7m3_report_completion(void);
 
 	if (is_user && xzs_d6m4_probe_armed && thread == xzs_d6m4_target_thread) {
 		arm_saved_state64_t *ss64 = saved_state64(state);
@@ -814,6 +825,9 @@ sleh_synchronous(arm_context_t *context, uint64_t esr, vm_offset_t far, __unused
 			/* D6-M5 deliberately releases only the valid first SVC. */
 			if (signature_valid) {
 				goto xzs_d6m5_dispatch_first_svc;
+			} else {
+				xzs_d6m4_r650_telemetry.unexpected_exception = 1;
+				__asm__ volatile("dmb ish" ::: "memory");
 			}
 		} else if (is_user && class == ESR_EC_SVC_64 &&
 		    xzs_d6m4_r650_telemetry.syscall_return_prepared != 0 &&
@@ -851,6 +865,55 @@ sleh_synchronous(arm_context_t *context, uint64_t esr, vm_offset_t far, __unused
 			}
 			/* Subsequent known-safe getpid calls remain on the native path. */
 			goto xzs_d6m5_dispatch_first_svc;
+		} else if (is_user && class == ESR_EC_SVC_64 && xzs_d7m3_armed) {
+			if (!xzs_d7m3_banner_trapped &&
+			    ESR_ISS(esr) == 0x80 &&
+			    elr == 0x0000000100000308ULL &&
+			    ss64->x[0] == 1 &&
+			    ss64->x[1] == 0x0000000100000338ULL &&
+			    ss64->x[2] == 1332 &&
+			    ss64->x[16] == 4) {
+				/* D720/20: banner SVC observed from shell EL0 */
+				xzs_breadcrumb(0xD720, 0x20);
+				xzs_early_puts("[XZS-D7M3] D720/20 banner SVC observed from shell EL0\n");
+				/* D720/21: banner source/callsite/arguments validated */
+				xzs_breadcrumb(0xD720, 0x21);
+				xzs_early_puts("[XZS-D7M3] D720/21 banner source/callsite/arguments validated (fd=1, va=0x100000338, len=1332)\n");
+				xzs_d7m3_banner_trapped = 1;
+				__asm__ volatile("dmb ish" ::: "memory");
+				goto xzs_d6m5_dispatch_first_svc;
+			} else if (xzs_d7m3_banner_completed && !xzs_d7m3_prompt_trapped &&
+			    ESR_ISS(esr) == 0x80 &&
+			    elr == 0x0000000100000320ULL &&
+			    ss64->x[0] == 1 &&
+			    ss64->x[1] == 0x0000000100000330ULL &&
+			    ss64->x[2] == 5 &&
+			    ss64->x[16] == 4) {
+				/* D720/30: prompt SVC observed from shell EL0 */
+				xzs_breadcrumb(0xD720, 0x30);
+				xzs_early_puts("[XZS-D7M3] D720/30 prompt SVC observed from shell EL0\n");
+				/* D720/31: prompt source/callsite/arguments validated */
+				xzs_breadcrumb(0xD720, 0x31);
+				xzs_early_puts("[XZS-D7M3] D720/31 prompt source/callsite/arguments validated (fd=1, va=0x100000330, len=5)\n");
+				xzs_d7m3_prompt_trapped = 1;
+				__asm__ volatile("dmb ish" ::: "memory");
+				goto xzs_d6m5_dispatch_first_svc;
+			} else if (xzs_d7m3_prompt_completed &&
+			    ESR_ISS(esr) == 0x80 &&
+			    elr == 0x0000000100000328ULL &&
+			    ss64->x[16] == 20) {
+				if (!xzs_d7m3_post_prompt_proved) {
+					/* D720/40: first post-prompt getpid entered */
+					xzs_breadcrumb(0xD720, 0x40);
+					xzs_early_puts("[XZS-D7M3] D720/40 first post-prompt getpid entered\n");
+					xzs_d7m3_post_prompt_proved = 1;
+					__asm__ volatile("dmb ish" ::: "memory");
+				}
+				goto xzs_d6m5_dispatch_first_svc;
+			} else {
+				xzs_d6m4_r650_telemetry.unexpected_exception = 1;
+				__asm__ volatile("dmb ish" ::: "memory");
+			}
 		} else if (is_user && class == ESR_EC_SVC_64 && xzs_d7m2_shell_active) {
 			if (!xzs_d7m2_write_trapped &&
 			    ESR_ISS(esr) == 0x80 &&
@@ -876,6 +939,13 @@ sleh_synchronous(arm_context_t *context, uint64_t esr, vm_offset_t far, __unused
 				__asm__ volatile("dmb ish" ::: "memory");
 			}
 		} else {
+			xzs_d6m4_r650_telemetry.esr = esr;
+			xzs_d6m4_r650_telemetry.elr = elr;
+			xzs_d6m4_r650_telemetry.far = far;
+			xzs_d6m4_r650_telemetry.spsr = spsr;
+			xzs_d6m4_r650_telemetry.sp_el0 = sp_el0;
+			xzs_d6m4_r650_telemetry.x0 = ss64->x[0];
+			xzs_d6m4_r650_telemetry.x16 = ss64->x[16];
 			xzs_d6m4_r650_telemetry.unexpected_exception = 1;
 			__asm__ volatile("dmb ish" ::: "memory");
 		}
@@ -1030,6 +1100,42 @@ xzs_d6m5_dispatch_first_svc:
 
 		handle_svc(state);
 #if CONFIG_XZS_BRINGUP
+		if (xzs_d7m3_armed) {
+			arm_saved_state64_t *ss_ret = saved_state64(state);
+			if (xzs_d7m3_banner_trapped && !xzs_d7m3_banner_completed) {
+				if (ss_ret->x[0] == 1332 && (ss_ret->cpsr & 0x20000000ULL) == 0) {
+					xzs_d7m3_banner_completed = 1;
+					__asm__ volatile("dmb ish" ::: "memory");
+					/* D720/22: native write returned successfully */
+					xzs_breadcrumb(0xD720, 0x22);
+					xzs_early_puts("[XZS-D7M3] D720/22 native write returned successfully\n");
+					/* D720/23: exact banner byte count verified */
+					xzs_breadcrumb(0xD720, 0x23);
+					xzs_early_puts("[XZS-D7M3] D720/23 exact banner byte count verified (1332)\n");
+				}
+			} else if (xzs_d7m3_prompt_trapped && !xzs_d7m3_prompt_completed) {
+				if (ss_ret->x[0] == 5 && (ss_ret->cpsr & 0x20000000ULL) == 0) {
+					xzs_d7m3_prompt_completed = 1;
+					__asm__ volatile("dmb ish" ::: "memory");
+					/* D720/32: native write returned successfully */
+					xzs_breadcrumb(0xD720, 0x32);
+					xzs_early_puts("[XZS-D7M3] D720/32 native write returned successfully\n");
+					/* D720/33: exact prompt byte count verified */
+					xzs_breadcrumb(0xD720, 0x33);
+					xzs_early_puts("[XZS-D7M3] D720/33 exact prompt byte count verified (5)\n");
+				}
+			} else if (xzs_d7m3_prompt_completed && !xzs_d7m3_complete) {
+				if (ss_ret->x[0] == 1 && (ss_ret->cpsr & 0x20000000ULL) == 0) {
+					xzs_d7m3_getpid_roundtrips++;
+					if (xzs_d7m3_getpid_roundtrips == 64) {
+						/* D720/50: 64th post-prompt getpid returned successfully */
+						xzs_breadcrumb(0xD720, 0x50);
+						xzs_early_puts("[XZS-D7M3] D720/50 64th post-prompt getpid returned successfully\n");
+						xzs_d7m3_report_completion();
+					}
+				}
+			}
+		}
 		if (xzs_d7m2_shell_active && xzs_d7m2_write_trapped && !xzs_d7m2_write_completed) {
 			arm_saved_state64_t *ss_ret = saved_state64(state);
 			if (ss_ret->x[0] == 24 && (ss_ret->cpsr & 0x20000000ULL) == 0) {

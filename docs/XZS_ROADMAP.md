@@ -19,7 +19,7 @@ Progress is strictly gated by physical hardware verification. Speculative percen
 | **Phase D4** | Block-storage driver integration (`bdevsw` / `disk0`) | **COMPLETE** |
 | **Phase D5** | Real root filesystem mount (RAMDisk XZSFS) | **COMPLETE / SEALED** |
 | **Phase D6** | PID 1 / First EL0 userspace (`initproc` / launchd) | **COMPLETE / SEALED** |
-| **Phase D7** | Interactive serial shell (`/bin/sh` headless REPL) | **IN PROGRESS (D7-M1, D7-M2 COMPLETE)** |
+| **Phase D7** | Interactive serial shell (`/bin/sh` headless REPL) | **IN PROGRESS (D7-M1, D7-M2, D7-M3 COMPLETE)** |
 
 | **Phase D8** | Native display / framebuffer / touch / recovery console | **PLANNED** |
 | **Phase D9** | XZSPlatform hardware/platform compatibility layer | **PLANNED** |
@@ -302,7 +302,7 @@ Progress is strictly gated by physical hardware verification. Speculative percen
 * **Subtasks**:
   - **D7-M1 (Shell Artifact & Dependency Audit)**: ✅ **COMPLETE** (Audited `/bin/sh` static ARM64 Mach-O stub, zero dyld dependencies, Darwin initial stack compatible, stdio fd 0/1/2 inheritance verified, UARTDM RX registers identified, Strategy B selected for D7-M2).
   - **D7-M2 (PID1 -> `/bin/sh` Handoff)**: ✅ **COMPLETE / SEALED** (PID1 in-place same-thread reload to `/bin/sh` static Mach-O image; old bootstrap image deallocated, new `__TEXT` mapped RX, stack reinitialized RW/NX with canonical Darwin initial frame; hardware verified real EL0 transition, `SYS_write(1, "XZS: /bin/sh EL0 online\n", 24)` returning 24 with zero error, subsequent EL0 instruction execution, and clean exit trapped via `SYS_exit(0)`).
-  - **D7-M3**: Shell stdout (`/bin/sh` banner and prompt emission to `/dev/console`).
+  - **D7-M3 (Shell Stdout & Visual Identity)**: ✅ **COMPLETE / SEALED** (Userspace `/bin/sh` in EL0 executing Darwin `write(1, banner, 1332)` and `write(1, prompt, 5)` to `/dev/console`; exact banner and prompt text observed on physical console transport; passive syscall dispatch verified; 64 sustained post-prompt EL0 getpid round-trips; UART RX preserved as unavailable).
   - **D7-M4**: Shell stdin (Qualcomm MSM8996 UARTDM RX driver bring-up).
   - **D7-M5**: Interactive REPL / command loop (line editing, enter key handling).
   - **D7-M6**: Filesystem commands (`pwd`, `ls`, `cat`).
@@ -316,6 +316,13 @@ Progress is strictly gated by physical hardware verification. Speculative percen
   - Verifiers: `scripts/verify_d7m2_acceptance.py` (100% PASS) and `scripts/verify_d6_acceptance.py` (100% PASS).
   - Telemetry: `D7-M2_COMPLETE=yes`, `ROADMAP_ADVANCED_TO=D7-M3`, `D6_REGRESSION_VERIFIER=PASS`.
   - Real EL0 Execution: `SYS_write(1, "XZS: /bin/sh EL0 online\n", 24)` returned 24; subsequent EL0 instructions executed; clean exit via `SYS_exit(0)` trapped.
+* **D7-M3 Hardware Evidence**:
+  - Tested boot image SHA-256: `c2b66cea0a6475bc140e729b2827e41d636b855f2a29f7619a56c5d1cccbe68c`.
+  - Checkpoint sequence: Monotonic breadcrumbs `D720/00`, `/10`, `/20`, `/30`, `/31`, `/32`, `/33`, `/40`, `/50`, `/60`, `/61`, `/62`, `/90`, `/91`, `/01`.
+  - Verifiers: `scripts/verify_d7m3_acceptance.py` (100% PASS), `scripts/verify_d7m2_acceptance.py --regression` (100% PASS), `scripts/verify_d6_acceptance.py` (100% PASS).
+  - Negative Test: `python3 scripts/verify_d7m3_acceptance.py artifacts/logs/d7m3_false_positive_console.log` (FAILS with exit code 1 as required).
+  - Telemetry: `D7_M3_COMPLETE=yes`, `SHELL_RUNNING_IN_EL0=yes`, `SHELL_BANNER_WRITE_RESULT=1332`, `SHELL_PROMPT_WRITE_RESULT=5`, `POST_PROMPT_GETPID_ROUNDTRIPS=64`, `SHELL_STDOUT_WORKING=yes`, `SHELL_PROMPT_VISIBLE=yes`, `UARTDM_RX_AVAILABLE=no`.
+  - Genuine Console Transport: Verified ASCII banner (`Native Darwin/XNU bring-up for Xperia XZs`, `[ xnu-xzs userspace online ]`) and prompt (`xzs#`) observed on physical console transport.
 * **Visual Identity & Banner**:
   The xnu-xzs shell features a recognizable terminal ASCII banner upon entering `/bin/sh`:
   ```text

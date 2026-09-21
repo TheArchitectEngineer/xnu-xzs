@@ -3490,26 +3490,28 @@ xzs_d6m4_monitor_and_report_r650(task_t t, thread_t th)
 		xzs_breadcrumb(0xD650, 0x01);
 		xzs_early_puts("[XZS-D6M6] D650/01 terminal before D6-M7\n");
 
-		/* Arm D7-M2: PID1 on CPU1 will transition to /bin/sh on its next syscall */
+		/* Arm D7-M2 / D7-M3: PID1 on CPU1 will transition to /bin/sh on its next syscall */
 		extern volatile int xzs_d7m2_armed;
-		extern volatile int xzs_d7m2_complete;
+		extern volatile int xzs_d7m3_complete;
 		xzs_d7m2_armed = 1;
 		__asm__ volatile("dmb ish" ::: "memory");
 
-		/* CPU0 waits safely while PID1 thread executes D7-M2 on CPU1 */
+		/* CPU0 waits safely while PID1 thread executes D7-M2 handoff and D7-M3 shell stdout on CPU1 */
 		extern void delay(int);
 		for (int s = 0; s < 15000; s++) {
-			if (xzs_d7m2_complete || xzs_d6m4_r650_telemetry.unexpected_exception) {
+			if (xzs_d7m3_complete || xzs_d6m4_r650_telemetry.unexpected_exception) {
 				break;
 			}
 			delay(1000);
 		}
 		if (xzs_d6m4_r650_telemetry.unexpected_exception) {
-			xzs_early_puts("\n[XZS-D7M2] UNEXPECTED EXCEPTION ON CPU 1\n");
+			xzs_early_puts("\n[XZS-D7M3] UNEXPECTED EXCEPTION ON CPU 1\n");
 			xzs_early_puts("ESR_EL1="); xzs_d6m4_put_hex64(xzs_d6m4_r650_telemetry.esr); xzs_early_puts("\n");
 			xzs_early_puts("ELR_EL1="); xzs_d6m4_put_hex64(xzs_d6m4_r650_telemetry.elr); xzs_early_puts("\n");
 			xzs_early_puts("FAR_EL1="); xzs_d6m4_put_hex64(xzs_d6m4_r650_telemetry.far); xzs_early_puts("\n");
 		}
+		/* Allow UARTDM TX FIFO and pstore to flush completely before halting CPU0 */
+		delay(1000000);
 		xzs_spin_halt();
 	} else if (xzs_d6m4_r650_telemetry.unexpected_exception) {
 		xzs_early_puts("\n[XZS-D6M4] UNEXPECTED EXCEPTION ON CPU 1\n");
@@ -3542,6 +3544,19 @@ xzs_d6m4_monitor_and_report_r650(task_t t, thread_t th)
 		xzs_early_puts(xzs_d6m4_r650_telemetry.exc_return_entry ? "yes\n" : "no\n");
 		xzs_early_puts("BEFORE_ERET=");
 		xzs_early_puts(xzs_d6m4_r650_telemetry.before_eret ? "yes\n" : "no\n");
+		xzs_early_puts("SVC_TRAPPED=");
+		xzs_early_puts(xzs_d6m4_r650_telemetry.svc_trapped ? "yes\n" : "no\n");
+		xzs_early_puts("SIGNATURE_VALID=");
+		xzs_early_puts(xzs_d6m4_r650_telemetry.signature_valid ? "yes\n" : "no\n");
+		xzs_early_puts("UNEXPECTED_EXCEPTION=");
+		xzs_early_puts(xzs_d6m4_r650_telemetry.unexpected_exception ? "yes\n" : "no\n");
+		xzs_early_puts("ESR_EL1="); xzs_d6m4_put_hex64(xzs_d6m4_r650_telemetry.esr); xzs_early_puts("\n");
+		xzs_early_puts("ELR_EL1="); xzs_d6m4_put_hex64(xzs_d6m4_r650_telemetry.elr); xzs_early_puts("\n");
+		xzs_early_puts("FAR_EL1="); xzs_d6m4_put_hex64(xzs_d6m4_r650_telemetry.far); xzs_early_puts("\n");
+		xzs_early_puts("SPSR_EL1="); xzs_d6m4_put_hex64(xzs_d6m4_r650_telemetry.spsr); xzs_early_puts("\n");
+		xzs_early_puts("SP_EL0="); xzs_d6m4_put_hex64(xzs_d6m4_r650_telemetry.sp_el0); xzs_early_puts("\n");
+		xzs_early_puts("X0="); xzs_d6m4_put_hex64(xzs_d6m4_r650_telemetry.x0); xzs_early_puts("\n");
+		xzs_early_puts("X16="); xzs_d6m4_put_hex64(xzs_d6m4_r650_telemetry.x16); xzs_early_puts("\n");
 		xzs_spin_halt();
 	}
 }

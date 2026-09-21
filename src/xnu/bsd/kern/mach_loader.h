@@ -167,6 +167,15 @@ void xzs_d6m2_macho_probe(proc_t p, task_t t, thread_t th);
 void xzs_d6m3_user_vm_probe(proc_t p, task_t t, thread_t th);
 int xzs_d7m2_handoff_to_shell(proc_t p, task_t t, thread_t th, void *saved_state);
 void xzs_d7m2_report_completion(void);
+void xzs_d7m3_report_completion(void);
+extern volatile int xzs_d7m3_armed;
+extern volatile int xzs_d7m3_banner_trapped;
+extern volatile int xzs_d7m3_banner_completed;
+extern volatile int xzs_d7m3_prompt_trapped;
+extern volatile int xzs_d7m3_prompt_completed;
+extern volatile int xzs_d7m3_post_prompt_proved;
+extern volatile int xzs_d7m3_getpid_roundtrips;
+extern volatile int xzs_d7m3_complete;
 kern_return_t xzs_promote_shell_text_exec(pmap_t pmap, vm_map_address_t va, vm_map_size_t size);
 #endif
 

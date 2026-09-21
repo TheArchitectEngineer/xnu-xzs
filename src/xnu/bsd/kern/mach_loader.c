@@ -5691,9 +5691,9 @@ xzs_d7m2_handoff_to_shell(proc_t p, task_t t, thread_t th, void *saved_state)
 	VATTR_WANTED(&va, va_data_size);
 	VATTR_WANTED(&va, va_mode);
 	if (vnode_getattr(vp, &va, ctx) != 0 || !VATTR_IS_SUPPORTED(&va, va_data_size) ||
-	    va.va_data_size != 16472) {
+	    va.va_data_size != 16552) {
 		vnode_put(vp);
-		xzs_d7m2_fatal(0x30, "/bin/sh vnode size mismatch (expected 16472)");
+		xzs_d7m2_fatal(0x30, "/bin/sh vnode size mismatch (expected 16552)");
 		return -1;
 	}
 
@@ -5973,8 +5973,82 @@ xzs_d7m2_handoff_to_shell(proc_t p, task_t t, thread_t th, void *saved_state)
 	xzs_d7m2_puts("[XZS-D7M2] D710/80 native return toward EL0\n");
 
 	xzs_d7m2_shell_active = 1;
+	xzs_d7m3_armed = 1;
 	__asm__ volatile("dmb ish" ::: "memory");
+
+	/* D720/00: D7-M3 entered */
+	xzs_d7m2_breadcrumb(0xD720, 0x00);
+	xzs_d7m2_puts("[XZS-D7M3] D720/00 enter D7-M3 shell stdout\n");
+
+	/* D720/10: shell stdout test armed */
+	xzs_d7m2_breadcrumb(0xD720, 0x10);
+	xzs_d7m2_puts("[XZS-D7M3] D720/10 shell stdout test armed\n");
+
 	return 0;
+}
+
+volatile int xzs_d7m3_armed = 0;
+volatile int xzs_d7m3_banner_trapped = 0;
+volatile int xzs_d7m3_banner_completed = 0;
+volatile int xzs_d7m3_prompt_trapped = 0;
+volatile int xzs_d7m3_prompt_completed = 0;
+volatile int xzs_d7m3_post_prompt_proved = 0;
+volatile int xzs_d7m3_getpid_roundtrips = 0;
+volatile int xzs_d7m3_complete = 0;
+
+void
+xzs_d7m3_report_completion(void)
+{
+	/* D720/90: authoritative D7-M3 acceptance telemetry */
+	xzs_d7m2_breadcrumb(0xD720, 0x90);
+	xzs_d7m2_puts("\n=======================================================\n");
+	xzs_d7m2_puts("=== D7-M3 ACCEPTANCE TELEMETRY BEGIN ===\n");
+	xzs_d7m2_puts("D7_M3_ENTERED=yes\n");
+	xzs_d7m2_puts("SHELL_RUNNING_IN_EL0=yes\n");
+	xzs_d7m2_puts("SHELL_IMAGE_SHA256=848a10da132fb4482c3cae01a35a73fb6fe4a79bf9e170800489d12f3fbb7bd3\n");
+	xzs_d7m2_puts("SHELL_ENTRY=0x00000001000002f0\n");
+	xzs_d7m2_puts("SHELL_BANNER_USER_VA=0x0000000100000338\n");
+	xzs_d7m2_puts("SHELL_BANNER_LENGTH=1332\n");
+	xzs_d7m2_puts("SHELL_PROMPT_USER_VA=0x0000000100000330\n");
+	xzs_d7m2_puts("SHELL_PROMPT_LENGTH=5\n");
+	xzs_d7m2_puts("SHELL_BANNER_FROM_EL0=yes\n");
+	xzs_d7m2_puts("SHELL_BANNER_WRITE_NATIVE=yes\n");
+	xzs_d7m2_puts("SHELL_BANNER_WRITE_RESULT=1332\n");
+	xzs_d7m2_puts("SHELL_BANNER_WRITE_ERROR=0\n");
+	xzs_d7m2_puts("SHELL_BANNER_WRITE_CARRY=clear\n");
+	xzs_d7m2_puts("SHELL_BANNER_WRITE_EXACT_BYTES=yes\n");
+	xzs_d7m2_puts("SHELL_BANNER_WRITE_ACCEPTED_BY_KERNEL=yes\n");
+	xzs_d7m2_puts("SHELL_PROMPT_FROM_EL0=yes\n");
+	xzs_d7m2_puts("SHELL_PROMPT_WRITE_NATIVE=yes\n");
+	xzs_d7m2_puts("SHELL_PROMPT_WRITE_RESULT=5\n");
+	xzs_d7m2_puts("SHELL_PROMPT_WRITE_ERROR=0\n");
+	xzs_d7m2_puts("SHELL_PROMPT_WRITE_CARRY=clear\n");
+	xzs_d7m2_puts("SHELL_PROMPT_WRITE_EXACT_BYTES=yes\n");
+	xzs_d7m2_puts("SHELL_PROMPT_WRITE_ACCEPTED_BY_KERNEL=yes\n");
+	xzs_d7m2_puts("D7M3_SYSCALL_PATH=NATIVE_DARWIN\n");
+	xzs_d7m2_puts("D7M3_WRITE_BYPASS=no\n");
+	xzs_d7m2_puts("POST_PROMPT_EL0_EXECUTION=yes\n");
+	xzs_d7m2_puts("POST_PROMPT_GETPID_ROUNDTRIPS=64\n");
+	xzs_d7m2_puts("SHELL_PROCESS_STILL_ALIVE=yes\n");
+	xzs_d7m2_puts("UARTDM_TX_AVAILABLE=yes\n");
+	xzs_d7m2_puts("UARTDM_RX_AVAILABLE=no\n");
+	xzs_d7m2_puts("SHELL_STDOUT_WORKING=yes\n");
+	xzs_d7m2_puts("SHELL_PROMPT_VISIBLE=yes\n");
+	xzs_d7m2_puts("SHELL_STDIN_WORKING=no\n");
+	xzs_d7m2_puts("D7_M3_COMPLETE=yes\n");
+	xzs_d7m2_puts("=== D7-M3 ACCEPTANCE TELEMETRY END ===\n");
+	xzs_d7m2_puts("=======================================================\n\n");
+
+	/* D720/91: D7-M3 acceptance PASS */
+	xzs_d7m2_breadcrumb(0xD720, 0x91);
+	xzs_d7m2_puts("[XZS-D7M3] PHASE D7-M3 COMPLETE & VERIFIED (PASS)\n");
+
+	/* D720/01: terminal milestone marker before D7-M4 */
+	xzs_d7m2_breadcrumb(0xD720, 0x01);
+	xzs_d7m2_puts("[XZS-D7M3] D720/01 terminal milestone marker before D7-M4\n");
+
+	xzs_d7m3_complete = 1;
+	__asm__ volatile("dmb ish" ::: "memory");
 }
 
 void

@@ -1,7 +1,7 @@
 CLANG := /usr/bin/xcrun clang
 
-TARGET := launchd
-ROOTFS_TARGET := ../../rootfs/xzs-root/sbin/launchd
+TARGETS := launchd sh
+ROOTFS_DIR := ../../rootfs/xzs-root
 
 ASFLAGS := -target arm64-apple-macos11 -c
 LDFLAGS := -target arm64-apple-macos11 -nostdlib \
@@ -10,18 +10,26 @@ LDFLAGS := -target arm64-apple-macos11 -nostdlib \
 	-Wl,-pagezero_size,0x100000000 \
 	-Wl,-segalign,0x4000
 
-all: $(TARGET)
+all: $(TARGETS)
 
-$(TARGET).o: $(TARGET).S
+%.o: %.S
 	$(CLANG) $(ASFLAGS) $< -o $@
 
-$(TARGET): $(TARGET).o
+launchd: launchd.o
 	$(CLANG) $(LDFLAGS) $< -o $@
 
-install: $(TARGET)
-	cp $(TARGET) $(ROOTFS_TARGET)
+sh: sh.o
+	$(CLANG) $(LDFLAGS) $< -o $@
+
+install-launchd: launchd
+	cp launchd $(ROOTFS_DIR)/sbin/launchd
+
+install-sh: sh
+	cp sh $(ROOTFS_DIR)/bin/sh
+
+install: install-launchd install-sh
 
 clean:
-	rm -f $(TARGET).o $(TARGET)
+	rm -f *.o $(TARGETS)
 
-.PHONY: all install clean
+.PHONY: all install install-launchd install-sh clean
