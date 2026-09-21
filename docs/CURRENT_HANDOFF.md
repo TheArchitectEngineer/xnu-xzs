@@ -20,6 +20,9 @@ D7_M4_INTERNAL_HARDWARE_COMMIT=639fe1c42478c8ca07aa0019cbe59bfd846d9866
 D7_M4_INTERNAL_BOOT_IMAGE_SHA256=329f869a55e7185bda99d14f38575d13c693298b04c7fa0b87f5d3439b34044a
 D7_M4_INTERNAL_RAW_LOG_SHA256=49422168deee99ad9c8fa3b5d07adb70edf6c367b185174e44cb8e3ff769d469
 
+D7_M4_EXTERNAL_BOOT_IMAGE_SHA256=019beff1c47a15bbb20979fc8d03c47befa7f7f80dbe27bacd1d91c5d9892909
+D7_M4_EXTERNAL_RAW_LOG_SHA256=1dd42ebfd8ac667aa359b68a0ffe5e4d5d99a55bcdc4b083ddfe7ba26b7d8338
+
 LAST_SEALED_MILESTONE=D7-M3
 
 CURRENT_BRANCH=xzs-d7m4-readiness
@@ -32,18 +35,19 @@ D7_M2_STATUS=COMPLETE / SEALED
 D7_M3_STATUS=COMPLETE / SEALED
 D7_M4_P0_READINESS_STATUS=COMPLETE
 D7_M4_INTERNAL_PIPELINE_STATUS=HARDWARE VERIFIED
-D7_M4_EXTERNAL_PIPELINE_STATUS=NOT VERIFIED
+D7_M4_EXTERNAL_PIPELINE_STATUS=BLOCKED ON PHYSICAL TRANSPORT
 D7_M4_STATUS=IN PROGRESS / NOT SEALED
 
 NEXT_GOAL=
 Phase D7-M4 final gate:
-  host TX sends 41 42 43 0a
-  external GPIO5 RX reaches UARTDM IRQ
-  common ring/deferred tty/read(0) pipeline returns exact bytes to EL0
-  external-mode verifier passes
+  Physical 1.8V USB-UART adapter TX connection to Xperia GPIO5 test point
+  Host TX transmits 41 42 43 0a (ABC\n)
+  External GPIO5 RX reaches UARTDM IRQ (INTID 146)
+  Common ring/deferred tty/read(0) pipeline returns exact bytes to EL0
+  verify_d7m4_acceptance.py --external passes
 
 KNOWN_BLOCKER=
-External host USB-UART TX / Xperia GPIO5 physical path has not yet produced immutable acceptance evidence.
+Physical transport not connected: Host Mac has no external USB-UART adapter attached (ioreg shows only S1Boot Fastboot); /dev/cu.debug-console is internal Apple Mac on-board UART; no wire connects host to Xperia GPIO5 RX test point.
 
 SHELL_BINARY_SHA256=848a10da132fb4482c3cae01a35a73fb6fe4a79bf9e170800489d12f3fbb7bd3
 
@@ -57,5 +61,5 @@ CURRENT_KNOWN_PLATFORM_WORKAROUNDS=
 - dtrace_fbt deferral / fbt.c (defers kernel-wide function boundary tracing instrumentation)
 
 NEXT_EXACT_ACTION=
-Run the immutable external UART acceptance candidate at 115200 8N1 with host bytes 41 42 43 0a; do not seal M4 unless the external-mode verifier passes.
+Attach physical 1.8V USB-UART adapter, wire TX to Xperia GPIO5 test point + GND, and re-run ./scripts/run-and-extract.sh. Do not seal D7-M4 or start D7-M5 until external verifier passes.
 ```

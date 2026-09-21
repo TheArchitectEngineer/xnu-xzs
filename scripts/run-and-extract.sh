@@ -38,16 +38,16 @@ echo "Target device found in Fastboot: $DEV"
 # Step 2: Boot XNU
 echo "[2/4] Booting artifacts/builds/xzs-xnu-boot.img..."
 
-# Background injector for D7-M4 RX probe
+# Background injector for D7-M4 external UART acceptance (ABC\n = 41 42 43 0a)
 (
     if [ -e "/dev/cu.debug-console" ]; then
-        stty -f /dev/cu.debug-console 115200 cs8 -cstopb -parenb 2>/dev/null || true
-        # Send test byte at multiple intervals to cover the RX probe window
-        for t in 4 5 6 7 8 9 10; do
+        stty -f /dev/cu.debug-console 115200 cs8 -cstopb -parenb raw 2>/dev/null || true
+        # Send deterministic ABC\n payload across the RX probe / wait window
+        for t in 3 4 5 6 7 8 9 10 11 12; do
             sleep 1
-            python3 -c "import os; fd = os.open('/dev/cu.debug-console', os.O_WRONLY | os.O_NONBLOCK | os.O_NOCTTY); os.write(fd, b'A'); os.close(fd)" 2>/dev/null || true
+            python3 -c "import os, termios; fd = os.open('/dev/cu.debug-console', os.O_WRONLY | os.O_NONBLOCK | os.O_NOCTTY); attrs = termios.tcgetattr(fd); attrs[4] = termios.B115200; attrs[5] = termios.B115200; attrs[0] = 0; attrs[1] = 0; attrs[2] = termios.CS8 | termios.CREAD | termios.CLOCAL; attrs[3] = 0; termios.tcsetattr(fd, termios.TCSANOW, attrs); os.write(fd, b'ABC\n'); os.close(fd)" 2>/dev/null || true
         done
-        echo ">>> [HOST-INJECTOR] Sent 0x41 ('A') x7 over /dev/cu.debug-console <<<"
+        echo ">>> [HOST-INJECTOR] Sent 0x41 0x42 0x43 0x0a ('ABC\\n') over /dev/cu.debug-console <<<"
     fi
 ) &
 

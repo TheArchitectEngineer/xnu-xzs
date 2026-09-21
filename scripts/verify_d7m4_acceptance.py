@@ -52,11 +52,22 @@ INTERNAL_REQUIRED = {
 EXTERNAL_REQUIRED = {
     **COMMON_REQUIRED,
     "D7M4_INPUT_SOURCE": "EXTERNAL_UART",
+    "UARTDM_RX_IRQ": "146",
+    "GIC_INTERRUPT_TYPE": "SPI_114",
+    "GIC_TRIGGER_TYPE": "LEVEL_HIGH",
+    "UARTDM_RX_IRQ_CONFIGURED": "yes",
+    "UARTDM_RX_IRQ_WORKING": "yes",
+    "UARTDM_RX_MODE": "IRQ_WITH_BOUNDED_POLL_FALLBACK",
+    "UARTDM_RX_HW_CONFIGURED": "yes",
+    "UARTDM_RX_AVAILABLE": "yes",
     "UARTDM_RX_EXTERNAL_BYTE_OBSERVED": "yes",
     "UARTDM_RX_RAW_BYTE_MATCH": "yes",
     "EXTERNAL_UART_PIPELINE_PASS": "yes",
+    "SHELL_INPUT_BYTES_MATCH": "yes",
+    "SHELL_PROCESS_STILL_ALIVE": "yes",
     "SHELL_STDIN_WORKING": "yes",
     "D7_M4_COMPLETE": "yes",
+    "D7_M4_HARDWARE_VERIFIED": "yes",
 }
 
 
@@ -108,8 +119,8 @@ def validate_mode(text, mode):
         actual = telemetry.get(key)
         if actual != expected:
             return False, f"{key}={actual!r}, expected {expected!r}"
-    if mode == "internal":
-        for key in ("UARTDM_RX_IRQ_COUNT", "UARTDM_RX_IRQ_BYTE_COUNT"):
+    for key in ("UARTDM_RX_IRQ_COUNT", "UARTDM_RX_IRQ_BYTE_COUNT"):
+        if mode == "internal" or key in telemetry:
             try:
                 value = int(telemetry.get(key, "0"), 0)
             except ValueError:
