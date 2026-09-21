@@ -1,23 +1,27 @@
 # XNU-XZS Current Session Handoff
 
 ```text
-CURRENT_MAIN_COMMIT=da0640433eeb53d1f40bfc9523a33b0acfc288fd
+FINAL_D6_MAIN_COMMIT=pending
 
-LAST_SEALED_MILESTONE=D6-M6
+D6_FINAL_HARDWARE_COMMIT=f5dd7a36bfedfbcf68d7a6bf2a95d4d09dab5ac0
+D6_FINAL_SEAL_COMMIT=pending
+D6_MAIN_MERGE_COMMIT=pending
 
-D6-M6_HARDWARE_TESTED_COMMIT=e64ce18b506bdafbd78c0c0d428a19d7dac85124
-D6-M6_SEAL_COMMIT=9f871c43f9325fbc8ebfd321be50a449b32c8964
-D6-M6_MAIN_MERGE_COMMIT=da0640433eeb53d1f40bfc9523a33b0acfc288fd
+D6_TAG=xzs-d6-userspace-complete
 
+LAST_SEALED_MILESTONE=D6-M7
 
-NEXT_MILESTONE=D6-M7
+NEXT_PHASE=D7
+NEXT_MILESTONE=D7-M1
 
-UARTDM_TX=working
-UARTDM_RX=not implemented
-PHYSICAL_CONSOLE_RX_AVAILABLE=no
+NEXT_GOAL=
+interactive EL0 shell
+
+KNOWN_BLOCKER=
+MSM8996 UARTDM RX not implemented
 
 CURRENT_KNOWN_PLATFORM_WORKAROUNDS=
-- devfs_getattr pointer-hardening workaround / 3e417bb (bypasses vm_kernel_addrhash SHA-256 hang; returns fsid 0x64657666)
+- devfs_getattr pointer-hardening workaround / 3e417bb (bypasses vm_kernel_addrhash SHA-256 hang; returns fsid 0x64657666; to be re-audited in D9 XZSPlatform)
 - memorystatus static jetsam buffer / kern_memorystatus.c (pre-allocated static snapshot buffer)
 - thread_call zone priming / thread_call.c (pre-allocates 105 elements to avoid early zone lock contention)
 - non-Apple silicon CTRR compatibility / machine_routines.c (marks unsafe_kernel_text false without Apple DT CTRR property)
@@ -26,5 +30,5 @@ CURRENT_KNOWN_PLATFORM_WORKAROUNDS=
 - dtrace_fbt deferral / fbt.c (defers kernel-wide function boundary tracing instrumentation)
 
 NEXT_EXACT_ACTION=
-perform D6-M7 final D6 regression/seal
+begin Phase D7-M1 shell artifact and dependency audit
 ```
