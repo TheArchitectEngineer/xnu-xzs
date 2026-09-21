@@ -18,7 +18,7 @@ D7_M3_TAG=xzs-d7m3-complete
 
 LAST_SEALED_MILESTONE=D7-M3
 
-CURRENT_BRANCH=main
+CURRENT_BRANCH=xzs-d7m4-readiness
 
 NEXT_PHASE=D7
 NEXT_MILESTONE=D7-M4
@@ -26,12 +26,19 @@ NEXT_MILESTONE=D7-M4
 D7_M1_STATUS=COMPLETE
 D7_M2_STATUS=COMPLETE / SEALED
 D7_M3_STATUS=COMPLETE / SEALED
+D7_M4_P0_READINESS_STATUS=COMPLETE
 
 NEXT_GOAL=
-Phase D7-M4: Shell stdin (Qualcomm MSM8996 UARTDM RX driver bring-up)
+Phase D7-M4 Ladder:
+  M4-A: Physical UARTDM RX Byte Visibility
+  M4-B: Driver receive_ready() / receive_data() primitives
+  M4-C: SPSC Ring Buffering
+  M4-D: TTY cons_cinput injection
+  M4-E: Native read(0) Darwin syscall
+  M4-F: Full stdin line verification
 
 KNOWN_BLOCKER=
-MSM8996 UARTDM RX not implemented (target of Phase D7-M4)
+MSM8996 UARTDM RX driver implementation in progress (Phase D7-M4)
 
 SHELL_BINARY_SHA256=848a10da132fb4482c3cae01a35a73fb6fe4a79bf9e170800489d12f3fbb7bd3
 
@@ -45,5 +52,5 @@ CURRENT_KNOWN_PLATFORM_WORKAROUNDS=
 - dtrace_fbt deferral / fbt.c (defers kernel-wide function boundary tracing instrumentation)
 
 NEXT_EXACT_ACTION=
-Audit Qualcomm MSM8996 UARTDM RX registers, FIFO mechanism, and interrupt line for D7-M4. Do NOT start D7-M4 until next prompt.
+Implement M4-A / M4-B: Add UARTDM RX transfer initialization and non-blocking receive primitives in pe_serial.c.
 ```

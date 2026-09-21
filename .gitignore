@@ -35,3 +35,4 @@ src/xzs-userland/sh
 
 # Test binaries
 tests/test_xzsfs_host
+tests/test_xzs_rx_buf

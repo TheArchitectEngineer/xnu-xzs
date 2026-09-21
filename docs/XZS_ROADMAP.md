@@ -19,7 +19,7 @@ Progress is strictly gated by physical hardware verification. Speculative percen
 | **Phase D4** | Block-storage driver integration (`bdevsw` / `disk0`) | **COMPLETE** |
 | **Phase D5** | Real root filesystem mount (RAMDisk XZSFS) | **COMPLETE / SEALED** |
 | **Phase D6** | PID 1 / First EL0 userspace (`initproc` / launchd) | **COMPLETE / SEALED** |
-| **Phase D7** | Interactive serial shell (`/bin/sh` headless REPL) | **IN PROGRESS (D7-M1, D7-M2, D7-M3 COMPLETE)** |
+| **Phase D7** | Interactive serial shell (`/bin/sh` headless REPL) | **IN PROGRESS (D7-M1..M3 COMPLETE, M4 P0 READY)** |
 
 | **Phase D8** | Native display / framebuffer / touch / recovery console | **PLANNED** |
 | **Phase D9** | XZSPlatform hardware/platform compatibility layer | **PLANNED** |
@@ -303,7 +303,7 @@ Progress is strictly gated by physical hardware verification. Speculative percen
   - **D7-M1 (Shell Artifact & Dependency Audit)**: ✅ **COMPLETE** (Audited `/bin/sh` static ARM64 Mach-O stub, zero dyld dependencies, Darwin initial stack compatible, stdio fd 0/1/2 inheritance verified, UARTDM RX registers identified, Strategy B selected for D7-M2).
   - **D7-M2 (PID1 -> `/bin/sh` Handoff)**: ✅ **COMPLETE / SEALED** (PID1 in-place same-thread reload to `/bin/sh` static Mach-O image; old bootstrap image deallocated, new `__TEXT` mapped RX, stack reinitialized RW/NX with canonical Darwin initial frame; hardware verified real EL0 transition, `SYS_write(1, "XZS: /bin/sh EL0 online\n", 24)` returning 24 with zero error, subsequent EL0 instruction execution, and clean exit trapped via `SYS_exit(0)`).
   - **D7-M3 (Shell Stdout & Visual Identity)**: ✅ **COMPLETE / SEALED** (Userspace `/bin/sh` in EL0 executing Darwin `write(1, banner, 1332)` and `write(1, prompt, 5)` to `/dev/console`; exact banner and prompt text observed on physical console transport; passive syscall dispatch verified; 64 sustained post-prompt EL0 getpid round-trips; UART RX preserved as unavailable).
-  - **D7-M4**: Shell stdin (Qualcomm MSM8996 UARTDM RX driver bring-up).
+  - **D7-M4 (Shell Stdin)**: 🟡 **P0 READINESS COMPLETE** (Qualcomm MSM8996 UARTDM RX register audit, pinmux verification, SPSC ring buffer unit-tested, TTY input / `cons_cinput` call graph verified, D730 telemetry schema defined, and acceptance verifier skeleton created; implementation ladder M4-A..M4-F established).
   - **D7-M5**: Interactive REPL / command loop (line editing, enter key handling).
   - **D7-M6**: Filesystem commands (`pwd`, `ls`, `cat`).
   - **D7-M7**: System commands (`uname`, `mount`, `reboot`).
