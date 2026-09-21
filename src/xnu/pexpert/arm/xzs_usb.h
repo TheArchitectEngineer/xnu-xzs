@@ -131,7 +131,16 @@ uint32_t  dwc3_read32_pub(uint32_t offset);
 
 /* Telemetry Exports */
 extern volatile uint32_t g_xzs_usb_gsnpsid;
+extern volatile uint32_t g_xzs_usb_gctl;
 extern volatile uint32_t g_xzs_usb_dsts;
+extern volatile uint32_t g_xzs_usb_dcfg;
+extern volatile uint32_t g_xzs_usb_dctl;
+extern volatile uint32_t g_xzs_usb_gevntadr0;
+extern volatile uint32_t g_xzs_usb_gevntsiz0;
+extern volatile uint32_t g_xzs_usb_gevntcnt0;
+extern volatile uint32_t g_xzs_usb_devten;
+extern volatile uint32_t g_xzs_usb_qscratch_ram1;
+extern volatile uint32_t g_xzs_usb_qscratch_cfg;
 extern volatile uint32_t g_xzs_usb_reset_count;
 extern volatile uint32_t g_xzs_usb_conn_done_count;
 extern volatile uint32_t g_xzs_usb_set_addr_count;

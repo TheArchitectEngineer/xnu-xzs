@@ -22,7 +22,16 @@ extern void cons_cinput(char ch);
 
 /* Telemetry counters */
 volatile uint32_t g_xzs_usb_gsnpsid = 0;
+volatile uint32_t g_xzs_usb_gctl = 0;
 volatile uint32_t g_xzs_usb_dsts = 0;
+volatile uint32_t g_xzs_usb_dcfg = 0;
+volatile uint32_t g_xzs_usb_dctl = 0;
+volatile uint32_t g_xzs_usb_gevntadr0 = 0;
+volatile uint32_t g_xzs_usb_gevntsiz0 = 0;
+volatile uint32_t g_xzs_usb_gevntcnt0 = 0;
+volatile uint32_t g_xzs_usb_devten = 0;
+volatile uint32_t g_xzs_usb_qscratch_ram1 = 0;
+volatile uint32_t g_xzs_usb_qscratch_cfg = 0;
 volatile uint32_t g_xzs_usb_reset_count = 0;
 volatile uint32_t g_xzs_usb_conn_done_count = 0;
 volatile uint32_t g_xzs_usb_set_addr_count = 0;
@@ -780,7 +789,7 @@ boolean_t xzs_usb_is_console_ready(void)
 int xzs_usb_init(void)
 {
 	xzs_breadcrumb(0xD740, 0x00);
-	xzs_early_puts("[XZS-USB] Initializing MSM8996 DWC3 USB controller\n");
+	xzs_early_puts("[XZS-D7T1] D740/00 candidate entered\n");
 
 	/* Map MMIO apertures */
 	s_dwc3_base = (vm_offset_t)ml_io_map(XZS_USB_DWC3_PHYS_BASE, XZS_USB_DWC3_MMIO_SIZE);
@@ -791,70 +800,38 @@ int xzs_usb_init(void)
 		xzs_early_puts("[XZS-USB] ERROR: Failed to map DWC3 MMIO base\n");
 		return -1;
 	}
+	xzs_breadcrumb(0xD740, 0x01);
+	xzs_early_puts("[XZS-D7T1] D740/01 MMIO mapping complete\n");
 
-	/* Verify Synopsys ID */
+	/* Read DWC3 identity (READ-ONLY) */
 	g_xzs_usb_gsnpsid = dwc3_read32(DWC3_GSNPSID);
-	xzs_early_puts("DWC3_GSNPSID=0x");
-	xzs_d6m4_put_hex64(g_xzs_usb_gsnpsid);
-	xzs_early_puts("\n");
+	xzs_breadcrumb(0xD740, 0x02);
+	xzs_early_puts("[XZS-D7T1] D740/02 GSNPSID read complete\n");
 
-	if ((g_xzs_usb_gsnpsid & 0xFFFF0000) != 0x55330000) {
-		xzs_early_puts("[XZS-USB] WARNING: Unexpected GSNPSID\n");
-	} else {
-		xzs_breadcrumb(0xD740, 0x10);
-		xzs_early_puts("[XZS-USB] D740/10 DWC3 MMIO alive and identity verified\n");
+	/* Read DWC3 register snapshot (READ-ONLY) */
+	g_xzs_usb_gctl = dwc3_read32(DWC3_GCTL);
+	g_xzs_usb_dsts = dwc3_read32(DWC3_DSTS);
+	g_xzs_usb_dcfg = dwc3_read32(DWC3_DCFG);
+	g_xzs_usb_dctl = dwc3_read32(DWC3_DCTL);
+	g_xzs_usb_gevntadr0 = dwc3_read32(DWC3_GEVNTADR0);
+	g_xzs_usb_gevntsiz0 = dwc3_read32(DWC3_GEVNTSIZ0);
+	g_xzs_usb_gevntcnt0 = dwc3_read32(DWC3_GEVNTCNT0);
+	g_xzs_usb_devten = dwc3_read32(DWC3_DEVTEN);
+	xzs_breadcrumb(0xD740, 0x03);
+	xzs_early_puts("[XZS-D7T1] D740/03 DWC3 register snapshot complete\n");
+
+	/* Read Qualcomm wrapper snapshot if mapped (READ-ONLY) */
+	if (s_qcom_glue_base != 0) {
+		__asm__ volatile("dsb sy" ::: "memory");
+		g_xzs_usb_qscratch_ram1 = *(volatile uint32_t *)(s_qcom_glue_base + 0x00);
+		g_xzs_usb_qscratch_cfg  = *(volatile uint32_t *)(s_qcom_glue_base + 0x08);
 	}
+	xzs_breadcrumb(0xD740, 0x04);
+	xzs_early_puts("[XZS-D7T1] D740/04 wrapper snapshot complete\n");
 
-	/* Allocate deferred thread call for safe TTY injection */
-	if (s_usb_rx_tty_call == NULL) {
-		s_usb_rx_tty_call = thread_call_allocate(xzs_usb_rx_tty_deferred, NULL);
-	}
-
-	/* Configure Device Mode in GCTL: PRTCAPDIR = 2 (device) */
-	uint32_t gctl = dwc3_read32(DWC3_GCTL);
-	gctl &= ~(3u << 12);
-	gctl |= (2u << 12);
-	dwc3_write32(DWC3_GCTL, gctl);
-
-	/* Configure High-Speed 480 Mbps in DCFG: DEVSPD = 0 */
-	uint32_t dcfg = dwc3_read32(DWC3_DCFG);
-	dcfg &= ~0x07;       /* High-Speed */
-	dcfg |= (16 << 12);  /* NUMP = 16 */
-	dwc3_write32(DWC3_DCFG, dcfg);
-
-	xzs_breadcrumb(0xD740, 0x11);
-	xzs_early_puts("[XZS-USB] D740/11 DWC3 device mode configured\n");
-
-	/* Configure Event Buffer 0 */
-	vm_offset_t pa_event = ml_vtophys((vm_offset_t)s_event_buffer);
-	memset(s_event_buffer, 0, sizeof(s_event_buffer));
-	flush_dcache((vm_offset_t)s_event_buffer, sizeof(s_event_buffer), FALSE);
-
-	dwc3_write32(DWC3_GEVNTADR0, (uint32_t)pa_event);
-	dwc3_write32(DWC3_GEVNTADR_HI0, (uint32_t)(pa_event >> 32));
-	dwc3_write32(DWC3_GEVNTSIZ0, sizeof(s_event_buffer));
-	dwc3_write32(DWC3_GEVNTCNT0, 0);
-
-	xzs_early_puts("[XZS-USB] EVENT_BUFFER_PA=0x");
-	xzs_d6m4_put_hex64((uint64_t)pa_event);
-	xzs_early_puts("\n");
-
-	/* Enable Device Events in DEVTEN: Disconnect, Reset, ConnectDone */
-	dwc3_write32(DWC3_DEVTEN, (1u << 0) | (1u << 1) | (1u << 2));
-
-	/* Start Device Controller: RUN_STOP = 1 in DCTL */
-	uint32_t dctl = dwc3_read32(DWC3_DCTL);
-	dctl |= (1u << 31);
-	dwc3_write32(DWC3_DCTL, dctl);
-	xzs_early_puts("[XZS-USB] DCTL RUN_STOP=1 written\n");
-
-	delay(2000);
-
-	/* Configure Endpoints */
-	xzs_breadcrumb(0xD740, 0x20);
-	xzs_early_puts("[XZS-USB] D740/20 Configuring EP0 endpoints\n");
-	dwc3_configure_endpoints();
-
-	xzs_early_puts("[XZS-USB] DWC3 device running, waiting for host enumeration\n");
+	xzs_breadcrumb(0xD740, 0x05);
+	xzs_early_puts("[XZS-D7T1] D740/05 normal boot continuing\n");
+	xzs_breadcrumb(0xD740, 0x09);
+	xzs_early_puts("[XZS-D7T1] D740/09 candidate completed\n");
 	return 0;
 }
