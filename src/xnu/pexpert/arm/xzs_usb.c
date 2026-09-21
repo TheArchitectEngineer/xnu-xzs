@@ -976,8 +976,10 @@ int xzs_usb_init(void)
 	    (g_xzs_usb_qscratch_general_cfg == g_xzs_usb_qscratch_general_cfg_before) &&
 	    (g_xzs_usb_qscratch_hs_phy_ctrl == g_xzs_usb_qscratch_hs_phy_ctrl_before) &&
 	    (g_xzs_usb_qscratch_ss_phy_ctrl == g_xzs_usb_qscratch_ss_phy_ctrl_before);
+	/* PLL_STATUS bit 5 is the only MSM8996 state bit source-audited here. */
 	g_xzs_usb_candidate2b_qusb2_unchanged =
-	    (g_xzs_usb_qusb2_pll_status == g_xzs_usb_qusb2_pll_status_before) &&
+	    ((g_xzs_usb_qusb2_pll_status & QUSB2PHY_PLL_STATUS_LOCKED) ==
+	    (g_xzs_usb_qusb2_pll_status_before & QUSB2PHY_PLL_STATUS_LOCKED)) &&
 	    (g_xzs_usb_qusb2_port_powerdown == g_xzs_usb_qusb2_port_powerdown_before);
 	g_xzs_usb_candidate2b_gcc_unchanged =
 	    (g_xzs_usb_gcc_qusb2phy_prim_bcr == g_xzs_usb_gcc_qusb2phy_prim_bcr_before);

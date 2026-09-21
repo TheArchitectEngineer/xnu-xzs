@@ -66,6 +66,7 @@ for required in (
     "g_xzs_usb_candidate2b_precondition_run_stop_0",
     "g_xzs_usb_candidate2b_precondition_devctrlhlt_1",
     "xzs_mmio_read8(s_qusb2_phy_base, QUSB2PHY_PLL_STATUS)",
+    "QUSB2PHY_PLL_STATUS_LOCKED",
 ):
     if required not in init and required not in header:
         fail(f"missing DCFG normalization safety element: {required}")

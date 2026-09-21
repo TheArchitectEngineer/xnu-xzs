@@ -3742,6 +3742,8 @@ xzs_d6m4_monitor_and_report_r650(task_t t, thread_t th)
 		xzs_early_puts("QSCRATCH_HS_PHY_CTRL_AFTER=0x"); xzs_d6m4_put_hex64(g_xzs_usb_qscratch_hs_phy_ctrl); xzs_early_puts("\n");
 		xzs_early_puts("QUSB2_PLL_STATUS_BEFORE=0x"); xzs_d6m4_put_hex64(g_xzs_usb_qusb2_pll_status_before); xzs_early_puts("\n");
 		xzs_early_puts("QUSB2_PLL_STATUS_AFTER=0x"); xzs_d6m4_put_hex64(g_xzs_usb_qusb2_pll_status); xzs_early_puts("\n");
+		xzs_early_puts("QUSB2_PLL_LOCKED_BEFORE="); xzs_early_puts((g_xzs_usb_qusb2_pll_status_before & (1u << 5)) ? "yes\n" : "no\n");
+		xzs_early_puts("QUSB2_PLL_LOCKED_AFTER="); xzs_early_puts((g_xzs_usb_qusb2_pll_status & (1u << 5)) ? "yes\n" : "no\n");
 		xzs_early_puts("QUSB2_PORT_POWERDOWN_BEFORE=0x"); xzs_d6m4_put_hex64(g_xzs_usb_qusb2_port_powerdown_before); xzs_early_puts("\n");
 		xzs_early_puts("QUSB2_PORT_POWERDOWN_AFTER=0x"); xzs_d6m4_put_hex64(g_xzs_usb_qusb2_port_powerdown); xzs_early_puts("\n");
 		xzs_early_puts("GCC_QUSB2PHY_PRIM_BCR_BEFORE=0x"); xzs_d6m4_put_hex64(g_xzs_usb_gcc_qusb2phy_prim_bcr_before); xzs_early_puts("\n");
