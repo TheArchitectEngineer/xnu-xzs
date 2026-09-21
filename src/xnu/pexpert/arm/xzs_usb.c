@@ -664,6 +664,11 @@ static void dwc3_process_event(uint32_t evt)
 	}
 }
 
+uint32_t dwc3_read32_pub(uint32_t offset)
+{
+	return dwc3_read32(offset);
+}
+
 /*
  * Drain and process pending DWC3 events from event buffer
  */
@@ -671,8 +676,13 @@ void xzs_usb_poll_events(void)
 {
 	if (s_dwc3_base == 0) return;
 
-	uint32_t count = dwc3_read32(DWC3_GEVNTCNT0);
+	uint32_t raw_cnt = dwc3_read32(DWC3_GEVNTCNT0);
+	uint32_t count = raw_cnt & 0xFFFF;
 	if (count == 0) return;
+
+	if (count > DWC3_EVENT_BUF_SIZE) {
+		count = DWC3_EVENT_BUF_SIZE;
+	}
 
 	/* Clear count in controller */
 	dwc3_write32(DWC3_GEVNTCNT0, count);
@@ -682,6 +692,9 @@ void xzs_usb_poll_events(void)
 		flush_dcache((vm_offset_t)&s_event_buffer[s_event_buf_pos], sizeof(uint32_t), FALSE);
 		uint32_t evt = s_event_buffer[s_event_buf_pos];
 		s_event_buf_pos = (s_event_buf_pos + 1) % (DWC3_EVENT_BUF_SIZE / sizeof(uint32_t));
+		xzs_early_puts("[XZS-USB] EVENT=0x");
+		xzs_d6m4_put_hex64(evt);
+		xzs_early_puts("\n");
 		dwc3_process_event(evt);
 	}
 

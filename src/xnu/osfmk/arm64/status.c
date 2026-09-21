@@ -3651,10 +3651,22 @@ xzs_d6m4_monitor_and_report_r650(task_t t, thread_t th)
 
 		/* Wait / poll for host enumeration over USB-C */
 		extern void xzs_watchdog_pet(void);
+		extern uint32_t dwc3_read32_pub(uint32_t offset);
+		xzs_early_puts("[XZS-D7T1] Entering USB poll loop\n");
 		for (int i = 0; i < 15000; i++) {
 			xzs_watchdog_pet();
+			if (i == 0 || i == 1 || i == 10 || i % 1000 == 0) {
+				xzs_early_puts("[XZS-D7T1] tick i=");
+				xzs_d6m4_put_hex64(i);
+				xzs_early_puts(" rst=");
+				xzs_d6m4_put_hex64(g_xzs_usb_reset_count);
+				xzs_early_puts(" addr=");
+				xzs_d6m4_put_hex64(g_xzs_usb_set_addr_count);
+				xzs_early_puts("\n");
+			}
 			xzs_usb_poll_events();
 			if (g_xzs_usb_configured) {
+				xzs_early_puts("[XZS-D7T1] SUCCESS: Device configured by host!\n");
 				break;
 			}
 			delay(1000);
