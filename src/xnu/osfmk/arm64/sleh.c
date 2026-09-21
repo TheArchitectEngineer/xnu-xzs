@@ -842,6 +842,13 @@ sleh_synchronous(arm_context_t *context, uint64_t esr, vm_offset_t far, __unused
 		    xzs_d6m4_r650_telemetry.post_signature_valid != 0 &&
 		    ESR_ISS(esr) == 0x80 &&
 		    elr == 0x000000010000030cULL && ss64->x[16] == 20) {
+			if (xzs_d7m2_armed && !xzs_d7m2_shell_active) {
+				/* Enable interrupts so vm_map rwlock and allocations are legal */
+				ml_set_interrupts_enabled(TRUE);
+				/* Same PID1 thread enters kernel from sustained loop: handoff to shell */
+				(void)xzs_d7m2_handoff_to_shell(current_proc(), current_task(), current_thread(), state);
+				return;
+			}
 			/* Subsequent known-safe getpid calls remain on the native path. */
 			goto xzs_d6m5_dispatch_first_svc;
 		} else if (is_user && class == ESR_EC_SVC_64 && xzs_d7m2_shell_active) {

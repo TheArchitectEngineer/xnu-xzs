@@ -3497,10 +3497,12 @@ xzs_d6m4_monitor_and_report_r650(task_t t, thread_t th)
 		__asm__ volatile("dmb ish" ::: "memory");
 
 		/* CPU0 waits safely while PID1 thread executes D7-M2 on CPU1 */
-		for (volatile int i = 0; i < 50000000; i++) {
+		extern void delay(int);
+		for (int s = 0; s < 15000; s++) {
 			if (xzs_d7m2_complete) {
 				break;
 			}
+			delay(1000);
 		}
 		xzs_spin_halt();
 	} else if (xzs_d6m4_r650_telemetry.unexpected_exception) {
