@@ -5475,9 +5475,9 @@ xzs_d7m2_breadcrumb(uint32_t cp, uint32_t err)
 	extern void xzs_breadcrumb(uint32_t cp, uint32_t err);
 	uint64_t saved_ttbr0;
 	__asm__ volatile("mrs %0, TTBR0_EL1" : "=r"(saved_ttbr0));
-	__asm__ volatile("msr TTBR0_EL1, %0; isb sy" :: "r"(g_xzs_ttbr0));
+	__asm__ volatile("msr TTBR0_EL1, %0\nisb sy" :: "r"(g_xzs_ttbr0) : "memory");
 	xzs_breadcrumb(cp, err);
-	__asm__ volatile("msr TTBR0_EL1, %0; isb sy" :: "r"(saved_ttbr0));
+	__asm__ volatile("msr TTBR0_EL1, %0\nisb sy" :: "r"(saved_ttbr0) : "memory");
 }
 
 static inline void
@@ -5487,9 +5487,9 @@ xzs_d7m2_puts(const char *s)
 	extern void xzs_early_puts(const char *s);
 	uint64_t saved_ttbr0;
 	__asm__ volatile("mrs %0, TTBR0_EL1" : "=r"(saved_ttbr0));
-	__asm__ volatile("msr TTBR0_EL1, %0; isb sy" :: "r"(g_xzs_ttbr0));
+	__asm__ volatile("msr TTBR0_EL1, %0\nisb sy" :: "r"(g_xzs_ttbr0) : "memory");
 	xzs_early_puts(s);
-	__asm__ volatile("msr TTBR0_EL1, %0; isb sy" :: "r"(saved_ttbr0));
+	__asm__ volatile("msr TTBR0_EL1, %0\nisb sy" :: "r"(saved_ttbr0) : "memory");
 }
 
 static void
@@ -5549,7 +5549,7 @@ xzs_d7m2_fatal(uint32_t step, const char *msg)
 	xzs_d7m2_puts(msg);
 	xzs_d7m2_puts("\n");
 	delay(50000);
-	__asm__ volatile("msr TTBR0_EL1, %0; isb sy" :: "r"(g_xzs_ttbr0));
+	__asm__ volatile("msr TTBR0_EL1, %0\nisb sy" :: "r"(g_xzs_ttbr0) : "memory");
 	xzs_spin_halt();
 }
 
@@ -6144,7 +6144,7 @@ xzs_d7m2_report_completion(void)
 	__asm__ volatile("dmb ish" ::: "memory");
 
 	delay(50000);
-	__asm__ volatile("msr TTBR0_EL1, %0; isb sy" :: "r"(g_xzs_ttbr0));
+	__asm__ volatile("msr TTBR0_EL1, %0\nisb sy" :: "r"(g_xzs_ttbr0) : "memory");
 	xzs_spin_halt();
 }
 #endif
