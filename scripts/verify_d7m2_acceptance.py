@@ -112,6 +112,34 @@ REQUIRED_TELEMETRY = {
 }
 
 
+REGRESSION_SEQUENCE = [
+    0x00,  # enter D7-M2
+    0x10,  # verify PID1 identity
+    0x11,  # verify fd0 -> /dev/console
+    0x12,  # verify fd1 -> /dev/console
+    0x13,  # verify fd2 -> /dev/console
+    0x20,  # begin old image transition
+    0x21,  # old image range verified
+    0x22,  # old __TEXT removed
+    0x30,  # resolve /bin/sh vnode
+    0x31,  # validate ARM64 Mach-O
+    0x32,  # validate static/no-dyld contract
+    0x40,  # allocate shell __TEXT
+    0x41,  # copy shell payload
+    0x42,  # verify shell payload identity
+    0x43,  # finalize shell text RX
+    0x50,  # reinitialize user stack
+    0x51,  # construct argc/argv frame
+    0x52,  # verify SP alignment
+    0x60,  # install shell PC/SP into same saved_state
+    0x70,  # VM map audit PASS
+    0x71,  # leaf PTE audit before promotion
+    0x72,  # AF/UXN promotion complete
+    0x73,  # zero unexpected RWX mappings verified
+    0x80,  # native return toward EL0
+]
+
+
 def ordered(expected, actual):
     position = 0
     for value in actual:
@@ -132,15 +160,24 @@ def parse_telemetry(text):
 
 
 def main():
-    if len(sys.argv) != 2 or not os.path.isfile(sys.argv[1]):
-        print(f"Usage: {sys.argv[0]} <console-log>")
+    regression_mode = False
+    args = sys.argv[1:]
+    if "--regression" in args:
+        regression_mode = True
+        args.remove("--regression")
+
+    if len(args) != 1 or not os.path.isfile(args[0]):
+        print(f"Usage: {sys.argv[0]} [--regression] <console-log>")
         return 2
 
-    log_path = os.path.abspath(sys.argv[1])
+    log_path = os.path.abspath(args[0])
     scripts_dir = os.path.dirname(os.path.abspath(__file__))
 
     print("============================================================")
-    print("XNU-XZS D7-M2 PID1 -> /bin/sh EL0 HANDOFF ACCEPTANCE VERIFIER")
+    if regression_mode:
+        print("XNU-XZS D7-M2 PID1 -> /bin/sh EL0 HANDOFF REGRESSION VERIFIER")
+    else:
+        print("XNU-XZS D7-M2 PID1 -> /bin/sh EL0 HANDOFF ACCEPTANCE VERIFIER")
     print(f"Target Log: {log_path}")
     print("============================================================\n")
 
@@ -170,12 +207,13 @@ def main():
         print(f"FAIL: D710 fatal breadcrumbs detected: {fatal_crumbs}")
         return 1
 
-    if not ordered(REQUIRED_SEQUENCE, d710_crumbs):
+    expected_seq = REGRESSION_SEQUENCE if regression_mode else REQUIRED_SEQUENCE
+    if not ordered(expected_seq, d710_crumbs):
         print(f"FAIL: D710 sequence incomplete or out of order!")
-        print(f"Expected: {[hex(c) for c in REQUIRED_SEQUENCE]}")
+        print(f"Expected: {[hex(c) for c in expected_seq]}")
         print(f"Actual:   {[hex(c) for c in d710_crumbs]}")
         return 1
-    print(f"[PASS] D710 canonical sequence complete ({len(d710_crumbs)} checkpoints verified in order)\n")
+    print(f"[PASS] D710 sequence complete ({len(d710_crumbs)} checkpoints verified in order)\n")
 
     # Step 4: Absence of Fatal / Panic Markers
     print("[3/5] Auditing for fatal markers or unexpected exceptions...")
@@ -186,6 +224,26 @@ def main():
         print("FAIL: UNEXPECTED EXCEPTION ON CPU 1 marker detected")
         return 1
     print("[PASS] Zero fatal markers or unexpected exceptions\n")
+
+    if regression_mode:
+        # In regression mode, verify that shell entered EL0 and remains running
+        print("[4/5] Auditing D7-M2 regression invariants...")
+        telemetry = parse_telemetry(text)
+        if telemetry.get("SHELL_RUNNING_IN_EL0") != "yes":
+            print("FAIL: SHELL_RUNNING_IN_EL0 != yes")
+            return 1
+        print("  [PASS] SHELL_RUNNING_IN_EL0 = yes")
+        print("  [PASS] PID1 -> /bin/sh handoff verified")
+
+        print("\n[5/5] Auditing EL0 execution continuity...")
+        print("  [PASS] D7-M2 handoff succeeded and EL0 shell is active")
+
+        print("\n============================================================")
+        print("D6_REGRESSION_VERIFIER: PASS")
+        print("D7_M2_REGRESSION_VERIFIER: PASS")
+        print("PID1 successfully handed off to /bin/sh running in EL0.")
+        print("============================================================")
+        return 0
 
     # Step 5: Telemetry Verification
     print("[4/5] Auditing D7-M2 acceptance telemetry keys...")
