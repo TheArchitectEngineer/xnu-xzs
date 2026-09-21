@@ -16,6 +16,10 @@ D7_M2_TAG=xzs-d7m2-complete
 D7_M3_BOOT_IMAGE_SHA256=c2b66cea0a6475bc140e729b2827e41d636b855f2a29f7619a56c5d1cccbe68c
 D7_M3_TAG=xzs-d7m3-complete
 
+D7_M4_INTERNAL_HARDWARE_COMMIT=639fe1c42478c8ca07aa0019cbe59bfd846d9866
+D7_M4_INTERNAL_BOOT_IMAGE_SHA256=329f869a55e7185bda99d14f38575d13c693298b04c7fa0b87f5d3439b34044a
+D7_M4_INTERNAL_RAW_LOG_SHA256=49422168deee99ad9c8fa3b5d07adb70edf6c367b185174e44cb8e3ff769d469
+
 LAST_SEALED_MILESTONE=D7-M3
 
 CURRENT_BRANCH=xzs-d7m4-readiness
@@ -27,18 +31,19 @@ D7_M1_STATUS=COMPLETE
 D7_M2_STATUS=COMPLETE / SEALED
 D7_M3_STATUS=COMPLETE / SEALED
 D7_M4_P0_READINESS_STATUS=COMPLETE
+D7_M4_INTERNAL_PIPELINE_STATUS=HARDWARE VERIFIED
+D7_M4_EXTERNAL_PIPELINE_STATUS=NOT VERIFIED
+D7_M4_STATUS=IN PROGRESS / NOT SEALED
 
 NEXT_GOAL=
-Phase D7-M4 Ladder:
-  M4-A: Physical UARTDM RX Byte Visibility
-  M4-B: Driver receive_ready() / receive_data() primitives
-  M4-C: SPSC Ring Buffering
-  M4-D: TTY cons_cinput injection
-  M4-E: Native read(0) Darwin syscall
-  M4-F: Full stdin line verification
+Phase D7-M4 final gate:
+  host TX sends 41 42 43 0a
+  external GPIO5 RX reaches UARTDM IRQ
+  common ring/deferred tty/read(0) pipeline returns exact bytes to EL0
+  external-mode verifier passes
 
 KNOWN_BLOCKER=
-MSM8996 UARTDM RX driver implementation in progress (Phase D7-M4)
+External host USB-UART TX / Xperia GPIO5 physical path has not yet produced immutable acceptance evidence.
 
 SHELL_BINARY_SHA256=848a10da132fb4482c3cae01a35a73fb6fe4a79bf9e170800489d12f3fbb7bd3
 
@@ -52,5 +57,5 @@ CURRENT_KNOWN_PLATFORM_WORKAROUNDS=
 - dtrace_fbt deferral / fbt.c (defers kernel-wide function boundary tracing instrumentation)
 
 NEXT_EXACT_ACTION=
-Implement M4-A / M4-B: Add UARTDM RX transfer initialization and non-blocking receive primitives in pe_serial.c.
+Run the immutable external UART acceptance candidate at 115200 8N1 with host bytes 41 42 43 0a; do not seal M4 unless the external-mode verifier passes.
 ```
