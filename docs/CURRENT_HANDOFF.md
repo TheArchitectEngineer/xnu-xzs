@@ -25,10 +25,18 @@ D7_M4_EXTERNAL_RAW_LOG_SHA256=1dd42ebfd8ac667aa359b68a0ffe5e4d5d99a55bcdc4b083dd
 
 LAST_SEALED_MILESTONE=D7-M4
 
-CURRENT_BRANCH=xzs-d7m4-readiness
+D7_T1_CANDIDATE2A_STATUS=COMPLETE / HARDWARE VERIFIED
+D7_T1_CANDIDATE2A_COMMIT=981bd0b5cd16dca5b8bf5c0e5f331e2f798bf7a7
+D7_T1_CANDIDATE2A_KERNEL_SHA256=c902fadb254a02396b98866b3473f2b18e445807ad5085dd94e0897e0ec03657
+D7_T1_CANDIDATE2A_BOOT_SHA256=6b8df9d45116b7e352007ac61a033ff84d0825766af6041242575bfa6cb92c91
+D7_T1_CANDIDATE2A_RAW_CONSOLE_SHA256=9f4ee83975b5e7655c6ce8a2fc1f2ae49bfc6a0d9fb454adb3a0dc2d5df51153
+D7_T1_CANDIDATE2A_READ_ONLY=yes
+USB_STATE_MUTATED=no
+
+CURRENT_BRANCH=xzs-d7t1-usb-console
 
 NEXT_PHASE=D7
-NEXT_MILESTONE=D7-M5
+NEXT_MILESTONE=D7-T1 Candidate-2B (DWC3-only device-takeover plan; not yet authorized for hardware execution by this evidence task)
 
 D7_M1_STATUS=COMPLETE
 D7_M2_STATUS=COMPLETE / SEALED
@@ -46,11 +54,10 @@ SHELL_STDIN_WORKING=yes
 HOST_INTERACTIVE_STDIN_TRANSPORT_AVAILABLE=no
 
 NEXT_GOAL=
-Phase D7-M5: Interactive REPL / Command Loop
-  - Implement line reader and command parser in /bin/sh
-  - Support enter key, line editing, and basic dispatch
-  - Retain sealed stdout (D7-M3) and stdin (D7-M4) pipelines
-  - Initial testing via deterministic internal loopback until non-invasive host transport is brought up
+D7-T1 Candidate-2B: source-audit a DWC3-only minimal device-takeover plan.
+  - Preserve Candidate-2A QSCRATCH/QUSB2/GCC values as before/after oracle.
+  - Do not touch PHY clocks, resets, or wrapper state.
+  - Do not begin hardware execution until Candidate-2B is separately authorized.
 
 KNOWN_BLOCKER=
 None for D7-M4. Host-interactive stdin transport (USB gadget CDC ACM / DWC3 console) is deferred to future non-invasive transport bring-up.
@@ -67,5 +74,5 @@ CURRENT_KNOWN_PLATFORM_WORKAROUNDS=
 - dtrace_fbt deferral / fbt.c (defers kernel-wide function boundary tracing instrumentation)
 
 NEXT_EXACT_ACTION=
-Merge xzs-d7m4-readiness into main, tag xzs-d7m4-complete, and begin Phase D7-M5 interactive REPL implementation.
+Review `docs/D7_T1_CANDIDATE2A_REPORT.md`; retain the Candidate-2A evidence unchanged and prepare (but do not execute) Candidate-2B only when directed.
 ```
