@@ -115,9 +115,8 @@ native display         FUTURE D8
 
 ## Current Development Phase
 
-* **Current Milestone**: **Phase D6 COMPLETE / SEALED** (Milestones D6-M1 through D6-M6 sealed on hardware).
-* **Next Immediate Action**: **Phase D6-M7 (Final D6 Regression and Seal)** — small consolidation milestone to regress M1–M6, consolidate documentation, verify verifiers, and apply git tag `xzs-d6-userspace-complete`.
-* **Subsequent Milestone**: **Phase D7 (Interactive EL0 Shell)**.
+* **Current Milestone**: **Phase D6 COMPLETE / SEALED** (Full regression verified across all milestones D6-M1 through D6-M7 on physical silicon; tag `xzs-d6-userspace-complete`).
+* **Next Immediate Action**: **Phase D7 (Interactive EL0 Shell)** — Headless serial shell bring-up (`/bin/sh` REPL) and Qualcomm MSM8996 UARTDM RX driver.
 
 ---
 
@@ -133,7 +132,7 @@ native display         FUTURE D8
 | **Phase D3** | GUID Partition Table (GPT) discovery & partition enumeration | **COMPLETE** |
 | **Phase D4** | Block-storage driver integration (`bdevsw` / `disk0`) | **COMPLETE** |
 | **Phase D5** | Real root filesystem mount (RAMDisk XZSFS v1) | **COMPLETE / SEALED** |
-| **Phase D6** | PID 1 / First EL0 userspace (`initproc` / launchd) | **D6-M1..M6 COMPLETE / SEALED; D6-M7 NEXT** |
+| **Phase D6** | PID 1 / First EL0 userspace (`initproc` / launchd) | **COMPLETE / SEALED** |
 | **Phase D7** | Interactive serial shell (`/bin/sh` headless REPL) | **NEXT PHASE** |
 | **Phase D8** | Native display / framebuffer / touch / recovery console | **PLANNED** |
 | **Phase D9** | XZSPlatform hardware/platform compatibility layer | **PLANNED** |
@@ -146,6 +145,7 @@ native display         FUTURE D8
 | **Phase D16**| Graphical iOS userland / SpringBoard investigation | **PLANNED** |
 
 Full specifications and milestone criteria are detailed in [`docs/XZS_ROADMAP.md`](docs/XZS_ROADMAP.md).
+
 
 ---
 
@@ -222,6 +222,7 @@ The modular `XZSPlatform` design ensures that board support and native drivers c
 * [Hardware Verification Guide](docs/XZS_HARDWARE_VERIFICATION.md) — Flashing, testing, and extraction procedures.
 
 ### Sealed Phase Reports & Audits
+* [Phase D6 Final Userspace Foundation Report](artifacts/reports/D6_FINAL_USERSPACE_FOUNDATION_REPORT.md) — Comprehensive multi-milestone seal and regression report.
 * [Phase D6-M6 Stable PID1 Report](artifacts/reports/D6_M6_STABLE_PID1_REPORT.md) — D6-M6 hardware acceptance report.
 * [Phase D6-M6 Source Audit](docs/D6_M6_STABLE_PID1_SOURCE_AUDIT.md) — File descriptor bootstrap, console call path, and telemetry audit.
 * [Phase D6-M5 Syscall Round-Trip Report](artifacts/reports/D6_M5_FIRST_SYSCALL_REPORT.md) — First EL0 syscall dispatcher and return proof.
