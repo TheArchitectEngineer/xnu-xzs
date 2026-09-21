@@ -3656,20 +3656,36 @@ xzs_d6m4_monitor_and_report_r650(task_t t, thread_t th)
 		extern volatile uint32_t g_xzs_usb_devten;
 		extern volatile uint32_t g_xzs_usb_qscratch_ram1;
 		extern volatile uint32_t g_xzs_usb_qscratch_cfg;
+		extern volatile uint32_t g_xzs_usb_qscratch_general_cfg;
+		extern volatile uint32_t g_xzs_usb_qscratch_hs_phy_ctrl;
+		extern volatile uint32_t g_xzs_usb_qscratch_ss_phy_ctrl;
+		extern volatile uint32_t g_xzs_usb_qscratch_pwr_event_irq_stat;
+		extern volatile uint32_t g_xzs_usb_gsts;
+		extern volatile uint32_t g_xzs_usb_gusb2phycfg0;
+		extern volatile uint32_t g_xzs_usb_gusb3pipectl0;
+		extern volatile uint32_t g_xzs_usb_osts;
+		extern volatile uint32_t g_xzs_usb_qusb2_pll_test;
+		extern volatile uint32_t g_xzs_usb_qusb2_pll_status;
+		extern volatile uint32_t g_xzs_usb_qusb2_port_powerdown;
+		extern volatile uint32_t g_xzs_usb_qusb2_utmi_status;
+		extern volatile uint32_t g_xzs_usb_gcc_qusb2phy_prim_bcr;
 
 		int usb_rc = xzs_usb_init();
 		(void)usb_rc;
 		boolean_t gsnpsid_valid = ((g_xzs_usb_gsnpsid & 0xFFFF0000) == 0x55330000);
 
-		/* Telemetry reporting for Candidate 1 */
+		/* Telemetry reporting for Candidate-2A. */
 		xzs_early_puts("\n=======================================================\n");
-		xzs_early_puts("=== D7-T1 CANDIDATE-1 READ-ONLY PROBE TELEMETRY BEGIN ===\n");
+		xzs_early_puts("=== D7-T1 CANDIDATE-2A READ-ONLY SNAPSHOT TELEMETRY BEGIN ===\n");
 		xzs_early_puts("D7T1_USB_CONTROLLER=DWC3\n");
 		xzs_early_puts("DWC3_CORE_MMIO=0x06a00000\n");
 		xzs_early_puts("QCOM_WRAPPER_MMIO=0x06af8800\n");
 		xzs_early_puts("QUSB2_PHY_MMIO=0x07411000\n");
 		xzs_early_puts("DWC3_GSNPSID=0x"); xzs_d6m4_put_hex64(g_xzs_usb_gsnpsid); xzs_early_puts("\n");
 		xzs_early_puts("DWC3_GCTL=0x"); xzs_d6m4_put_hex64(g_xzs_usb_gctl); xzs_early_puts("\n");
+		xzs_early_puts("DWC3_GSTS=0x"); xzs_d6m4_put_hex64(g_xzs_usb_gsts); xzs_early_puts("\n");
+		xzs_early_puts("DWC3_GUSB2PHYCFG0=0x"); xzs_d6m4_put_hex64(g_xzs_usb_gusb2phycfg0); xzs_early_puts("\n");
+		xzs_early_puts("DWC3_GUSB3PIPECTL0=0x"); xzs_d6m4_put_hex64(g_xzs_usb_gusb3pipectl0); xzs_early_puts("\n");
 		xzs_early_puts("DWC3_DSTS=0x"); xzs_d6m4_put_hex64(g_xzs_usb_dsts); xzs_early_puts("\n");
 		xzs_early_puts("DWC3_DCFG=0x"); xzs_d6m4_put_hex64(g_xzs_usb_dcfg); xzs_early_puts("\n");
 		xzs_early_puts("DWC3_DCTL=0x"); xzs_d6m4_put_hex64(g_xzs_usb_dctl); xzs_early_puts("\n");
@@ -3677,15 +3693,33 @@ xzs_d6m4_monitor_and_report_r650(task_t t, thread_t th)
 		xzs_early_puts("DWC3_GEVNTSIZ0=0x"); xzs_d6m4_put_hex64(g_xzs_usb_gevntsiz0); xzs_early_puts("\n");
 		xzs_early_puts("DWC3_GEVNTCNT0=0x"); xzs_d6m4_put_hex64(g_xzs_usb_gevntcnt0); xzs_early_puts("\n");
 		xzs_early_puts("DWC3_DEVTEN=0x"); xzs_d6m4_put_hex64(g_xzs_usb_devten); xzs_early_puts("\n");
+		xzs_early_puts("DWC3_OSTS=0x"); xzs_d6m4_put_hex64(g_xzs_usb_osts); xzs_early_puts("\n");
 		xzs_early_puts("QSCRATCH_RAM1=0x"); xzs_d6m4_put_hex64(g_xzs_usb_qscratch_ram1); xzs_early_puts("\n");
-		xzs_early_puts("QSCRATCH_CFG=0x"); xzs_d6m4_put_hex64(g_xzs_usb_qscratch_cfg); xzs_early_puts("\n");
+		xzs_early_puts("QSCRATCH_GENERAL_CFG=0x"); xzs_d6m4_put_hex64(g_xzs_usb_qscratch_general_cfg); xzs_early_puts("\n");
+		xzs_early_puts("QSCRATCH_HS_PHY_CTRL=0x"); xzs_d6m4_put_hex64(g_xzs_usb_qscratch_hs_phy_ctrl); xzs_early_puts("\n");
+		xzs_early_puts("QSCRATCH_SS_PHY_CTRL=0x"); xzs_d6m4_put_hex64(g_xzs_usb_qscratch_ss_phy_ctrl); xzs_early_puts("\n");
+		xzs_early_puts("QSCRATCH_PWR_EVENT_IRQ_STAT=0x"); xzs_d6m4_put_hex64(g_xzs_usb_qscratch_pwr_event_irq_stat); xzs_early_puts("\n");
+		xzs_early_puts("QSCRATCH_HS_PHY_CTRL_UTMI_OTG_VBUS_VALID="); xzs_early_puts((g_xzs_usb_qscratch_hs_phy_ctrl & (1u << 20)) ? "yes\n" : "no\n");
+		xzs_early_puts("QSCRATCH_HS_PHY_CTRL_SW_SESSVLD_SEL="); xzs_early_puts((g_xzs_usb_qscratch_hs_phy_ctrl & (1u << 28)) ? "yes\n" : "no\n");
+		xzs_early_puts("QUSB2PHY_PLL_TEST=0x"); xzs_d6m4_put_hex64(g_xzs_usb_qusb2_pll_test); xzs_early_puts("\n");
+		xzs_early_puts("QUSB2PHY_PLL_STATUS=0x"); xzs_d6m4_put_hex64(g_xzs_usb_qusb2_pll_status); xzs_early_puts("\n");
+		xzs_early_puts("QUSB2PHY_PLL_LOCKED="); xzs_early_puts((g_xzs_usb_qusb2_pll_status & (1u << 5)) ? "yes\n" : "no\n");
+		xzs_early_puts("QUSB2PHY_PORT_POWERDOWN=0x"); xzs_d6m4_put_hex64(g_xzs_usb_qusb2_port_powerdown); xzs_early_puts("\n");
+		xzs_early_puts("QUSB2PHY_POWER_DOWN="); xzs_early_puts((g_xzs_usb_qusb2_port_powerdown & 1u) ? "yes\n" : "no\n");
+		xzs_early_puts("QUSB2PHY_UTMI_STATUS=0x"); xzs_d6m4_put_hex64(g_xzs_usb_qusb2_utmi_status); xzs_early_puts("\n");
+		xzs_early_puts("QUSB2PHY_PLL_TEST_CLK_REF_SEL="); xzs_early_puts((g_xzs_usb_qusb2_pll_test & (1u << 7)) ? "single-ended\n" : "differential\n");
+		xzs_early_puts("GCC_QUSB2PHY_PRIM_BCR=0x"); xzs_d6m4_put_hex64(g_xzs_usb_gcc_qusb2phy_prim_bcr); xzs_early_puts("\n");
 		xzs_early_puts("DWC3_GSNPSID_VALID="); xzs_early_puts(gsnpsid_valid ? "yes\n" : "no\n");
+		xzs_early_puts("CANDIDATE2A_READ_ONLY=yes\n");
 		xzs_early_puts("DWC3_READ_ONLY_PROBE=yes\n");
 		xzs_early_puts("DWC3_REGISTER_WRITES=0\n");
+		xzs_early_puts("QSCRATCH_REGISTER_WRITES=0\n");
+		xzs_early_puts("QUSB2_REGISTER_WRITES=0\n");
+		xzs_early_puts("GCC_REGISTER_WRITES=0\n");
 		xzs_early_puts("USB_STATE_MUTATED=no\n");
 		xzs_early_puts("NORMAL_XNU_BOOT_CONTINUES=yes\n");
 		xzs_early_puts("PSTORE_PIPELINE_SURVIVES=yes\n");
-		xzs_early_puts("=== D7-T1 CANDIDATE-1 READ-ONLY PROBE TELEMETRY END ===\n");
+		xzs_early_puts("=== D7-T1 CANDIDATE-2A READ-ONLY SNAPSHOT TELEMETRY END ===\n");
 		xzs_early_puts("=======================================================\n\n");
 
 		/* Allow normal boot continuation / clean halt */

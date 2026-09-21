@@ -32,6 +32,19 @@ volatile uint32_t g_xzs_usb_gevntcnt0 = 0;
 volatile uint32_t g_xzs_usb_devten = 0;
 volatile uint32_t g_xzs_usb_qscratch_ram1 = 0;
 volatile uint32_t g_xzs_usb_qscratch_cfg = 0;
+volatile uint32_t g_xzs_usb_qscratch_general_cfg = 0;
+volatile uint32_t g_xzs_usb_qscratch_hs_phy_ctrl = 0;
+volatile uint32_t g_xzs_usb_qscratch_ss_phy_ctrl = 0;
+volatile uint32_t g_xzs_usb_qscratch_pwr_event_irq_stat = 0;
+volatile uint32_t g_xzs_usb_gsts = 0;
+volatile uint32_t g_xzs_usb_gusb2phycfg0 = 0;
+volatile uint32_t g_xzs_usb_gusb3pipectl0 = 0;
+volatile uint32_t g_xzs_usb_osts = 0;
+volatile uint32_t g_xzs_usb_qusb2_pll_test = 0;
+volatile uint32_t g_xzs_usb_qusb2_pll_status = 0;
+volatile uint32_t g_xzs_usb_qusb2_port_powerdown = 0;
+volatile uint32_t g_xzs_usb_qusb2_utmi_status = 0;
+volatile uint32_t g_xzs_usb_gcc_qusb2phy_prim_bcr = 0;
 volatile uint32_t g_xzs_usb_reset_count = 0;
 volatile uint32_t g_xzs_usb_conn_done_count = 0;
 volatile uint32_t g_xzs_usb_set_addr_count = 0;
@@ -50,6 +63,7 @@ volatile uint32_t g_xzs_usb_tx_drops = 0;
 static vm_offset_t s_dwc3_base = 0;
 static vm_offset_t s_qcom_glue_base = 0;
 static vm_offset_t s_qusb2_phy_base = 0;
+static vm_offset_t s_gcc_base = 0;
 
 /* Hardware MMIO access helpers */
 static inline uint32_t dwc3_read32(uint32_t offset)
@@ -65,6 +79,15 @@ static inline void dwc3_write32(uint32_t offset, uint32_t val)
 	__asm__ volatile("dsb sy" ::: "memory");
 	*(volatile uint32_t *)(s_dwc3_base + offset) = val;
 	__asm__ volatile("dsb sy" ::: "memory");
+}
+
+/* Candidate-2A uses this helper only for source-audited status registers. */
+static inline uint32_t xzs_mmio_read32(vm_offset_t base, uint32_t offset)
+{
+	__asm__ volatile("dsb sy" ::: "memory");
+	uint32_t v = *(volatile uint32_t *)(base + offset);
+	__asm__ volatile("dmb ish" ::: "memory");
+	return v;
 }
 
 /* Event Buffer: 64 entries (256 bytes) */
@@ -788,50 +811,60 @@ boolean_t xzs_usb_is_console_ready(void)
  */
 int xzs_usb_init(void)
 {
-	xzs_breadcrumb(0xD740, 0x00);
-	xzs_early_puts("[XZS-D7T1] D740/00 candidate entered\n");
+	xzs_breadcrumb(0xD740, 0x2A00);
+	xzs_early_puts("[XZS-D7T1] D740/2A00 Candidate-2A read-only snapshot entered\n");
 
-	/* Map MMIO apertures */
+	/* Map apertures only; Candidate-2A must not program any USB register. */
 	s_dwc3_base = (vm_offset_t)ml_io_map(XZS_USB_DWC3_PHYS_BASE, XZS_USB_DWC3_MMIO_SIZE);
 	s_qcom_glue_base = (vm_offset_t)ml_io_map(XZS_USB_QCOM_GLUE_PHYS_BASE, XZS_USB_QCOM_GLUE_MMIO_SIZE);
 	s_qusb2_phy_base = (vm_offset_t)ml_io_map(XZS_USB_QUSB2_PHY_PHYS_BASE, XZS_USB_QUSB2_PHY_MMIO_SIZE);
+	s_gcc_base = (vm_offset_t)ml_io_map(XZS_USB_GCC_PHYS_BASE, XZS_USB_GCC_MMIO_SIZE);
 
-	if (s_dwc3_base == 0) {
-		xzs_early_puts("[XZS-USB] ERROR: Failed to map DWC3 MMIO base\n");
+	if (s_dwc3_base == 0 || s_qcom_glue_base == 0 || s_qusb2_phy_base == 0 || s_gcc_base == 0) {
+		xzs_breadcrumb(0xD740, 0x2AFF);
+		xzs_early_puts("[XZS-D7T1] ERROR: Candidate-2A MMIO mapping failed\n");
 		return -1;
 	}
-	xzs_breadcrumb(0xD740, 0x01);
-	xzs_early_puts("[XZS-D7T1] D740/01 MMIO mapping complete\n");
 
-	/* Read DWC3 identity (READ-ONLY) */
+	/* DWC3 core snapshot: every access below is a volatile read. */
 	g_xzs_usb_gsnpsid = dwc3_read32(DWC3_GSNPSID);
-	xzs_breadcrumb(0xD740, 0x02);
-	xzs_early_puts("[XZS-D7T1] D740/02 GSNPSID read complete\n");
-
-	/* Read DWC3 register snapshot (READ-ONLY) */
 	g_xzs_usb_gctl = dwc3_read32(DWC3_GCTL);
-	g_xzs_usb_dsts = dwc3_read32(DWC3_DSTS);
+	g_xzs_usb_gsts = dwc3_read32(DWC3_GSTS);
+	g_xzs_usb_gusb2phycfg0 = dwc3_read32(DWC3_GUSB2PHYCFG0);
+	g_xzs_usb_gusb3pipectl0 = dwc3_read32(DWC3_GUSB3PIPECTL0);
 	g_xzs_usb_dcfg = dwc3_read32(DWC3_DCFG);
 	g_xzs_usb_dctl = dwc3_read32(DWC3_DCTL);
+	g_xzs_usb_dsts = dwc3_read32(DWC3_DSTS);
+	g_xzs_usb_devten = dwc3_read32(DWC3_DEVTEN);
+	g_xzs_usb_osts = dwc3_read32(DWC3_OSTS);
 	g_xzs_usb_gevntadr0 = dwc3_read32(DWC3_GEVNTADR0);
 	g_xzs_usb_gevntsiz0 = dwc3_read32(DWC3_GEVNTSIZ0);
 	g_xzs_usb_gevntcnt0 = dwc3_read32(DWC3_GEVNTCNT0);
-	g_xzs_usb_devten = dwc3_read32(DWC3_DEVTEN);
-	xzs_breadcrumb(0xD740, 0x03);
-	xzs_early_puts("[XZS-D7T1] D740/03 DWC3 register snapshot complete\n");
+	xzs_breadcrumb(0xD740, 0x2A01);
+	xzs_early_puts("[XZS-D7T1] D740/2A01 DWC3 read-only snapshot complete\n");
 
-	/* Read Qualcomm wrapper snapshot if mapped (READ-ONLY) */
-	if (s_qcom_glue_base != 0) {
-		__asm__ volatile("dsb sy" ::: "memory");
-		g_xzs_usb_qscratch_ram1 = *(volatile uint32_t *)(s_qcom_glue_base + 0x00);
-		g_xzs_usb_qscratch_cfg  = *(volatile uint32_t *)(s_qcom_glue_base + 0x08);
-	}
-	xzs_breadcrumb(0xD740, 0x04);
-	xzs_early_puts("[XZS-D7T1] D740/04 wrapper snapshot complete\n");
+	/* Qualcomm QSCRATCH wrapper snapshot; no clear-on-read register is sampled. */
+	g_xzs_usb_qscratch_ram1 = xzs_mmio_read32(s_qcom_glue_base, QSCRATCH_RAM1);
+	g_xzs_usb_qscratch_cfg = xzs_mmio_read32(s_qcom_glue_base, QSCRATCH_GENERAL_CFG);
+	g_xzs_usb_qscratch_general_cfg = g_xzs_usb_qscratch_cfg;
+	g_xzs_usb_qscratch_hs_phy_ctrl = xzs_mmio_read32(s_qcom_glue_base, QSCRATCH_HS_PHY_CTRL);
+	g_xzs_usb_qscratch_ss_phy_ctrl = xzs_mmio_read32(s_qcom_glue_base, QSCRATCH_SS_PHY_CTRL);
+	g_xzs_usb_qscratch_pwr_event_irq_stat = xzs_mmio_read32(s_qcom_glue_base, QSCRATCH_PWR_EVENT_IRQ_STAT);
+	xzs_breadcrumb(0xD740, 0x2A02);
+	xzs_early_puts("[XZS-D7T1] D740/2A02 QSCRATCH read-only snapshot complete\n");
 
-	xzs_breadcrumb(0xD740, 0x05);
-	xzs_early_puts("[XZS-D7T1] D740/05 normal boot continuing\n");
-	xzs_breadcrumb(0xD740, 0x09);
-	xzs_early_puts("[XZS-D7T1] D740/09 candidate completed\n");
+	/* MSM8996 QUSB2 PHY and its GCC reset owner, read-only. */
+	g_xzs_usb_qusb2_pll_test = xzs_mmio_read32(s_qusb2_phy_base, QUSB2PHY_PLL_TEST);
+	g_xzs_usb_qusb2_pll_status = xzs_mmio_read32(s_qusb2_phy_base, QUSB2PHY_PLL_STATUS);
+	g_xzs_usb_qusb2_port_powerdown = xzs_mmio_read32(s_qusb2_phy_base, QUSB2PHY_PORT_POWERDOWN);
+	g_xzs_usb_qusb2_utmi_status = xzs_mmio_read32(s_qusb2_phy_base, QUSB2PHY_PORT_UTMI_STATUS);
+	g_xzs_usb_gcc_qusb2phy_prim_bcr = xzs_mmio_read32(s_gcc_base, GCC_QUSB2PHY_PRIM_BCR);
+	xzs_breadcrumb(0xD740, 0x2A03);
+	xzs_early_puts("[XZS-D7T1] D740/2A03 QUSB2/GCC read-only snapshot complete\n");
+
+	xzs_breadcrumb(0xD740, 0x2A04);
+	xzs_early_puts("[XZS-D7T1] D740/2A04 snapshot decoding ready\n");
+	xzs_breadcrumb(0xD740, 0x2A09);
+	xzs_early_puts("[XZS-D7T1] D740/2A09 normal boot continuing\n");
 	return 0;
 }

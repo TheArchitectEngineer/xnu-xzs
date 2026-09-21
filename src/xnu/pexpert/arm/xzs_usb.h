@@ -20,6 +20,33 @@
 #define XZS_USB_QUSB2_PHY_PHYS_BASE   0x07411000ULL
 #define XZS_USB_QUSB2_PHY_MMIO_SIZE   0x00001000ULL
 
+/* GCC contains the source-audited primary QUSB2 PHY reset BCR. */
+#define XZS_USB_GCC_PHYS_BASE          0x00300000ULL
+#define XZS_USB_GCC_MMIO_SIZE          0x00090000ULL
+
+/* Qualcomm MSM8996 USB wrapper (QSCRATCH) read-only snapshot registers. */
+#define QSCRATCH_RAM1                  0x000
+#define QSCRATCH_GENERAL_CFG           0x008
+#define QSCRATCH_HS_PHY_CTRL           0x010
+#define QSCRATCH_SS_PHY_CTRL           0x030
+#define QSCRATCH_PWR_EVENT_IRQ_STAT    0x058
+
+#define QSCRATCH_UTMI_OTG_VBUS_VALID   (1u << 20)
+#define QSCRATCH_SW_SESSVLD_SEL        (1u << 28)
+
+/* MSM8996 QUSB2 PHY read-only snapshot registers. */
+#define QUSB2PHY_PLL_TEST              0x004
+#define QUSB2PHY_PLL_STATUS            0x038
+#define QUSB2PHY_PORT_POWERDOWN        0x0B4
+#define QUSB2PHY_PORT_UTMI_STATUS      0x0F4
+
+#define QUSB2PHY_PLL_TEST_CLK_REF_SEL  (1u << 7)
+#define QUSB2PHY_PLL_STATUS_LOCKED     (1u << 5)
+#define QUSB2PHY_PORT_POWER_DOWN       (1u << 0)
+
+/* GCC QUSB2 primary PHY block-control reset (read-only in Candidate-2A). */
+#define GCC_QUSB2PHY_PRIM_BCR          0x12038
+
 /* Unambiguous IRQ definition */
 #define USB_DT_SPI                    131
 #define USB_ARCH_GIC_INTID            163   /* 32 + 131 */
@@ -44,6 +71,7 @@
 #define DWC3_DEVTEN                   0xC708
 #define DWC3_DSTS                     0xC70C
 #define DWC3_DALEPENA                 0xC714
+#define DWC3_OSTS                     0xCC10
 
 #define DWC3_DEPCMDPAR2(n)            (0xC800 + ((n) * 0x10))
 #define DWC3_DEPCMDPAR1(n)            (0xC804 + ((n) * 0x10))
@@ -141,6 +169,19 @@ extern volatile uint32_t g_xzs_usb_gevntcnt0;
 extern volatile uint32_t g_xzs_usb_devten;
 extern volatile uint32_t g_xzs_usb_qscratch_ram1;
 extern volatile uint32_t g_xzs_usb_qscratch_cfg;
+extern volatile uint32_t g_xzs_usb_qscratch_general_cfg;
+extern volatile uint32_t g_xzs_usb_qscratch_hs_phy_ctrl;
+extern volatile uint32_t g_xzs_usb_qscratch_ss_phy_ctrl;
+extern volatile uint32_t g_xzs_usb_qscratch_pwr_event_irq_stat;
+extern volatile uint32_t g_xzs_usb_gsts;
+extern volatile uint32_t g_xzs_usb_gusb2phycfg0;
+extern volatile uint32_t g_xzs_usb_gusb3pipectl0;
+extern volatile uint32_t g_xzs_usb_osts;
+extern volatile uint32_t g_xzs_usb_qusb2_pll_test;
+extern volatile uint32_t g_xzs_usb_qusb2_pll_status;
+extern volatile uint32_t g_xzs_usb_qusb2_port_powerdown;
+extern volatile uint32_t g_xzs_usb_qusb2_utmi_status;
+extern volatile uint32_t g_xzs_usb_gcc_qusb2phy_prim_bcr;
 extern volatile uint32_t g_xzs_usb_reset_count;
 extern volatile uint32_t g_xzs_usb_conn_done_count;
 extern volatile uint32_t g_xzs_usb_set_addr_count;
