@@ -797,14 +797,106 @@ serial_hibernation_cleanup(void)
  *****************************************************************************/
 #define MSM_UART_SR          0x0008
 #define MSM_UART_SR_TX_READY (1 << 2)
-#define MSM_UART_SR_TX_EMPTY (1 << 3)
-#define MSM_UART_CR          0x0010
-#define MSM_UART_IMR         0x0014
-#define UARTDM_NCF_TX        0x0040
-#define UARTDM_TF            0x0070
+#define MSM_UART_MR1          0x0000
+#define MSM_UART_MR2          0x0004
+#define MSM_UART_SR           0x0008
+#define MSM_UART_CR           0x0010
+#define MSM_UART_MISR         0x0010
+#define MSM_UART_IMR          0x0014
+#define MSM_UART_ISR          0x0014
+#define MSM_UART_IPR          0x0018
+#define MSM_UART_TFWR         0x001c
+#define MSM_UART_RFWR         0x0020
+#define UARTDM_DMRX           0x0034
+#define UARTDM_RX_TOTAL_SNAP  0x0038
+#define UARTDM_NCF_TX         0x0040
+#define UARTDM_RXFS           0x0050
+#define UARTDM_TF             0x0070
+#define UARTDM_RF             0x0070
+
+#define MSM_UART_SR_RX_READY         (1 << 0)
+#define MSM_UART_SR_RX_FULL          (1 << 1)
+#define MSM_UART_SR_TX_READY         (1 << 2)
+#define MSM_UART_SR_TX_EMPTY         (1 << 3)
+#define MSM_UART_SR_OVERRUN          (1 << 4)
+#define MSM_UART_SR_PAR_FRAME_ERR    (1 << 5)
+#define MSM_UART_SR_RX_BREAK         (1 << 6)
+#define MSM_UART_SR_HUNT_CHAR        (1 << 7)
+
+#define MSM_UART_CMD_RESET_RX        0x0010
+#define MSM_UART_CMD_RESET_TX        0x0020
+#define MSM_UART_CMD_RESET_ERR       0x0030
+#define MSM_UART_CMD_RESET_STALE_INT 0x0080
+#define MSM_UART_CR_RX_ENABLE        0x0001
+#define MSM_UART_CR_RX_DISABLE       0x0002
+#define MSM_UART_CR_TX_ENABLE        0x0004
+#define MSM_UART_CR_TX_DISABLE       0x0008
+#define MSM_UART_GCMD_ENA_STALE_EVT  0x0500
+#define MSM_UART_GCMD_DIS_STALE_EVT  0x0600
+
+#define MSM_UART_INTR_TXLEV          (1 << 0)
+#define MSM_UART_INTR_RXSTALE        (1 << 3)
+#define MSM_UART_INTR_RXLEV          (1 << 4)
+#define MSM_UART_INTR_TX_READY       (1 << 7)
 
 static vm_offset_t msm_uart_base = 0;
 static bool msm_uart_initted = false;
+
+/* UARTDM RX state */
+static uint32_t msm_rx_snap_total = 0;
+static uint32_t msm_rx_bytes_read = 0;
+static uint32_t msm_rx_word_buf = 0;
+static uint32_t msm_rx_word_bytes_left = 0;
+
+/* SPSC Lock-free RX Ring Buffer */
+#define XZS_UART_RX_BUF_SIZE 256
+#define XZS_UART_RX_BUF_MASK (XZS_UART_RX_BUF_SIZE - 1)
+
+struct xzs_uart_rx_ring {
+	uint8_t data[XZS_UART_RX_BUF_SIZE];
+	volatile uint32_t head;
+	volatile uint32_t tail;
+	volatile uint32_t overflow_count;
+};
+
+static struct xzs_uart_rx_ring g_xzs_rx_ring;
+
+void
+xzs_uart_rx_ring_init(void)
+{
+	for (int i = 0; i < XZS_UART_RX_BUF_SIZE; i++) {
+		g_xzs_rx_ring.data[i] = 0;
+	}
+	g_xzs_rx_ring.head = 0;
+	g_xzs_rx_ring.tail = 0;
+	g_xzs_rx_ring.overflow_count = 0;
+}
+
+bool
+xzs_uart_rx_ring_put(uint8_t byte)
+{
+	uint32_t next_head = (g_xzs_rx_ring.head + 1) & XZS_UART_RX_BUF_MASK;
+	if (next_head == g_xzs_rx_ring.tail) {
+		g_xzs_rx_ring.overflow_count++;
+		return false;
+	}
+	g_xzs_rx_ring.data[g_xzs_rx_ring.head] = byte;
+	__asm__ volatile("dmb ish" ::: "memory");
+	g_xzs_rx_ring.head = next_head;
+	return true;
+}
+
+int
+xzs_uart_rx_ring_get(void)
+{
+	if (g_xzs_rx_ring.head == g_xzs_rx_ring.tail) {
+		return -1;
+	}
+	uint8_t byte = g_xzs_rx_ring.data[g_xzs_rx_ring.tail];
+	__asm__ volatile("dmb ish" ::: "memory");
+	g_xzs_rx_ring.tail = (g_xzs_rx_ring.tail + 1) & XZS_UART_RX_BUF_MASK;
+	return (int)byte;
+}
 
 #define DRAM_LOG_PHYS  0x80060000UL
 #define DRAM_LOG_MAGIC 0x585a5344UL /* "XZSD" */
@@ -835,6 +927,72 @@ static inline void msm_uart_write(uint32_t offset, uint32_t val)
 static inline uint32_t msm_uart_read(uint32_t offset)
 {
 	return *(volatile uint32_t *)(msm_uart_base + offset);
+}
+
+static void
+msm_uart_init_rx_transfer(void)
+{
+	if (!msm_uart_base) return;
+
+	/* 1. Reset receiver — clears RX FIFO and any stale bootloader data */
+	msm_uart_write(MSM_UART_CR, MSM_UART_CMD_RESET_RX);
+
+	/* 2. Reset error flags & stale interrupt */
+	msm_uart_write(MSM_UART_CR, MSM_UART_CMD_RESET_ERR);
+	msm_uart_write(MSM_UART_CR, MSM_UART_CMD_RESET_STALE_INT);
+
+	/* 3. Configure mode: 8-N-1 (MR2 = 0x34) */
+	msm_uart_write(MSM_UART_MR2, 0x34);
+
+	/* 4. Set stale timeout in IPR (0x1f = 31 char times) */
+	msm_uart_write(MSM_UART_IPR, 0x1f);
+
+	/* 5. Set RX watermark (RFWR = 0: interrupt after any byte) */
+	msm_uart_write(MSM_UART_RFWR, 0);
+
+	/* 6. Disable DMA — use PIO mode */
+	msm_uart_write(0x003c, 0x0);  /* UARTDM_DMEN */
+
+	/* 7. Enable receiver */
+	msm_uart_write(MSM_UART_CR, MSM_UART_CR_RX_ENABLE);
+
+	/*
+	 * 8. Drain phantom bytes from RESET_RX.
+	 * MSM UARTDM v1.4 generates a spurious 0x00 byte after RESET_RX.
+	 * Arm a dummy transfer, wait briefly for any stale event, then
+	 * drain the FIFO and discard everything.
+	 */
+	msm_uart_write(UARTDM_DMRX, 0x220);
+	msm_uart_write(MSM_UART_CR, MSM_UART_CMD_RESET_STALE_INT);
+	msm_uart_write(MSM_UART_CR, MSM_UART_GCMD_ENA_STALE_EVT);
+
+	/* Brief wait for phantom stale event (~3ms at 115200 baud) */
+	extern void delay(int);
+	delay(5000);
+
+	/* Read and discard any phantom data */
+	uint32_t drain_isr = msm_uart_read(MSM_UART_ISR);
+	uint32_t drain_sr = msm_uart_read(MSM_UART_SR);
+	if ((drain_isr & MSM_UART_INTR_RXSTALE) || (drain_sr & MSM_UART_SR_RX_READY)) {
+		uint32_t drain_snap = msm_uart_read(UARTDM_RX_TOTAL_SNAP);
+		/* Drain all words from the FIFO */
+		uint32_t words = (drain_snap + 3) / 4;
+		for (uint32_t w = 0; w < words && w < 16; w++) {
+			(void)msm_uart_read(UARTDM_RF);
+		}
+	}
+
+	/* 9. Now do a clean re-arm for real data */
+	msm_uart_write(MSM_UART_CR, MSM_UART_CMD_RESET_STALE_INT);
+	msm_uart_write(MSM_UART_CR, MSM_UART_CMD_RESET_ERR);
+	msm_uart_write(UARTDM_DMRX, 0x220);
+	msm_uart_write(MSM_UART_CR, MSM_UART_CMD_RESET_STALE_INT);
+	msm_uart_write(MSM_UART_CR, MSM_UART_GCMD_ENA_STALE_EVT);
+
+	msm_rx_snap_total = 0;
+	msm_rx_bytes_read = 0;
+	msm_rx_word_buf = 0;
+	msm_rx_word_bytes_left = 0;
 }
 
 static unsigned int
@@ -875,13 +1033,230 @@ msm_uart_transmit_data(uint8_t c)
 static unsigned int
 msm_uart_receive_ready(void)
 {
+	if (!msm_uart_base) return 0;
+
+	/* If we have unconsumed bytes in current 32-bit word */
+	if (msm_rx_word_bytes_left > 0) {
+		return 1;
+	}
+
+	/* If we have remaining bytes in current snapshot */
+	if (msm_rx_snap_total > 0 && msm_rx_bytes_read < msm_rx_snap_total) {
+		return 1;
+	}
+
+	/*
+	 * Check if new bytes have arrived.
+	 * Read ISR (raw interrupt status at 0x0014) NOT MISR (masked at 0x0010),
+	 * because IMR=0 means MISR is always 0.
+	 * Also check SR.RX_READY as a secondary indicator.
+	 */
+	uint32_t isr = msm_uart_read(MSM_UART_ISR);
+	uint32_t sr = msm_uart_read(MSM_UART_SR);
+
+	if ((isr & MSM_UART_INTR_RXSTALE) || (isr & MSM_UART_INTR_RXLEV) || (sr & MSM_UART_SR_RX_READY)) {
+		uint32_t snap = msm_uart_read(UARTDM_RX_TOTAL_SNAP);
+		if (snap > 0) {
+			msm_rx_snap_total = snap;
+			msm_rx_bytes_read = 0;
+			msm_rx_word_bytes_left = 0;
+			return 1;
+		}
+	}
+
 	return 0;
 }
 
 static uint8_t
 msm_uart_receive_data(void)
 {
+	if (!msm_uart_base) return 0;
+
+	/* If no word currently being consumed, read next 32-bit word from RF */
+	if (msm_rx_word_bytes_left == 0) {
+		if (msm_rx_snap_total == 0 || msm_rx_bytes_read >= msm_rx_snap_total) {
+			if (!msm_uart_receive_ready()) {
+				return 0;
+			}
+		}
+		msm_rx_word_buf = msm_uart_read(UARTDM_RF);
+		uint32_t rem = msm_rx_snap_total - msm_rx_bytes_read;
+		msm_rx_word_bytes_left = (rem >= 4) ? 4 : rem;
+	}
+
+	uint8_t c = (uint8_t)(msm_rx_word_buf & 0xff);
+	msm_rx_word_buf >>= 8;
+	msm_rx_word_bytes_left--;
+	msm_rx_bytes_read++;
+
+	/* If current snapshot complete, reset stale interrupt and re-arm */
+	if (msm_rx_bytes_read >= msm_rx_snap_total && msm_rx_word_bytes_left == 0) {
+		msm_uart_write(MSM_UART_CR, MSM_UART_CMD_RESET_STALE_INT);
+		msm_uart_write(UARTDM_DMRX, 0x220);
+		msm_uart_write(MSM_UART_CR, MSM_UART_GCMD_ENA_STALE_EVT);
+		msm_rx_snap_total = 0;
+		msm_rx_bytes_read = 0;
+	}
+
+	return c;
+}
+
+/* Diagnostic register dump for hardware debugging */
+void
+msm_uart_dump_regs(void)
+{
+	extern void xzs_early_puts(const char *);
+	extern void xzs_d6m4_put_hex64(uint64_t);
+	if (!msm_uart_base) {
+		xzs_early_puts("UART_BASE=0\n");
+		return;
+	}
+	uint32_t sr   = msm_uart_read(MSM_UART_SR);
+	uint32_t isr  = msm_uart_read(MSM_UART_ISR);
+	uint32_t rxfs = msm_uart_read(UARTDM_RXFS);
+	uint32_t snap = msm_uart_read(UARTDM_RX_TOTAL_SNAP);
+	uint32_t mr1  = msm_uart_read(MSM_UART_MR1);
+	uint32_t mr2  = msm_uart_read(MSM_UART_MR2);
+	uint32_t ipr  = msm_uart_read(MSM_UART_IPR);
+	xzs_early_puts("UART_SR=0x"); xzs_d6m4_put_hex64(sr); xzs_early_puts("\n");
+	xzs_early_puts("UART_ISR=0x"); xzs_d6m4_put_hex64(isr); xzs_early_puts("\n");
+	xzs_early_puts("UARTDM_RXFS=0x"); xzs_d6m4_put_hex64(rxfs); xzs_early_puts("\n");
+	xzs_early_puts("UARTDM_RX_TOTAL_SNAP=0x"); xzs_d6m4_put_hex64(snap); xzs_early_puts("\n");
+	xzs_early_puts("UART_MR1=0x"); xzs_d6m4_put_hex64(mr1); xzs_early_puts("\n");
+	xzs_early_puts("UART_MR2=0x"); xzs_d6m4_put_hex64(mr2); xzs_early_puts("\n");
+	xzs_early_puts("UART_IPR=0x"); xzs_d6m4_put_hex64(ipr); xzs_early_puts("\n");
+}
+
+int
+msm_uart_probe_rx_byte(uint8_t *out_byte, uint32_t timeout_loops)
+{
+	extern void xzs_early_puts(const char *);
+	extern void xzs_d6m4_put_hex64(uint64_t);
+	if (!msm_uart_base) return 0;
+
+	/* Re-arm receiver with corrected init sequence */
+	msm_uart_init_rx_transfer();
+
+	xzs_early_puts("RX_INIT_COMPLETE=yes\n");
+	xzs_early_puts("--- PRE-WAIT REGISTER DUMP ---\n");
+	msm_uart_dump_regs();
+
+	extern void delay(int);
+	for (uint32_t i = 0; i < timeout_loops; i++) {
+		if (msm_uart_receive_ready()) {
+			/* Dump state at detection moment */
+			xzs_early_puts("--- DETECTION REGISTER DUMP (iteration=0x");
+			xzs_d6m4_put_hex64(i);
+			xzs_early_puts(") ---\n");
+			xzs_early_puts("DETECT_SNAP_TOTAL=0x");
+			xzs_d6m4_put_hex64(msm_rx_snap_total);
+			xzs_early_puts("\n");
+			msm_uart_dump_regs();
+
+			*out_byte = msm_uart_receive_data();
+
+			xzs_early_puts("READ_BYTE=0x");
+			xzs_d6m4_put_hex64(*out_byte);
+			xzs_early_puts("\n");
+			return 1;
+		}
+		delay(100);
+	}
+
+	xzs_early_puts("--- POST-TIMEOUT REGISTER DUMP ---\n");
+	msm_uart_dump_regs();
 	return 0;
+}
+
+/*
+ * Internal loopback self-test: MR2 bit 7 connects TX→RX internally.
+ * Returns 1 if loopback byte matches, 0 otherwise.
+ * Emits diagnostic output via xzs_early_puts.
+ */
+int
+msm_uart_loopback_test(void)
+{
+	extern void xzs_early_puts(const char *);
+	extern void xzs_d6m4_put_hex64(uint64_t);
+	extern void delay(int);
+
+	if (!msm_uart_base) return 0;
+
+	/* 1. Init RX first (this sets MR2=0x34) */
+	msm_uart_init_rx_transfer();
+
+	/* 2. NOW enable loopback by OR-ing bit 7 into MR2 */
+	uint32_t mr2 = msm_uart_read(MSM_UART_MR2);
+	msm_uart_write(MSM_UART_MR2, mr2 | 0x80);
+
+	xzs_early_puts("LOOPBACK_MR2=0x");
+	xzs_d6m4_put_hex64(msm_uart_read(MSM_UART_MR2));
+	xzs_early_puts("\n");
+
+	/* 3. Send 0x42 ('B') via TX while in loopback */
+	uint32_t timeout = 50000;
+	while (!(msm_uart_read(MSM_UART_SR) & MSM_UART_SR_TX_EMPTY)) {
+		if (--timeout == 0) break;
+	}
+	msm_uart_write(UARTDM_NCF_TX, 1);
+	(void)msm_uart_read(UARTDM_NCF_TX);
+	timeout = 50000;
+	while (!(msm_uart_read(MSM_UART_SR) & MSM_UART_SR_TX_READY)) {
+		if (--timeout == 0) break;
+	}
+	msm_uart_write(UARTDM_TF, 0x42);
+
+	/* 4. Wait for loopback byte to appear */
+	delay(10000);
+
+	/* 5. Manual RX poll (don't call probe_rx_byte which re-inits and clears loopback) */
+	uint8_t lb_byte = 0;
+	int lb_seen = 0;
+	for (uint32_t i = 0; i < 10000; i++) {
+		if (msm_uart_receive_ready()) {
+			lb_byte = msm_uart_receive_data();
+			lb_seen = 1;
+			break;
+		}
+		delay(100);
+	}
+
+	xzs_early_puts("LOOPBACK_BYTE_SEEN=");
+	xzs_early_puts(lb_seen ? "yes" : "no");
+	xzs_early_puts("\n");
+	if (lb_seen) {
+		xzs_early_puts("LOOPBACK_BYTE=0x");
+		xzs_d6m4_put_hex64(lb_byte);
+		xzs_early_puts("\n");
+		xzs_early_puts(lb_byte == 0x42 ? "LOOPBACK_MATCH=yes\n" : "LOOPBACK_MATCH=no\n");
+	} else {
+		/* Dump regs for diagnosis */
+		msm_uart_dump_regs();
+	}
+
+	/* 6. Restore original MR2 (disable loopback) */
+	msm_uart_write(MSM_UART_MR2, 0x34);
+	xzs_early_puts("LOOPBACK_RESTORED_MR2=0x");
+	xzs_d6m4_put_hex64(msm_uart_read(MSM_UART_MR2));
+	xzs_early_puts("\n");
+
+	return (lb_seen && lb_byte == 0x42) ? 1 : 0;
+}
+
+void
+xzs_uart_rx_pump_to_tty(void)
+{
+	extern void cons_cinput(char ch);
+
+	while (msm_uart_receive_ready()) {
+		uint8_t c = msm_uart_receive_data();
+		xzs_uart_rx_ring_put(c);
+	}
+
+	int ch;
+	while ((ch = xzs_uart_rx_ring_get()) != -1) {
+		cons_cinput((char)ch);
+	}
 }
 
 static void
@@ -889,7 +1264,9 @@ msm_uart_init(void)
 {
 	if (msm_uart_base) {
 		msm_uart_write(MSM_UART_IMR, 0);
+		msm_uart_init_rx_transfer();
 	}
+	xzs_uart_rx_ring_init();
 	if (!g_dram_log) {
 		g_dram_log = (volatile struct xzs_debug_log *)ml_io_map(DRAM_LOG_PHYS, sizeof(struct xzs_debug_log));
 		if (g_dram_log && g_dram_log->magic != DRAM_LOG_MAGIC) {

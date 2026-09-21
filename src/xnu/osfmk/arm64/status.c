@@ -3510,7 +3510,114 @@ xzs_d6m4_monitor_and_report_r650(task_t t, thread_t th)
 			xzs_early_puts("ELR_EL1="); xzs_d6m4_put_hex64(xzs_d6m4_r650_telemetry.elr); xzs_early_puts("\n");
 			xzs_early_puts("FAR_EL1="); xzs_d6m4_put_hex64(xzs_d6m4_r650_telemetry.far); xzs_early_puts("\n");
 		}
-		/* Allow UARTDM TX FIFO and pstore to flush completely before halting CPU0 */
+		/* Allow UARTDM TX FIFO and pstore to flush completely before probing RX */
+		delay(100000);
+
+		/* --- Phase D7-M4 P0 Hardware RX Probe (M4-A) --- */
+		extern int msm_uart_probe_rx_byte(uint8_t *out_byte, uint32_t timeout_loops);
+		uint8_t rx_byte = 0;
+		xzs_early_puts("\n=======================================================\n");
+		xzs_early_puts("=== D7-M4 P0 RX HARDWARE PROBE BEGIN ===\n");
+		xzs_early_puts("D7_M4_ENTERED=yes\n");
+		xzs_early_puts("UARTDM_RX_HW_CONFIGURED=yes\n");
+		xzs_early_puts("UARTDM_RX_AVAILABLE=yes\n");
+		xzs_early_puts("RX_PROBE_ARMED=yes\n");
+
+		/* Dump TLMM GPIO pinmux for GPIO 4 (TX) and GPIO 5 (RX) */
+		{
+			extern vm_offset_t ml_io_map(vm_offset_t, vm_size_t);
+			vm_offset_t tlmm = ml_io_map(0x01010000UL, 0x10000);
+			if (tlmm) {
+				/* GPIO_CFG(4) = base + 0x1000*4, GPIO_CFG(5) = base + 0x1000*5 */
+				uint32_t gpio4_cfg = *(volatile uint32_t *)(tlmm + 0x4000);
+				uint32_t gpio5_cfg = *(volatile uint32_t *)(tlmm + 0x5000);
+				uint32_t gpio5_io  = *(volatile uint32_t *)(tlmm + 0x5004);
+				xzs_early_puts("TLMM_GPIO4_CFG_BEFORE=0x");
+				xzs_d6m4_put_hex64(gpio4_cfg);
+				xzs_early_puts("\n");
+				xzs_early_puts("TLMM_GPIO5_CFG_BEFORE=0x");
+				xzs_d6m4_put_hex64(gpio5_cfg);
+				xzs_early_puts("\n");
+				xzs_early_puts("TLMM_GPIO5_IN_OUT_BEFORE=0x");
+				xzs_d6m4_put_hex64(gpio5_io);
+				xzs_early_puts("\n");
+
+				/*
+				 * Configure GPIO 4 (TX): func=2, pull=none(0), DRV=2mA(0), OE=1
+				 * GPIO_CFG = func[5:2]=2 | pull[1:0]=0 | DRV[8:6]=0 | OE[9]=1
+				 *          = (2<<2) | 0 | 0 | (1<<9) = 0x208
+				 */
+				*(volatile uint32_t *)(tlmm + 0x4000) = 0x208;
+				__asm__ volatile("dsb sy" ::: "memory");
+
+				/*
+				 * Configure GPIO 5 (RX): func=2, pull=pull-up(3), DRV=2mA(0), OE=0
+				 * GPIO_CFG = func[5:2]=2 | pull[1:0]=3 | DRV[8:6]=0 | OE[9]=0
+				 *          = (2<<2) | 3 | 0 | 0 = 0x0b
+				 */
+				*(volatile uint32_t *)(tlmm + 0x5000) = 0x0b;
+				__asm__ volatile("dsb sy" ::: "memory");
+
+				/* Read back to verify */
+				gpio4_cfg = *(volatile uint32_t *)(tlmm + 0x4000);
+				gpio5_cfg = *(volatile uint32_t *)(tlmm + 0x5000);
+				gpio5_io  = *(volatile uint32_t *)(tlmm + 0x5004);
+				xzs_early_puts("TLMM_GPIO4_CFG_AFTER=0x");
+				xzs_d6m4_put_hex64(gpio4_cfg);
+				xzs_early_puts("\n");
+				xzs_early_puts("TLMM_GPIO5_CFG_AFTER=0x");
+				xzs_d6m4_put_hex64(gpio5_cfg);
+				xzs_early_puts("\n");
+				xzs_early_puts("TLMM_GPIO5_IN_OUT_AFTER=0x");
+				xzs_d6m4_put_hex64(gpio5_io);
+				xzs_early_puts("\n");
+				/* Decode GPIO5 after config */
+				uint32_t func = (gpio5_cfg >> 2) & 0xf;
+				uint32_t pull = gpio5_cfg & 0x3;
+				uint32_t oe = (gpio5_cfg >> 9) & 0x1;
+				xzs_early_puts("GPIO5_FUNC_AFTER=0x");
+				xzs_d6m4_put_hex64(func);
+				xzs_early_puts("\n");
+				xzs_early_puts("GPIO5_PULL_AFTER=0x");
+				xzs_d6m4_put_hex64(pull);
+				xzs_early_puts("\n");
+				xzs_early_puts("GPIO5_OE_AFTER=0x");
+				xzs_d6m4_put_hex64(oe);
+				xzs_early_puts("\n");
+			}
+		}
+		/* ===== LOOPBACK SELF-TEST ===== */
+		{
+			extern int msm_uart_loopback_test(void);
+			xzs_early_puts("--- LOOPBACK TEST ---\n");
+			int lb_result = msm_uart_loopback_test();
+			xzs_early_puts("LOOPBACK_RESULT=");
+			xzs_early_puts(lb_result ? "PASS" : "FAIL");
+			xzs_early_puts("\n");
+		}
+
+		/* Bounded poll: up to 6 seconds (60,000 * 100us) for external byte */
+		int probe_seen = msm_uart_probe_rx_byte(&rx_byte, 60000);
+		if (probe_seen) {
+			xzs_early_puts("UARTDM_RX_STATUS_READY=yes\n");
+			xzs_early_puts("UARTDM_RX_EXTERNAL_BYTE_OBSERVED=yes\n");
+			xzs_early_puts("RX_PROBE_BYTE_SEEN=yes\n");
+			xzs_early_puts("RX_PROBE_BYTE=0x");
+			xzs_d6m4_put_hex64(rx_byte);
+			xzs_early_puts("\n");
+			xzs_early_puts("UARTDM_RX_RAW_BYTE=0x");
+			xzs_d6m4_put_hex64(rx_byte);
+			xzs_early_puts("\n");
+			if (rx_byte == 0x41) {
+				xzs_early_puts("UARTDM_RX_RAW_BYTE_MATCH=yes\n");
+			}
+		} else {
+			xzs_early_puts("RX_PROBE_BYTE_SEEN=no\n");
+			xzs_early_puts("M4_TEST_TIMEOUT=yes\n");
+		}
+		xzs_early_puts("=== D7-M4 P0 RX HARDWARE PROBE END ===\n");
+		xzs_early_puts("=======================================================\n\n");
+
 		delay(1000000);
 		xzs_spin_halt();
 	} else if (xzs_d6m4_r650_telemetry.unexpected_exception) {
