@@ -3489,6 +3489,19 @@ xzs_d6m4_monitor_and_report_r650(task_t t, thread_t th)
 		xzs_early_puts("[XZS-D6M6] PHASE D6-M6 COMPLETE & VERIFIED (PASS)\n");
 		xzs_breadcrumb(0xD650, 0x01);
 		xzs_early_puts("[XZS-D6M6] D650/01 terminal before D6-M7\n");
+
+		/* Arm D7-M2: PID1 on CPU1 will transition to /bin/sh on its next syscall */
+		extern volatile int xzs_d7m2_armed;
+		extern volatile int xzs_d7m2_complete;
+		xzs_d7m2_armed = 1;
+		__asm__ volatile("dmb ish" ::: "memory");
+
+		/* CPU0 waits safely while PID1 thread executes D7-M2 on CPU1 */
+		for (volatile int i = 0; i < 50000000; i++) {
+			if (xzs_d7m2_complete) {
+				break;
+			}
+		}
 		xzs_spin_halt();
 	} else if (xzs_d6m4_r650_telemetry.unexpected_exception) {
 		xzs_early_puts("\n[XZS-D6M4] UNEXPECTED EXCEPTION ON CPU 1\n");
