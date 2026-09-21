@@ -121,3 +121,37 @@ banner:
     .byte 0x75, 0x73, 0x65, 0x72, 0x73, 0x70, 0x61, 0x63, 0x65, 0x20, 0x6f, 0x6e, 0x6c, 0x69, 0x6e, 0x65
     .byte 0x20, 0x5d, 0x0a, 0x0a
 banner_end:
+
+// Phase D7-M4 dormant entry. The kernel redirects the saved EL0 PC here only
+// after the sealed D720 sequence and its 64th getpid round trip have completed.
+// Input storage lives on the normal user stack; no writable text is required.
+.p2align 4
+.globl _d7m4_read_start
+_d7m4_read_start:
+    sub     sp, sp, #16
+    mov     x0, #0             // fd 0: inherited /dev/console
+    mov     x1, sp
+    mov     x2, #16
+    mov     x16, #3            // SYS_read
+    svc     #0x80
+
+    // Validate the canonical line returned by the native tty path: "ABC\n".
+    cmp     x0, #4
+    b.ne    2f
+    ldr     w3, [sp]
+    movz    w4, #0x4241
+    movk    w4, #0x0a43, lsl #16
+    cmp     w3, w4
+    b.ne    2f
+
+    // A second native syscall proves continued EL0 execution after read().
+    mov     x16, #20           // SYS_getpid
+    svc     #0x80
+1:
+    b       1b
+
+2:
+    mov     x16, #20           // deterministic failure-side liveness marker
+    svc     #0x80
+3:
+    b       3b

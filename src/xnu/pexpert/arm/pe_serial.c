@@ -795,8 +795,6 @@ serial_hibernation_cleanup(void)
 /*****************************************************************************
  * Qualcomm MSM UARTDM Driver (MSM8996 BLSP UART)
  *****************************************************************************/
-#define MSM_UART_SR          0x0008
-#define MSM_UART_SR_TX_READY (1 << 2)
 #define MSM_UART_MR1          0x0000
 #define MSM_UART_MR2          0x0004
 #define MSM_UART_SR           0x0008
@@ -1257,6 +1255,79 @@ xzs_uart_rx_pump_to_tty(void)
 	while ((ch = xzs_uart_rx_ring_get()) != -1) {
 		cons_cinput((char)ch);
 	}
+}
+
+/*
+ * Feed bytes through the UARTDM internal loopback into the same receive
+ * primitive and ring used by the physical RX path.  This is a bring-up source,
+ * not a tty injection bypass: cons_cinput() is deliberately not called here.
+ */
+int
+xzs_uart_internal_loopback_fill_ring(const uint8_t *bytes, uint32_t length)
+{
+	extern void delay(int);
+	uint32_t accepted = 0;
+
+	if (!msm_uart_base || bytes == NULL || length == 0) {
+		return 0;
+	}
+
+	msm_uart_init_rx_transfer();
+	msm_uart_write(MSM_UART_MR2, msm_uart_read(MSM_UART_MR2) | 0x80);
+	if ((msm_uart_read(MSM_UART_MR2) & 0x80) == 0) {
+		return 0;
+	}
+
+	for (uint32_t i = 0; i < length; i++) {
+		uint32_t timeout = 50000;
+		while (!(msm_uart_read(MSM_UART_SR) & MSM_UART_SR_TX_EMPTY)) {
+			if (--timeout == 0) {
+				goto out;
+			}
+		}
+		msm_uart_write(UARTDM_NCF_TX, 1);
+		(void)msm_uart_read(UARTDM_NCF_TX);
+		timeout = 50000;
+		while (!(msm_uart_read(MSM_UART_SR) & MSM_UART_SR_TX_READY)) {
+			if (--timeout == 0) {
+				goto out;
+			}
+		}
+		msm_uart_write(UARTDM_TF, bytes[i]);
+
+		for (timeout = 10000; timeout > 0; timeout--) {
+			if (msm_uart_receive_ready()) {
+				uint8_t received = msm_uart_receive_data();
+				if (received != bytes[i] || !xzs_uart_rx_ring_put(received)) {
+					goto out;
+				}
+				accepted++;
+				break;
+			}
+			delay(100);
+		}
+		if (timeout == 0) {
+			goto out;
+		}
+	}
+
+out:
+	msm_uart_write(MSM_UART_MR2, 0x34);
+	return (int)accepted;
+}
+
+int
+xzs_uart_rx_drain_ring_to_tty(void)
+{
+	extern void cons_cinput(char ch);
+	int count = 0;
+	int ch;
+
+	while ((ch = xzs_uart_rx_ring_get()) != -1) {
+		cons_cinput((char)ch);
+		count++;
+	}
+	return count;
 }
 
 static void
