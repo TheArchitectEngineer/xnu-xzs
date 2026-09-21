@@ -72,6 +72,31 @@ volatile uint32_t g_xzs_usb_candidate2b_qusb2_unchanged = 0;
 volatile uint32_t g_xzs_usb_candidate2b_gcc_unchanged = 0;
 volatile uint32_t g_xzs_usb_candidate2b_event_buffer_unchanged = 0;
 volatile uint32_t g_xzs_usb_candidate2b_complete = 0;
+volatile uint32_t g_xzs_usb_ghwparams1 = 0;
+volatile uint32_t g_xzs_usb_num_event_interrupts = 0;
+volatile uint32_t g_xzs_usb_gevntadrhi0_before = 0;
+volatile uint32_t g_xzs_usb_gevntadrhi0 = 0;
+volatile uint32_t g_xzs_usb_devten_before = 0;
+volatile uint32_t g_xzs_usb_candidate2c_precondition_run_stop_0 = 0;
+volatile uint32_t g_xzs_usb_candidate2c_precondition_devctrlhlt_1 = 0;
+volatile uint32_t g_xzs_usb_candidate2c_dcfg_high_speed = 0;
+volatile uint32_t g_xzs_usb_candidate2c_dcfg_devaddr_0 = 0;
+volatile uint32_t g_xzs_usb_candidate2c_event_buffer_pa_valid = 0;
+volatile uint32_t g_xzs_usb_candidate2c_event_buffer_contiguous = 0;
+volatile uint32_t g_xzs_usb_candidate2c_event_buffer_aligned = 0;
+volatile uint32_t g_xzs_usb_candidate2c_event_buffer_lifetime_static = 1;
+volatile uint32_t g_xzs_usb_candidate2c_dcfg_write_count = 0;
+volatile uint32_t g_xzs_usb_candidate2c_gevntadrlo_write_count = 0;
+volatile uint32_t g_xzs_usb_candidate2c_gevntadrhi_write_count = 0;
+volatile uint32_t g_xzs_usb_candidate2c_gevntsiz_write_count = 0;
+volatile uint32_t g_xzs_usb_candidate2c_gevntcount_write_count = 0;
+volatile uint32_t g_xzs_usb_candidate2c_gevntcount_ack = 0;
+volatile uint32_t g_xzs_usb_candidate2c_gevntadr_readback_match = 0;
+volatile uint32_t g_xzs_usb_candidate2c_gevntsiz_readback_match = 0;
+volatile uint32_t g_xzs_usb_candidate2c_devten_unchanged = 0;
+volatile uint32_t g_xzs_usb_candidate2c_complete = 0;
+volatile uint64_t g_xzs_usb_candidate2c_event_buffer_va = 0;
+volatile uint64_t g_xzs_usb_candidate2c_event_buffer_pa = 0;
 volatile uint32_t g_xzs_usb_reset_count = 0;
 volatile uint32_t g_xzs_usb_conn_done_count = 0;
 volatile uint32_t g_xzs_usb_set_addr_count = 0;
@@ -130,6 +155,10 @@ static inline uint8_t xzs_mmio_read8(vm_offset_t base, uint32_t offset)
 #define DWC3_EVENT_BUF_SIZE   256
 static uint32_t s_event_buffer[DWC3_EVENT_BUF_SIZE / sizeof(uint32_t)] __attribute__((aligned(64)));
 static uint32_t s_event_buf_pos = 0;
+
+/* Candidate-2C: static XNU lifetime, 4 KiB aligned, DWC3-only event buffer. */
+static uint8_t s_candidate2c_event_buffer[XZS_DWC3_EVENT_BUFFER_SIZE]
+    __attribute__((aligned(XZS_DWC3_EVENT_BUFFER_SIZE)));
 
 /* Endpoint Transfer Request Blocks (TRBs) and buffers */
 static struct dwc3_trb s_ep0_setup_trb __attribute__((aligned(64)));
@@ -847,169 +876,166 @@ boolean_t xzs_usb_is_console_ready(void)
  */
 int xzs_usb_init(void)
 {
-	xzs_breadcrumb(0xD740, 0x2B00);
-	xzs_early_puts("[XZS-D7T1] D740/2B00 Candidate-2B DCFG-only normalization entered\n");
+	vm_offset_t event_va;
+	vm_offset_t event_pa;
 
-	/* Candidate-2B maps status apertures, but writes only DWC3_DCFG below. */
+	xzs_breadcrumb(0xD740, 0x2C00);
+	xzs_early_puts("[XZS-D7T1] D740/2C00 Candidate-2C XNU event-buffer ownership entered\n");
+
+	/* Candidate-2C maps and mutates only audited DWC3 event-buffer registers. */
 	s_dwc3_base = (vm_offset_t)ml_io_map(XZS_USB_DWC3_PHYS_BASE, XZS_USB_DWC3_MMIO_SIZE);
-	s_qcom_glue_base = (vm_offset_t)ml_io_map(XZS_USB_QCOM_GLUE_PHYS_BASE, XZS_USB_QCOM_GLUE_MMIO_SIZE);
-	s_qusb2_phy_base = (vm_offset_t)ml_io_map(XZS_USB_QUSB2_PHY_PHYS_BASE, XZS_USB_QUSB2_PHY_MMIO_SIZE);
-	s_gcc_base = (vm_offset_t)ml_io_map(XZS_USB_GCC_PHYS_BASE, XZS_USB_GCC_MMIO_SIZE);
-
-	if (s_dwc3_base == 0 || s_qcom_glue_base == 0 || s_qusb2_phy_base == 0 || s_gcc_base == 0) {
-		xzs_breadcrumb(0xD740, 0x2BFF);
-		xzs_early_puts("[XZS-D7T1] ERROR: Candidate-2B MMIO mapping failed\n");
+	if (s_dwc3_base == 0) {
+		xzs_breadcrumb(0xD740, 0x2CFF);
+		xzs_early_puts("[XZS-D7T1] ERROR: Candidate-2C DWC3 MMIO mapping failed\n");
 		return -1;
 	}
 
-	/* Precondition snapshot. No DWC3 mutation is permitted before this point. */
+	/* Capability and halted-state audit precede every DWC3 write. */
 	g_xzs_usb_gsnpsid = dwc3_read32(DWC3_GSNPSID);
-	g_xzs_usb_gctl_before = dwc3_read32(DWC3_GCTL);
-	g_xzs_usb_gctl = g_xzs_usb_gctl_before;
-	g_xzs_usb_gsts = dwc3_read32(DWC3_GSTS);
-	g_xzs_usb_gusb2phycfg0_before = dwc3_read32(DWC3_GUSB2PHYCFG0);
-	g_xzs_usb_gusb2phycfg0 = g_xzs_usb_gusb2phycfg0_before;
-	g_xzs_usb_gusb3pipectl0 = dwc3_read32(DWC3_GUSB3PIPECTL0);
+	g_xzs_usb_ghwparams1 = dwc3_read32(DWC3_GHWPARAMS1);
+	g_xzs_usb_num_event_interrupts = DWC3_NUM_EVENT_INTERRUPTS(g_xzs_usb_ghwparams1);
 	g_xzs_usb_dcfg_before = dwc3_read32(DWC3_DCFG);
-	g_xzs_usb_dcfg = g_xzs_usb_dcfg_before;
 	g_xzs_usb_dctl_before = dwc3_read32(DWC3_DCTL);
-	g_xzs_usb_dctl = g_xzs_usb_dctl_before;
 	g_xzs_usb_dsts_before = dwc3_read32(DWC3_DSTS);
-	g_xzs_usb_dsts = g_xzs_usb_dsts_before;
-	g_xzs_usb_devten = dwc3_read32(DWC3_DEVTEN);
-	g_xzs_usb_osts = dwc3_read32(DWC3_OSTS);
+	g_xzs_usb_devten_before = dwc3_read32(DWC3_DEVTEN);
 	g_xzs_usb_gevntadr0_before = dwc3_read32(DWC3_GEVNTADR0);
+	g_xzs_usb_gevntadrhi0_before = dwc3_read32(DWC3_GEVNTADR_HI0);
 	g_xzs_usb_gevntsiz0_before = dwc3_read32(DWC3_GEVNTSIZ0);
 	g_xzs_usb_gevntcnt0_before = dwc3_read32(DWC3_GEVNTCNT0);
-	g_xzs_usb_gevntadr0 = g_xzs_usb_gevntadr0_before;
-	g_xzs_usb_gevntsiz0 = g_xzs_usb_gevntsiz0_before;
-	g_xzs_usb_gevntcnt0 = g_xzs_usb_gevntcnt0_before;
-	xzs_breadcrumb(0xD740, 0x2B01);
-	xzs_early_puts("[XZS-D7T1] D740/2B01 precondition snapshot complete\n");
-
-	/* Wrapper/PHY/GCC before-oracles are read-only for all Candidate-2B paths. */
-	g_xzs_usb_qscratch_ram1 = xzs_mmio_read32(s_qcom_glue_base, QSCRATCH_RAM1);
-	g_xzs_usb_qscratch_general_cfg_before = xzs_mmio_read32(s_qcom_glue_base, QSCRATCH_GENERAL_CFG);
-	g_xzs_usb_qscratch_cfg = g_xzs_usb_qscratch_general_cfg_before;
-	g_xzs_usb_qscratch_general_cfg = g_xzs_usb_qscratch_cfg;
-	g_xzs_usb_qscratch_hs_phy_ctrl_before = xzs_mmio_read32(s_qcom_glue_base, QSCRATCH_HS_PHY_CTRL);
-	g_xzs_usb_qscratch_hs_phy_ctrl = g_xzs_usb_qscratch_hs_phy_ctrl_before;
-	g_xzs_usb_qscratch_ss_phy_ctrl_before = xzs_mmio_read32(s_qcom_glue_base, QSCRATCH_SS_PHY_CTRL);
-	g_xzs_usb_qscratch_ss_phy_ctrl = g_xzs_usb_qscratch_ss_phy_ctrl_before;
-	g_xzs_usb_qscratch_pwr_event_irq_stat = xzs_mmio_read32(s_qcom_glue_base, QSCRATCH_PWR_EVENT_IRQ_STAT);
-	g_xzs_usb_qusb2_pll_test = xzs_mmio_read32(s_qusb2_phy_base, QUSB2PHY_PLL_TEST);
-	g_xzs_usb_qusb2_pll_status_before = xzs_mmio_read8(s_qusb2_phy_base, QUSB2PHY_PLL_STATUS);
-	g_xzs_usb_qusb2_pll_status = g_xzs_usb_qusb2_pll_status_before;
-	g_xzs_usb_qusb2_port_powerdown_before = xzs_mmio_read32(s_qusb2_phy_base, QUSB2PHY_PORT_POWERDOWN);
-	g_xzs_usb_qusb2_port_powerdown = g_xzs_usb_qusb2_port_powerdown_before;
-	g_xzs_usb_qusb2_utmi_status = xzs_mmio_read32(s_qusb2_phy_base, QUSB2PHY_PORT_UTMI_STATUS);
-	g_xzs_usb_gcc_qusb2phy_prim_bcr_before = xzs_mmio_read32(s_gcc_base, GCC_QUSB2PHY_PRIM_BCR);
-	g_xzs_usb_gcc_qusb2phy_prim_bcr = g_xzs_usb_gcc_qusb2phy_prim_bcr_before;
-
-	g_xzs_usb_candidate2b_precondition_run_stop_0 =
+	g_xzs_usb_candidate2c_precondition_run_stop_0 =
 	    ((g_xzs_usb_dctl_before & DWC3_DCTL_RUN_STOP) == 0);
-	g_xzs_usb_candidate2b_precondition_devctrlhlt_1 =
+	g_xzs_usb_candidate2c_precondition_devctrlhlt_1 =
 	    ((g_xzs_usb_dsts_before & DWC3_DSTS_DEVCTRLHLT) != 0);
-	if (!g_xzs_usb_candidate2b_precondition_run_stop_0 ||
-	    !g_xzs_usb_candidate2b_precondition_devctrlhlt_1) {
-		xzs_early_puts("[XZS-D7T1] Candidate-2B precondition failed; DCFG untouched\n");
-		xzs_breadcrumb(0xD740, 0x2B30);
-		xzs_early_puts("[XZS-D7T1] D740/2B30 normal boot continuing\n");
+	if (g_xzs_usb_num_event_interrupts < 1 ||
+	    !g_xzs_usb_candidate2c_precondition_run_stop_0 ||
+	    !g_xzs_usb_candidate2c_precondition_devctrlhlt_1) {
+		xzs_early_puts("[XZS-D7T1] Candidate-2C precondition failed; event registers untouched\n");
+		xzs_breadcrumb(0xD740, 0x2C40);
+		xzs_early_puts("[XZS-D7T1] D740/2C40 normal boot continuing\n");
 		return -1;
 	}
-	xzs_breadcrumb(0xD740, 0x2B02);
-	xzs_early_puts("[XZS-D7T1] D740/2B02 RUN_STOP=0 confirmed\n");
-	xzs_breadcrumb(0xD740, 0x2B03);
-	xzs_early_puts("[XZS-D7T1] D740/2B03 DEVCTRLHLT=1 confirmed\n");
+	xzs_breadcrumb(0xD740, 0x2C01);
+	xzs_early_puts("[XZS-D7T1] D740/2C01 halted preconditions confirmed\n");
 
-	/* The only Candidate-2B USB-register mutation: runtime DCFG RMW. */
-	xzs_breadcrumb(0xD740, 0x2B10);
-	xzs_early_puts("[XZS-D7T1] D740/2B10 DCFG before captured\n");
+	/* Retain Candidate-2B normalization only when the live DCFG requires it. */
 	g_xzs_usb_dcfg_written = g_xzs_usb_dcfg_before &
 	    ~(DWC3_DCFG_SPEED_MASK | DWC3_DCFG_DEVADDR_MASK);
-	dwc3_write32(DWC3_DCFG, g_xzs_usb_dcfg_written);
-	g_xzs_usb_candidate2b_write_count = 1;
-	xzs_breadcrumb(0xD740, 0x2B11);
-	xzs_early_puts("[XZS-D7T1] D740/2B11 DCFG normalization write issued\n");
+	if (g_xzs_usb_dcfg_written != g_xzs_usb_dcfg_before) {
+		dwc3_write32(DWC3_DCFG, g_xzs_usb_dcfg_written);
+		g_xzs_usb_candidate2c_dcfg_write_count = 1;
+	}
 	g_xzs_usb_dcfg_readback = dwc3_read32(DWC3_DCFG);
 	g_xzs_usb_dcfg = g_xzs_usb_dcfg_readback;
-	g_xzs_usb_candidate2b_dcfg_write_match =
-	    (g_xzs_usb_dcfg_readback == g_xzs_usb_dcfg_written);
-	xzs_breadcrumb(0xD740, 0x2B12);
-	xzs_early_puts("[XZS-D7T1] D740/2B12 DCFG readback complete\n");
-	if (g_xzs_usb_candidate2b_dcfg_write_match &&
-	    ((g_xzs_usb_dcfg_readback & DWC3_DCFG_SPEED_MASK) == 0) &&
-	    ((g_xzs_usb_dcfg_readback & DWC3_DCFG_DEVADDR_MASK) == 0)) {
-		xzs_breadcrumb(0xD740, 0x2B13);
-		xzs_early_puts("[XZS-D7T1] D740/2B13 DCFG decode validated\n");
-	} else {
-		xzs_breadcrumb(0xD740, 0x2B1F);
-		xzs_early_puts("[XZS-D7T1] ERROR: Candidate-2B DCFG decode mismatch\n");
+	g_xzs_usb_candidate2c_dcfg_high_speed =
+	    ((g_xzs_usb_dcfg_readback & DWC3_DCFG_SPEED_MASK) == 0);
+	g_xzs_usb_candidate2c_dcfg_devaddr_0 =
+	    ((g_xzs_usb_dcfg_readback & DWC3_DCFG_DEVADDR_MASK) == 0);
+	if (!g_xzs_usb_candidate2c_dcfg_high_speed ||
+	    !g_xzs_usb_candidate2c_dcfg_devaddr_0) {
+		xzs_early_puts("[XZS-D7T1] Candidate-2C DCFG normalization failed; event registers untouched\n");
+		xzs_breadcrumb(0xD740, 0x2C40);
+		xzs_early_puts("[XZS-D7T1] D740/2C40 normal boot continuing\n");
+		return -1;
 	}
+	xzs_breadcrumb(0xD740, 0x2C02);
+	xzs_early_puts("[XZS-D7T1] D740/2C02 DCFG HS normalization confirmed\n");
 
-	/* Post-write DWC3 oracle: no DCTL, event-buffer or endpoint operations occur. */
-	g_xzs_usb_gctl = dwc3_read32(DWC3_GCTL);
-	g_xzs_usb_gusb2phycfg0 = dwc3_read32(DWC3_GUSB2PHYCFG0);
-	g_xzs_usb_dctl = dwc3_read32(DWC3_DCTL);
-	g_xzs_usb_dsts = dwc3_read32(DWC3_DSTS);
+	/* Static 4 KiB storage has XNU lifetime; validate VA-to-PA contiguity. */
+	event_va = (vm_offset_t)s_candidate2c_event_buffer;
+	event_pa = ml_vtophys(event_va);
+	g_xzs_usb_candidate2c_event_buffer_va = event_va;
+	g_xzs_usb_candidate2c_event_buffer_pa = event_pa;
+	g_xzs_usb_candidate2c_event_buffer_pa_valid = (event_pa != 0);
+	g_xzs_usb_candidate2c_event_buffer_aligned =
+	    ((event_va & (XZS_DWC3_EVENT_BUFFER_SIZE - 1)) == 0) &&
+	    ((event_pa & (XZS_DWC3_EVENT_BUFFER_SIZE - 1)) == 0);
+	g_xzs_usb_candidate2c_event_buffer_contiguous =
+	    (ml_vtophys(event_va + XZS_DWC3_EVENT_BUFFER_SIZE - 1) ==
+	    event_pa + XZS_DWC3_EVENT_BUFFER_SIZE - 1);
+	if (!g_xzs_usb_candidate2c_event_buffer_pa_valid ||
+	    !g_xzs_usb_candidate2c_event_buffer_aligned ||
+	    !g_xzs_usb_candidate2c_event_buffer_contiguous) {
+		xzs_early_puts("[XZS-D7T1] Candidate-2C event-buffer PA validation failed\n");
+		xzs_breadcrumb(0xD740, 0x2C40);
+		xzs_early_puts("[XZS-D7T1] D740/2C40 normal boot continuing\n");
+		return -1;
+	}
+	memset(s_candidate2c_event_buffer, 0, sizeof(s_candidate2c_event_buffer));
+	flush_dcache(event_va, XZS_DWC3_EVENT_BUFFER_SIZE, FALSE);
+	xzs_breadcrumb(0xD740, 0x2C10);
+	xzs_early_puts("[XZS-D7T1] D740/2C10 XNU event buffer allocated/reserved\n");
+	xzs_breadcrumb(0xD740, 0x2C11);
+	xzs_early_puts("[XZS-D7T1] D740/2C11 event-buffer PA validated\n");
+	xzs_breadcrumb(0xD740, 0x2C12);
+	xzs_early_puts("[XZS-D7T1] D740/2C12 inherited event registers captured\n");
+
+	/* Program only event-buffer 0 while interrupts and the controller remain halted. */
+	dwc3_write32(DWC3_GEVNTADR0, (uint32_t)event_pa);
+	g_xzs_usb_candidate2c_gevntadrlo_write_count = 1;
+	dwc3_write32(DWC3_GEVNTADR_HI0, (uint32_t)(event_pa >> 32));
+	g_xzs_usb_candidate2c_gevntadrhi_write_count = 1;
+	xzs_breadcrumb(0xD740, 0x2C20);
+	xzs_early_puts("[XZS-D7T1] D740/2C20 GEVNTADR programmed\n");
+	dwc3_write32(DWC3_GEVNTSIZ0,
+	    DWC3_GEVNTSIZ_INTMASK | XZS_DWC3_EVENT_BUFFER_SIZE);
+	g_xzs_usb_candidate2c_gevntsiz_write_count = 1;
+	xzs_breadcrumb(0xD740, 0x2C21);
+	xzs_early_puts("[XZS-D7T1] D740/2C21 GEVNTSIZ programmed masked\n");
+
+	/* Acknowledge only a hardware-reported pending byte count; preserve zero. */
+	g_xzs_usb_candidate2c_gevntcount_ack =
+	    g_xzs_usb_gevntcnt0_before & DWC3_GEVNTCOUNT_PENDING_MASK;
+	if (g_xzs_usb_candidate2c_gevntcount_ack != 0) {
+		dwc3_write32(DWC3_GEVNTCNT0, g_xzs_usb_candidate2c_gevntcount_ack);
+		g_xzs_usb_candidate2c_gevntcount_write_count = 1;
+	}
+	xzs_breadcrumb(0xD740, 0x2C22);
+	xzs_early_puts("[XZS-D7T1] D740/2C22 stale event count handled\n");
+
 	g_xzs_usb_gevntadr0 = dwc3_read32(DWC3_GEVNTADR0);
+	g_xzs_usb_gevntadrhi0 = dwc3_read32(DWC3_GEVNTADR_HI0);
 	g_xzs_usb_gevntsiz0 = dwc3_read32(DWC3_GEVNTSIZ0);
 	g_xzs_usb_gevntcnt0 = dwc3_read32(DWC3_GEVNTCNT0);
-	g_xzs_usb_candidate2b_gctl_unchanged = (g_xzs_usb_gctl == g_xzs_usb_gctl_before);
-	g_xzs_usb_candidate2b_gusb2phycfg0_unchanged =
-	    (g_xzs_usb_gusb2phycfg0 == g_xzs_usb_gusb2phycfg0_before);
-	g_xzs_usb_candidate2b_event_buffer_unchanged =
-	    (g_xzs_usb_gevntadr0 == g_xzs_usb_gevntadr0_before) &&
-	    (g_xzs_usb_gevntsiz0 == g_xzs_usb_gevntsiz0_before) &&
-	    (g_xzs_usb_gevntcnt0 == g_xzs_usb_gevntcnt0_before);
-	xzs_breadcrumb(0xD740, 0x2B20);
-	xzs_early_puts("[XZS-D7T1] D740/2B20 post-mutation DWC3 snapshot complete\n");
+	g_xzs_usb_dctl = dwc3_read32(DWC3_DCTL);
+	g_xzs_usb_dsts = dwc3_read32(DWC3_DSTS);
+	g_xzs_usb_devten = dwc3_read32(DWC3_DEVTEN);
+	g_xzs_usb_candidate2c_gevntadr_readback_match =
+	    (g_xzs_usb_gevntadr0 == (uint32_t)event_pa) &&
+	    (g_xzs_usb_gevntadrhi0 == (uint32_t)(event_pa >> 32));
+	g_xzs_usb_candidate2c_gevntsiz_readback_match =
+	    ((g_xzs_usb_gevntsiz0 & DWC3_GEVNTSIZ_SIZE_MASK) == XZS_DWC3_EVENT_BUFFER_SIZE) &&
+	    ((g_xzs_usb_gevntsiz0 & DWC3_GEVNTSIZ_INTMASK) != 0);
+	g_xzs_usb_candidate2c_devten_unchanged =
+	    (g_xzs_usb_devten == g_xzs_usb_devten_before);
+	xzs_breadcrumb(0xD740, 0x2C23);
+	xzs_early_puts("[XZS-D7T1] D740/2C23 event-register readback verified\n");
+	xzs_breadcrumb(0xD740, 0x2C30);
+	xzs_early_puts("[XZS-D7T1] D740/2C30 RUN_STOP still zero\n");
+	xzs_breadcrumb(0xD740, 0x2C31);
+	xzs_early_puts("[XZS-D7T1] D740/2C31 DEVCTRLHLT still one\n");
 
-	/* Re-read immutable domains as before/after hardware oracles. */
-	g_xzs_usb_qscratch_general_cfg = xzs_mmio_read32(s_qcom_glue_base, QSCRATCH_GENERAL_CFG);
-	g_xzs_usb_qscratch_hs_phy_ctrl = xzs_mmio_read32(s_qcom_glue_base, QSCRATCH_HS_PHY_CTRL);
-	g_xzs_usb_qscratch_ss_phy_ctrl = xzs_mmio_read32(s_qcom_glue_base, QSCRATCH_SS_PHY_CTRL);
-	g_xzs_usb_qusb2_pll_status = xzs_mmio_read8(s_qusb2_phy_base, QUSB2PHY_PLL_STATUS);
-	g_xzs_usb_qusb2_port_powerdown = xzs_mmio_read32(s_qusb2_phy_base, QUSB2PHY_PORT_POWERDOWN);
-	g_xzs_usb_gcc_qusb2phy_prim_bcr = xzs_mmio_read32(s_gcc_base, GCC_QUSB2PHY_PRIM_BCR);
-	g_xzs_usb_candidate2b_qscratch_unchanged =
-	    (g_xzs_usb_qscratch_general_cfg == g_xzs_usb_qscratch_general_cfg_before) &&
-	    (g_xzs_usb_qscratch_hs_phy_ctrl == g_xzs_usb_qscratch_hs_phy_ctrl_before) &&
-	    (g_xzs_usb_qscratch_ss_phy_ctrl == g_xzs_usb_qscratch_ss_phy_ctrl_before);
-	/* PLL_STATUS bit 5 is the only MSM8996 state bit source-audited here. */
-	g_xzs_usb_candidate2b_qusb2_unchanged =
-	    ((g_xzs_usb_qusb2_pll_status & QUSB2PHY_PLL_STATUS_LOCKED) ==
-	    (g_xzs_usb_qusb2_pll_status_before & QUSB2PHY_PLL_STATUS_LOCKED)) &&
-	    (g_xzs_usb_qusb2_port_powerdown == g_xzs_usb_qusb2_port_powerdown_before);
-	g_xzs_usb_candidate2b_gcc_unchanged =
-	    (g_xzs_usb_gcc_qusb2phy_prim_bcr == g_xzs_usb_gcc_qusb2phy_prim_bcr_before);
-	xzs_breadcrumb(0xD740, 0x2B21);
-	xzs_early_puts("[XZS-D7T1] D740/2B21 wrapper/PHY unchanged verified\n");
-
-	g_xzs_usb_candidate2b_complete =
-	    g_xzs_usb_candidate2b_dcfg_write_match &&
-	    ((g_xzs_usb_dcfg_before & DWC3_DCFG_SPEED_MASK) == 4) &&
-	    (((g_xzs_usb_dcfg_before & DWC3_DCFG_DEVADDR_MASK) >> 3) == 1) &&
-	    ((g_xzs_usb_dcfg_readback & DWC3_DCFG_SPEED_MASK) == 0) &&
-	    ((g_xzs_usb_dcfg_readback & DWC3_DCFG_DEVADDR_MASK) == 0) &&
+	g_xzs_usb_candidate2c_complete =
+	    g_xzs_usb_candidate2c_dcfg_high_speed &&
+	    g_xzs_usb_candidate2c_dcfg_devaddr_0 &&
+	    g_xzs_usb_candidate2c_event_buffer_pa_valid &&
+	    g_xzs_usb_candidate2c_event_buffer_contiguous &&
+	    g_xzs_usb_candidate2c_event_buffer_aligned &&
+	    g_xzs_usb_candidate2c_event_buffer_lifetime_static &&
+	    g_xzs_usb_candidate2c_gevntadr_readback_match &&
+	    g_xzs_usb_candidate2c_gevntsiz_readback_match &&
 	    ((g_xzs_usb_dctl & DWC3_DCTL_RUN_STOP) == 0) &&
 	    ((g_xzs_usb_dsts & DWC3_DSTS_DEVCTRLHLT) != 0) &&
-	    g_xzs_usb_candidate2b_gctl_unchanged &&
-	    g_xzs_usb_candidate2b_gusb2phycfg0_unchanged &&
-	    g_xzs_usb_candidate2b_qscratch_unchanged &&
-	    g_xzs_usb_candidate2b_qusb2_unchanged &&
-	    g_xzs_usb_candidate2b_gcc_unchanged &&
-	    g_xzs_usb_candidate2b_event_buffer_unchanged;
-	xzs_breadcrumb(0xD740, 0x2B30);
-	xzs_early_puts("[XZS-D7T1] D740/2B30 normal boot continuing\n");
-	if (g_xzs_usb_candidate2b_complete) {
-		xzs_breadcrumb(0xD740, 0x2B90);
-		xzs_early_puts("[XZS-D7T1] D740/2B90 acceptance reached\n");
-		xzs_breadcrumb(0xD740, 0x2B91);
-		xzs_early_puts("[XZS-D7T1] D740/2B91 PASS\n");
+	    g_xzs_usb_candidate2c_devten_unchanged;
+	xzs_breadcrumb(0xD740, 0x2C40);
+	xzs_early_puts("[XZS-D7T1] D740/2C40 normal boot continuing\n");
+	if (g_xzs_usb_candidate2c_complete) {
+		xzs_breadcrumb(0xD740, 0x2C90);
+		xzs_early_puts("[XZS-D7T1] D740/2C90 acceptance reached\n");
+		xzs_breadcrumb(0xD740, 0x2C91);
+		xzs_early_puts("[XZS-D7T1] D740/2C91 PASS\n");
 	} else {
-		xzs_breadcrumb(0xD740, 0x2B9F);
-		xzs_early_puts("[XZS-D7T1] ERROR: Candidate-2B acceptance mismatch\n");
+		xzs_breadcrumb(0xD740, 0x2C9F);
+		xzs_early_puts("[XZS-D7T1] ERROR: Candidate-2C acceptance mismatch\n");
 	}
 	return 0;
 }

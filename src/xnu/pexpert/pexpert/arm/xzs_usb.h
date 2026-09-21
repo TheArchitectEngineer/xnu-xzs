@@ -60,6 +60,7 @@
 #define DWC3_GCTL                     0xC110
 #define DWC3_GSTS                     0xC118
 #define DWC3_GSNPSID                  0xC120
+#define DWC3_GHWPARAMS1               0xC144
 #define DWC3_GUSB2PHYCFG0             0xC200
 #define DWC3_GUSB3PIPECTL0            0xC2C0
 #define DWC3_GEVNTADR0                0xC400
@@ -78,6 +79,13 @@
 #define DWC3_DCFG_DEVADDR_MASK        0x000003F8u
 #define DWC3_DCTL_RUN_STOP            (1u << 31)
 #define DWC3_DSTS_DEVCTRLHLT          (1u << 22)
+
+/* Candidate-2C DWC3 2.70a event-buffer ownership definitions. */
+#define DWC3_NUM_EVENT_INTERRUPTS(n)  (((n) >> 15) & 0x3fu)
+#define DWC3_GEVNTSIZ_SIZE_MASK       0x0000FFFFu
+#define DWC3_GEVNTSIZ_INTMASK         (1u << 31)
+#define DWC3_GEVNTCOUNT_PENDING_MASK  0x0000FFFCu
+#define XZS_DWC3_EVENT_BUFFER_SIZE    4096u
 
 #define DWC3_DEPCMDPAR2(n)            (0xC800 + ((n) * 0x10))
 #define DWC3_DEPCMDPAR1(n)            (0xC804 + ((n) * 0x10))
@@ -215,6 +223,31 @@ extern volatile uint32_t g_xzs_usb_candidate2b_qusb2_unchanged;
 extern volatile uint32_t g_xzs_usb_candidate2b_gcc_unchanged;
 extern volatile uint32_t g_xzs_usb_candidate2b_event_buffer_unchanged;
 extern volatile uint32_t g_xzs_usb_candidate2b_complete;
+extern volatile uint32_t g_xzs_usb_ghwparams1;
+extern volatile uint32_t g_xzs_usb_num_event_interrupts;
+extern volatile uint32_t g_xzs_usb_gevntadrhi0_before;
+extern volatile uint32_t g_xzs_usb_gevntadrhi0;
+extern volatile uint32_t g_xzs_usb_devten_before;
+extern volatile uint32_t g_xzs_usb_candidate2c_precondition_run_stop_0;
+extern volatile uint32_t g_xzs_usb_candidate2c_precondition_devctrlhlt_1;
+extern volatile uint32_t g_xzs_usb_candidate2c_dcfg_high_speed;
+extern volatile uint32_t g_xzs_usb_candidate2c_dcfg_devaddr_0;
+extern volatile uint32_t g_xzs_usb_candidate2c_event_buffer_pa_valid;
+extern volatile uint32_t g_xzs_usb_candidate2c_event_buffer_contiguous;
+extern volatile uint32_t g_xzs_usb_candidate2c_event_buffer_aligned;
+extern volatile uint32_t g_xzs_usb_candidate2c_event_buffer_lifetime_static;
+extern volatile uint32_t g_xzs_usb_candidate2c_dcfg_write_count;
+extern volatile uint32_t g_xzs_usb_candidate2c_gevntadrlo_write_count;
+extern volatile uint32_t g_xzs_usb_candidate2c_gevntadrhi_write_count;
+extern volatile uint32_t g_xzs_usb_candidate2c_gevntsiz_write_count;
+extern volatile uint32_t g_xzs_usb_candidate2c_gevntcount_write_count;
+extern volatile uint32_t g_xzs_usb_candidate2c_gevntcount_ack;
+extern volatile uint32_t g_xzs_usb_candidate2c_gevntadr_readback_match;
+extern volatile uint32_t g_xzs_usb_candidate2c_gevntsiz_readback_match;
+extern volatile uint32_t g_xzs_usb_candidate2c_devten_unchanged;
+extern volatile uint32_t g_xzs_usb_candidate2c_complete;
+extern volatile uint64_t g_xzs_usb_candidate2c_event_buffer_va;
+extern volatile uint64_t g_xzs_usb_candidate2c_event_buffer_pa;
 extern volatile uint32_t g_xzs_usb_reset_count;
 extern volatile uint32_t g_xzs_usb_conn_done_count;
 extern volatile uint32_t g_xzs_usb_set_addr_count;
