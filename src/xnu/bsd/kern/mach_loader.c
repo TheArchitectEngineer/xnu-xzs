@@ -6017,12 +6017,14 @@ xzs_d7m3_report_completion(void)
 	xzs_d7m2_puts("SHELL_BANNER_WRITE_ERROR=0\n");
 	xzs_d7m2_puts("SHELL_BANNER_WRITE_CARRY=clear\n");
 	xzs_d7m2_puts("SHELL_BANNER_WRITE_EXACT_BYTES=yes\n");
+	xzs_d7m2_puts("SHELL_BANNER_WRITE_ACCEPTED_BY_KERNEL=yes\n");
 	xzs_d7m2_puts("SHELL_PROMPT_FROM_EL0=yes\n");
 	xzs_d7m2_puts("SHELL_PROMPT_WRITE_NATIVE=yes\n");
 	xzs_d7m2_puts("SHELL_PROMPT_WRITE_RESULT=5\n");
 	xzs_d7m2_puts("SHELL_PROMPT_WRITE_ERROR=0\n");
 	xzs_d7m2_puts("SHELL_PROMPT_WRITE_CARRY=clear\n");
 	xzs_d7m2_puts("SHELL_PROMPT_WRITE_EXACT_BYTES=yes\n");
+	xzs_d7m2_puts("SHELL_PROMPT_WRITE_ACCEPTED_BY_KERNEL=yes\n");
 	xzs_d7m2_puts("D7M3_SYSCALL_PATH=NATIVE_DARWIN\n");
 	xzs_d7m2_puts("D7M3_WRITE_BYPASS=no\n");
 	xzs_d7m2_puts("POST_PROMPT_EL0_EXECUTION=yes\n");

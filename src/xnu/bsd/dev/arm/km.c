@@ -361,6 +361,27 @@ kmtimeout(void *arg)
 	tty_unlock(tp);
 }
 
+#if CONFIG_XZS_BRINGUP
+extern uint64_t g_xzs_ttbr0;
+extern void xzs_early_putc(char c);
+
+static inline void
+xzs_console_write(const unsigned char *buf, int len)
+{
+	uint64_t saved_ttbr0 = 0;
+	__asm__ volatile("mrs %0, TTBR0_EL1" : "=r"(saved_ttbr0));
+	if (g_xzs_ttbr0 != 0) {
+		__asm__ volatile("msr TTBR0_EL1, %0; isb sy" :: "r"(g_xzs_ttbr0));
+	}
+	for (int i = 0; i < len; i++) {
+		xzs_early_putc((char)buf[i]);
+	}
+	if (g_xzs_ttbr0 != 0) {
+		__asm__ volatile("msr TTBR0_EL1, %0; isb sy" :: "r"(saved_ttbr0));
+	}
+}
+#endif
+
 /*
  * kmoutput
  *
@@ -396,6 +417,9 @@ kmoutput(struct tty * tp)
 			/* output the buffer one charatcer at a time */
 			*cp = *cp & 0x7f;
 		}
+#if CONFIG_XZS_BRINGUP
+		xzs_console_write(buf, cc);
+#endif
 		if (cc > 1) {
 			console_write((char *)buf, cc);
 		} else {

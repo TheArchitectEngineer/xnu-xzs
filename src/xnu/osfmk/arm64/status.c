@@ -3544,6 +3544,19 @@ xzs_d6m4_monitor_and_report_r650(task_t t, thread_t th)
 		xzs_early_puts(xzs_d6m4_r650_telemetry.exc_return_entry ? "yes\n" : "no\n");
 		xzs_early_puts("BEFORE_ERET=");
 		xzs_early_puts(xzs_d6m4_r650_telemetry.before_eret ? "yes\n" : "no\n");
+		xzs_early_puts("SVC_TRAPPED=");
+		xzs_early_puts(xzs_d6m4_r650_telemetry.svc_trapped ? "yes\n" : "no\n");
+		xzs_early_puts("SIGNATURE_VALID=");
+		xzs_early_puts(xzs_d6m4_r650_telemetry.signature_valid ? "yes\n" : "no\n");
+		xzs_early_puts("UNEXPECTED_EXCEPTION=");
+		xzs_early_puts(xzs_d6m4_r650_telemetry.unexpected_exception ? "yes\n" : "no\n");
+		xzs_early_puts("ESR_EL1="); xzs_d6m4_put_hex64(xzs_d6m4_r650_telemetry.esr); xzs_early_puts("\n");
+		xzs_early_puts("ELR_EL1="); xzs_d6m4_put_hex64(xzs_d6m4_r650_telemetry.elr); xzs_early_puts("\n");
+		xzs_early_puts("FAR_EL1="); xzs_d6m4_put_hex64(xzs_d6m4_r650_telemetry.far); xzs_early_puts("\n");
+		xzs_early_puts("SPSR_EL1="); xzs_d6m4_put_hex64(xzs_d6m4_r650_telemetry.spsr); xzs_early_puts("\n");
+		xzs_early_puts("SP_EL0="); xzs_d6m4_put_hex64(xzs_d6m4_r650_telemetry.sp_el0); xzs_early_puts("\n");
+		xzs_early_puts("X0="); xzs_d6m4_put_hex64(xzs_d6m4_r650_telemetry.x0); xzs_early_puts("\n");
+		xzs_early_puts("X16="); xzs_d6m4_put_hex64(xzs_d6m4_r650_telemetry.x16); xzs_early_puts("\n");
 		xzs_spin_halt();
 	}
 }

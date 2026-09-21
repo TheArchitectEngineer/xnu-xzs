@@ -54,12 +54,14 @@ REQUIRED_TELEMETRY = {
     "SHELL_BANNER_WRITE_ERROR": "0",
     "SHELL_BANNER_WRITE_CARRY": "clear",
     "SHELL_BANNER_WRITE_EXACT_BYTES": "yes",
+    "SHELL_BANNER_WRITE_ACCEPTED_BY_KERNEL": "yes",
     "SHELL_PROMPT_FROM_EL0": "yes",
     "SHELL_PROMPT_WRITE_NATIVE": "yes",
     "SHELL_PROMPT_WRITE_RESULT": "5",
     "SHELL_PROMPT_WRITE_ERROR": "0",
     "SHELL_PROMPT_WRITE_CARRY": "clear",
     "SHELL_PROMPT_WRITE_EXACT_BYTES": "yes",
+    "SHELL_PROMPT_WRITE_ACCEPTED_BY_KERNEL": "yes",
     "D7M3_SYSCALL_PATH": "NATIVE_DARWIN",
     "D7M3_WRITE_BYPASS": "no",
     "POST_PROMPT_EL0_EXECUTION": "yes",
@@ -117,7 +119,7 @@ def main():
     print("============================================================\n")
 
     # Step 1: D6 Full Regression Gate
-    print("[1/6] Running Phase D6 Full Regression Verifier...")
+    print("[1/7] Running Phase D6 Full Regression Verifier...")
     d6_verifier = os.path.join(scripts_dir, "verify_d6_acceptance.py")
     res = subprocess.run([sys.executable, d6_verifier, log_path], capture_output=True, text=True, check=False)
     if res.returncode != 0:
@@ -128,7 +130,7 @@ def main():
     print("[PASS] D6 Full Regression Verifier: 100% PASS\n")
 
     # Step 2: D7-M2 Regression Gate
-    print("[2/6] Running Phase D7-M2 Regression Verifier...")
+    print("[2/7] Running Phase D7-M2 Regression Verifier...")
     d7m2_verifier = os.path.join(scripts_dir, "verify_d7m2_acceptance.py")
     res_m2 = subprocess.run([sys.executable, d7m2_verifier, "--regression", log_path], capture_output=True, text=True, check=False)
     if res_m2.returncode != 0:
@@ -143,7 +145,7 @@ def main():
         text = f.read()
 
     # Step 4: D720 Breadcrumb Sequence
-    print("[3/6] Auditing D720 checkpoint breadcrumb sequence...")
+    print("[3/7] Auditing D720 checkpoint breadcrumb sequence...")
     d720_crumbs = [
         int(match.group(1), 16)
         for match in re.finditer(r"CP[=:]\s*0x0*d720[,\s]+ERR[=:]\s*0x([0-9a-fA-F]+)", text, re.IGNORECASE)
@@ -161,7 +163,7 @@ def main():
     print(f"[PASS] D720 sequence complete ({len(d720_crumbs)} checkpoints verified in order)\n")
 
     # Step 5: Absence of Fatal / Panic Markers
-    print("[4/6] Auditing for fatal markers or unexpected exceptions...")
+    print("[4/7] Auditing for fatal markers or unexpected exceptions...")
     if "[XZS-D7M3] FATAL:" in text:
         print("FAIL: [XZS-D7M3] FATAL: marker detected in log")
         return 1
@@ -171,7 +173,7 @@ def main():
     print("[PASS] Zero fatal markers or unexpected exceptions\n")
 
     # Step 6: Telemetry Verification
-    print("[5/6] Auditing D7-M3 acceptance telemetry keys...")
+    print("[5/7] Auditing D7-M3 acceptance telemetry keys...")
     telemetry = parse_telemetry_block(text, "D7-M3")
     for key, expected in REQUIRED_TELEMETRY.items():
         actual = telemetry.get(key)
@@ -184,7 +186,7 @@ def main():
         print(f"  [PASS] {key} = {actual}")
 
     # Step 7: Userspace Output Proof Audit
-    print("\n[6/6] Auditing real EL0 banner and prompt execution proof...")
+    print("\n[6/7] Auditing real EL0 banner and prompt execution proof...")
     banner_res = telemetry.get("SHELL_BANNER_WRITE_RESULT")
     prompt_res = telemetry.get("SHELL_PROMPT_WRITE_RESULT")
     getpid_rounds = telemetry.get("POST_PROMPT_GETPID_ROUNDTRIPS")
@@ -205,6 +207,24 @@ def main():
     print("  [PASS] Shell process remains alive in EL0")
     print("  [PASS] Passive syscall path verified (no kernel fake, no write bypass)")
     print("  [PASS] UART RX remains unavailable (D7-M4 boundary preserved)")
+
+    # Step 7: Genuine Console Transport Observation Audit
+    print("\n[7/7] Auditing genuine console transport observations...")
+    banner_observed = ("Native Darwin/XNU bring-up for Xperia XZs" in text) and \
+                      ("XNU-XZS" in text) and \
+                      ("[ xnu-xzs userspace online ]" in text)
+    prompt_observed = ("xzs# " in text) or ("xzs#" in text)
+
+    if not banner_observed or not prompt_observed:
+        print("FAIL: userspace write succeeded but banner/prompt not observed on real console transport")
+        if not banner_observed:
+            print("  Missing console banner text (e.g. 'Native Darwin/XNU bring-up for Xperia XZs', '[ xnu-xzs userspace online ]')")
+        if not prompt_observed:
+            print("  Missing console prompt text ('xzs#')")
+        return 1
+
+    print("  [PASS] SHELL_BANNER_OBSERVED_ON_CONSOLE = yes")
+    print("  [PASS] SHELL_PROMPT_OBSERVED_ON_CONSOLE = yes")
 
     print("\n============================================================")
     print("D6_REGRESSION_VERIFIER: PASS")

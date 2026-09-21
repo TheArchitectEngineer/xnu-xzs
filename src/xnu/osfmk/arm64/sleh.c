@@ -825,6 +825,9 @@ sleh_synchronous(arm_context_t *context, uint64_t esr, vm_offset_t far, __unused
 			/* D6-M5 deliberately releases only the valid first SVC. */
 			if (signature_valid) {
 				goto xzs_d6m5_dispatch_first_svc;
+			} else {
+				xzs_d6m4_r650_telemetry.unexpected_exception = 1;
+				__asm__ volatile("dmb ish" ::: "memory");
 			}
 		} else if (is_user && class == ESR_EC_SVC_64 &&
 		    xzs_d6m4_r650_telemetry.syscall_return_prepared != 0 &&
@@ -936,6 +939,13 @@ sleh_synchronous(arm_context_t *context, uint64_t esr, vm_offset_t far, __unused
 				__asm__ volatile("dmb ish" ::: "memory");
 			}
 		} else {
+			xzs_d6m4_r650_telemetry.esr = esr;
+			xzs_d6m4_r650_telemetry.elr = elr;
+			xzs_d6m4_r650_telemetry.far = far;
+			xzs_d6m4_r650_telemetry.spsr = spsr;
+			xzs_d6m4_r650_telemetry.sp_el0 = sp_el0;
+			xzs_d6m4_r650_telemetry.x0 = ss64->x[0];
+			xzs_d6m4_r650_telemetry.x16 = ss64->x[16];
 			xzs_d6m4_r650_telemetry.unexpected_exception = 1;
 			__asm__ volatile("dmb ish" ::: "memory");
 		}
