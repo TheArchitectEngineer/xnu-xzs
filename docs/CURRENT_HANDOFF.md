@@ -33,10 +33,22 @@ D7_T1_CANDIDATE2A_RAW_CONSOLE_SHA256=9f4ee83975b5e7655c6ce8a2fc1f2ae49bfc6a0d9fb
 D7_T1_CANDIDATE2A_READ_ONLY=yes
 USB_STATE_MUTATED=no
 
+D7_T1_CANDIDATE2B_STATUS=COMPLETE / HARDWARE VERIFIED
+D7_T1_CANDIDATE2B_COMMIT=da548da5f22e0c1a8c45156aedab2a2d26072963
+D7_T1_CANDIDATE2B_KERNEL_SHA256=7e29f7527d51d7bbb55afdc56907179f9c276b652e5f49ee333f1cec9be5a40d
+D7_T1_CANDIDATE2B_BOOT_SHA256=e5fd82e9a4ffec69cde8cbc8520aef85ce107b26edd73e538a7e1ba0db52709f
+D7_T1_CANDIDATE2B_RAW_CONSOLE_SHA256=4aa1cf14177b2aad000e9db05663b61062f07e47986338e5d9c0f75cf988f742
+D7_T1_CANDIDATE2B_DCFG_BEFORE=0x0008080c
+D7_T1_CANDIDATE2B_DCFG_WRITTEN=0x00080800
+D7_T1_CANDIDATE2B_DCFG_READBACK=0x00080800
+D7_T1_CANDIDATE2B_COMPLETE=yes
+D7_T1_COMPLETE=no
+D7_T1_SEALED=no
+
 CURRENT_BRANCH=xzs-d7t1-usb-console
 
 NEXT_PHASE=D7
-NEXT_MILESTONE=D7-T1 Candidate-2B (DWC3-only device-takeover plan; not yet authorized for hardware execution by this evidence task)
+NEXT_MILESTONE=D7-T1 Candidate-2C (XNU-owned DWC3 event-buffer plan only; not authorized for execution)
 
 D7_M1_STATUS=COMPLETE
 D7_M2_STATUS=COMPLETE / SEALED
@@ -54,10 +66,10 @@ SHELL_STDIN_WORKING=yes
 HOST_INTERACTIVE_STDIN_TRANSPORT_AVAILABLE=no
 
 NEXT_GOAL=
-D7-T1 Candidate-2B: source-audit a DWC3-only minimal device-takeover plan.
-  - Preserve Candidate-2A QSCRATCH/QUSB2/GCC values as before/after oracle.
-  - Do not touch PHY clocks, resets, or wrapper state.
-  - Do not begin hardware execution until Candidate-2B is separately authorized.
+D7-T1 Candidate-2C: plan (do not execute) an XNU-owned DWC3 event-buffer boundary.
+  - Retain Candidate-2B's halted-controller and immutable-domain contracts.
+  - Audit event-buffer ownership and initialization before any event or endpoint work.
+  - Do not activate RUN_STOP, enumerate, or touch EP0 without separate authorization.
 
 KNOWN_BLOCKER=
 None for D7-M4. Host-interactive stdin transport (USB gadget CDC ACM / DWC3 console) is deferred to future non-invasive transport bring-up.
@@ -74,5 +86,5 @@ CURRENT_KNOWN_PLATFORM_WORKAROUNDS=
 - dtrace_fbt deferral / fbt.c (defers kernel-wide function boundary tracing instrumentation)
 
 NEXT_EXACT_ACTION=
-Review `docs/D7_T1_CANDIDATE2A_REPORT.md`; retain the Candidate-2A evidence unchanged and prepare (but do not execute) Candidate-2B only when directed.
+Review `docs/D7_T1_CANDIDATE2B_REPORT.md`; Candidate-2B is complete but D7-T1 is not complete/sealed. Prepare Candidate-2C only when directed.
 ```
