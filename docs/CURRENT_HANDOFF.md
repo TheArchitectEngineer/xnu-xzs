@@ -11,16 +11,19 @@ D6_MAIN_MERGE_COMMIT=cc297b0e721ea0c002e008a4a330ac1aa3c9a3b3
 
 D6_TAG=xzs-d6-userspace-complete
 
-LAST_SEALED_MILESTONE=D6-M7
+LAST_SEALED_MILESTONE=D7-M1
 
 NEXT_PHASE=D7
-NEXT_MILESTONE=D7-M1
+NEXT_MILESTONE=D7-M2
+
+D7_M1_STATUS=COMPLETE
+D7_M2_STATUS=NOT_STARTED
 
 NEXT_GOAL=
-interactive EL0 shell
+PID1 -> /bin/sh handoff (Strategy B: project loader transformation/launch)
 
 KNOWN_BLOCKER=
-MSM8996 UARTDM RX not implemented
+MSM8996 UARTDM RX not implemented (required for D7-M4; does not block D7-M2 handoff or D7-M3 stdout)
 
 CURRENT_KNOWN_PLATFORM_WORKAROUNDS=
 - devfs_getattr pointer-hardening workaround / 3e417bb (bypasses vm_kernel_addrhash SHA-256 hang; returns fsid 0x64657666; to be re-audited in D9 XZSPlatform)
@@ -32,5 +35,5 @@ CURRENT_KNOWN_PLATFORM_WORKAROUNDS=
 - dtrace_fbt deferral / fbt.c (defers kernel-wide function boundary tracing instrumentation)
 
 NEXT_EXACT_ACTION=
-begin Phase D7-M1 shell artifact and dependency audit
+begin Phase D7-M2 PID1 to /bin/sh handoff using Strategy B (project loader machinery)
 ```
