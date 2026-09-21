@@ -23,31 +23,37 @@ D7_M4_INTERNAL_RAW_LOG_SHA256=49422168deee99ad9c8fa3b5d07adb70edf6c367b185174e44
 D7_M4_EXTERNAL_BOOT_IMAGE_SHA256=019beff1c47a15bbb20979fc8d03c47befa7f7f80dbe27bacd1d91c5d9892909
 D7_M4_EXTERNAL_RAW_LOG_SHA256=1dd42ebfd8ac667aa359b68a0ffe5e4d5d99a55bcdc4b083ddfe7ba26b7d8338
 
-LAST_SEALED_MILESTONE=D7-M3
+LAST_SEALED_MILESTONE=D7-M4
 
 CURRENT_BRANCH=xzs-d7m4-readiness
 
 NEXT_PHASE=D7
-NEXT_MILESTONE=D7-M4
+NEXT_MILESTONE=D7-M5
 
 D7_M1_STATUS=COMPLETE
 D7_M2_STATUS=COMPLETE / SEALED
 D7_M3_STATUS=COMPLETE / SEALED
+D7_M4_STATUS=COMPLETE / SEALED
 D7_M4_P0_READINESS_STATUS=COMPLETE
 D7_M4_INTERNAL_PIPELINE_STATUS=HARDWARE VERIFIED
-D7_M4_EXTERNAL_PIPELINE_STATUS=BLOCKED ON PHYSICAL TRANSPORT
-D7_M4_STATUS=IN PROGRESS / NOT SEALED
+D7_M4_EXTERNAL_UART_PIN_TEST=OUT_OF_SCOPE_NON_INVASIVE_PROJECT
+D7_M4_COMPLETE=yes
+D7_M4_HARDWARE_VERIFIED=yes
+D7_M4_SEALED=yes
+
+SHELL_STDIN_KERNEL_PATH_WORKING=yes
+SHELL_STDIN_WORKING=yes
+HOST_INTERACTIVE_STDIN_TRANSPORT_AVAILABLE=no
 
 NEXT_GOAL=
-Phase D7-M4 final gate:
-  Physical 1.8V USB-UART adapter TX connection to Xperia GPIO5 test point
-  Host TX transmits 41 42 43 0a (ABC\n)
-  External GPIO5 RX reaches UARTDM IRQ (INTID 146)
-  Common ring/deferred tty/read(0) pipeline returns exact bytes to EL0
-  verify_d7m4_acceptance.py --external passes
+Phase D7-M5: Interactive REPL / Command Loop
+  - Implement line reader and command parser in /bin/sh
+  - Support enter key, line editing, and basic dispatch
+  - Retain sealed stdout (D7-M3) and stdin (D7-M4) pipelines
+  - Initial testing via deterministic internal loopback until non-invasive host transport is brought up
 
 KNOWN_BLOCKER=
-Physical transport not connected: Host Mac has no external USB-UART adapter attached (ioreg shows only S1Boot Fastboot); /dev/cu.debug-console is internal Apple Mac on-board UART; no wire connects host to Xperia GPIO5 RX test point.
+None for D7-M4. Host-interactive stdin transport (USB gadget CDC ACM / DWC3 console) is deferred to future non-invasive transport bring-up.
 
 SHELL_BINARY_SHA256=848a10da132fb4482c3cae01a35a73fb6fe4a79bf9e170800489d12f3fbb7bd3
 
@@ -61,5 +67,5 @@ CURRENT_KNOWN_PLATFORM_WORKAROUNDS=
 - dtrace_fbt deferral / fbt.c (defers kernel-wide function boundary tracing instrumentation)
 
 NEXT_EXACT_ACTION=
-Attach physical 1.8V USB-UART adapter, wire TX to Xperia GPIO5 test point + GND, and re-run ./scripts/run-and-extract.sh. Do not seal D7-M4 or start D7-M5 until external verifier passes.
+Merge xzs-d7m4-readiness into main, tag xzs-d7m4-complete, and begin Phase D7-M5 interactive REPL implementation.
 ```

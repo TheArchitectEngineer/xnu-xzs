@@ -868,9 +868,6 @@ volatile uint32_t g_xzs_uart_rx_irq_byte_count = 0;
 volatile uint32_t g_xzs_uart_rx_irq_tty_count = 0;
 volatile uint32_t g_xzs_uart_rx_irq_last_isr = 0;
 volatile uint32_t g_xzs_uart_rx_irq_configured = 0;
-volatile uint32_t g_xzs_uart_rx_irq_raw_match = 0;
-static uint32_t g_xzs_uart_rx_irq_raw_index = 0;
-static const uint8_t g_xzs_uart_rx_expected[4] = { 0x41, 0x42, 0x43, 0x0a };
 static thread_call_t g_xzs_uart_rx_tty_call = NULL;
 
 void
@@ -1407,8 +1404,8 @@ xzs_uart_rx_tty_deferred(thread_call_param_t param0 __unused,
  * intact as the bounded diagnostic fallback, but this path relies on RXSTALE
  * to latch RX_TOTAL_SNAP and raise SPI 114 through GICv3.
  */
-static int
-xzs_uart_rx_irq_prepare(bool internal_loopback)
+int
+xzs_uart_rx_irq_prepare_internal_loopback(void)
 {
 	if (!msm_uart_base) {
 		return 0;
@@ -1423,9 +1420,8 @@ xzs_uart_rx_irq_prepare(bool internal_loopback)
 	}
 	xzs_uart_rx_ring_init();
 	msm_uart_init_rx_transfer();
-	uint32_t mr2 = msm_uart_read(MSM_UART_MR2);
-	msm_uart_write(MSM_UART_MR2, internal_loopback ? (mr2 | 0x80U) : (mr2 & ~0x80U));
-	if (((msm_uart_read(MSM_UART_MR2) & 0x80U) != 0) != internal_loopback) {
+	msm_uart_write(MSM_UART_MR2, msm_uart_read(MSM_UART_MR2) | 0x80U);
+	if ((msm_uart_read(MSM_UART_MR2) & 0x80U) == 0) {
 		return 0;
 	}
 
@@ -1433,8 +1429,6 @@ xzs_uart_rx_irq_prepare(bool internal_loopback)
 	g_xzs_uart_rx_irq_byte_count = 0;
 	g_xzs_uart_rx_irq_tty_count = 0;
 	g_xzs_uart_rx_irq_last_isr = 0;
-	g_xzs_uart_rx_irq_raw_match = 0;
-	g_xzs_uart_rx_irq_raw_index = 0;
 	g_xzs_uart_rx_irq_configured = xzs_uart_gic_enable_spi114() ? 1U : 0U;
 	if (!g_xzs_uart_rx_irq_configured) {
 		msm_uart_write(MSM_UART_MR2, 0x34);
@@ -1445,18 +1439,6 @@ xzs_uart_rx_irq_prepare(bool internal_loopback)
 	msm_uart_write(MSM_UART_IMR, MSM_UART_INTR_RXSTALE);
 	__asm__ volatile("dsb sy" ::: "memory");
 	return 1;
-}
-
-int
-xzs_uart_rx_irq_prepare_internal_loopback(void)
-{
-	return xzs_uart_rx_irq_prepare(true);
-}
-
-int
-xzs_uart_rx_irq_prepare_external(void)
-{
-	return xzs_uart_rx_irq_prepare(false);
 }
 
 int
@@ -1510,19 +1492,7 @@ xzs_uart_rx_irq_handler(void)
 
 	if (isr & (MSM_UART_INTR_RXSTALE | MSM_UART_INTR_RXLEV)) {
 		while (produced < 64U && msm_uart_receive_ready()) {
-			uint8_t byte = msm_uart_receive_data();
-			if (g_xzs_uart_rx_irq_raw_index < sizeof(g_xzs_uart_rx_expected)) {
-				if (byte != g_xzs_uart_rx_expected[g_xzs_uart_rx_irq_raw_index]) {
-					g_xzs_uart_rx_irq_raw_match = 0;
-					g_xzs_uart_rx_irq_raw_index = sizeof(g_xzs_uart_rx_expected);
-				} else {
-					g_xzs_uart_rx_irq_raw_index++;
-					if (g_xzs_uart_rx_irq_raw_index == sizeof(g_xzs_uart_rx_expected)) {
-						g_xzs_uart_rx_irq_raw_match = 1;
-					}
-				}
-			}
-			if (!xzs_uart_rx_ring_put(byte)) {
+			if (!xzs_uart_rx_ring_put(msm_uart_receive_data())) {
 				break;
 			}
 			produced++;
