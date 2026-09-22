@@ -2543,7 +2543,9 @@ thread_set_child(thread_t child,
 
 	child_state = get_user_regs(child);
 
-	set_user_saved_state_reg(child_state, 0, pid);
+	/* Raw shell fork() looks only at x0. Darwin libc still uses x1==1. */
+	(void)pid;
+	set_user_saved_state_reg(child_state, 0, 0);
 	set_user_saved_state_reg(child_state, 1, 1ULL);
 }
 
@@ -3588,8 +3590,8 @@ xzs_d6m4_monitor_and_report_r650(task_t t, thread_t th)
 		xzs_early_puts("\n=======================================================\n");
 		xzs_early_puts("=== D7-M4 INTERNAL ACCEPTANCE TELEMETRY BEGIN ===\n");
 		xzs_early_puts("D7M4_INPUT_SOURCE=INTERNAL_LOOPBACK\n");
-		xzs_early_puts("D7M4_SHELL_IMAGE_SHA256=fd9e0db28b88834c70c9e413a7c3ecf1e1f07e5aac167de4a05373e18ce92988\n");
-		xzs_early_puts("D7M4_SHELL_READ_ENTRY=0x0000000100000870\n");
+		xzs_early_puts("D7M4_SHELL_IMAGE_SHA256=40e490cb351565828ae86993dad2fe63b003193cd060bcd08f36acd926488a54\n");
+		xzs_early_puts("D7M4_SHELL_READ_ENTRY=0x0000000100000910\n");
 		xzs_early_puts("UARTDM_INTERNAL_LOOPBACK_VERIFIED=yes\n");
 		xzs_early_puts("UARTDM_RX_IRQ=146\n");
 		xzs_early_puts("GIC_INTERRUPT_TYPE=SPI_114\n");
@@ -3901,15 +3903,40 @@ xzs_d6m4_monitor_and_report_r650(task_t t, thread_t th)
 		xzs_early_puts("=== D7-T1 T1-Y CONTROL ENUMERATION TELEMETRY END ===\n");
 		xzs_early_puts("=======================================================\n\n");
 
-		/* Z1–Z4 run after the T1-Y report.  Halt on completion or the 40s safety window. */
+		/*
+		 * USB and the shell stay up. The 60s timer is debug-only and
+		 * is disarmed when the tty bridge comes up. Host disconnect
+		 * does not take this path.
+		 */
 		extern int xzs_usb_t1z_service(void);
+		extern volatile uint32_t g_xzs_usb_tty_bridge;
+		extern volatile uint32_t g_xzs_diag_autorecover_ms;
+		extern volatile uint32_t g_xzs_diag_autorecover_armed;
 		extern void xzs_usb_t1z_report(void);
+		extern void xzs_watchdog_pet(void);
+		uint32_t diag_waited = 0;
 		(void)xzs_usb_t1z_service();
-		xzs_usb_t1z_report();
-
-		/* Cleanly flush ramoops to DRAM and warm-reset directly back to Fastboot */
-		extern void xzs_spin_halt(void);
-		xzs_spin_halt();
+		(void)ml_set_interrupts_enabled(TRUE);
+		xzs_early_puts("[XZS-D7T2] DIAG_TIMER_ARMED=yes\n");
+		for (;;) {
+			extern void xzs_usb_poll_events(void);
+			xzs_usb_poll_events();
+			if (g_xzs_usb_tty_bridge) {
+				if (g_xzs_diag_autorecover_armed) {
+					xzs_early_puts("[XZS-D7T2] DIAG_TIMER_DISARMED=yes\n");
+				}
+				g_xzs_diag_autorecover_armed = 0;
+			}
+			if (g_xzs_diag_autorecover_armed &&
+			    g_xzs_diag_autorecover_ms != 0 &&
+			    ++diag_waited >= g_xzs_diag_autorecover_ms) {
+				xzs_early_puts("[XZS-D7T2] DIAG transport not up; system continues\n");
+				xzs_usb_t1z_report();
+				g_xzs_diag_autorecover_armed = 0;
+			}
+			xzs_watchdog_pet();
+			delay(1000);
+		}
 	} else if (xzs_d6m4_r650_telemetry.unexpected_exception) {
 		xzs_early_puts("\n[XZS-D6M4] UNEXPECTED EXCEPTION ON CPU 1\n");
 		xzs_early_puts("ESR_EL1="); xzs_d6m4_put_hex64(xzs_d6m4_r650_telemetry.esr); xzs_early_puts("\n");

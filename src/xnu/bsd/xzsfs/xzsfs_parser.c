@@ -62,10 +62,23 @@ xzsfs_helper_format_dirent(const struct xzsfs_core_node *node, const char *name,
 
     bzero(de, sizeof(struct dirent));
     de->d_fileno = node->object_id;
-    de->d_namlen = (uint8_t)strlen(name);
-    de->d_type = dtype;
-    strlcpy(de->d_name, name, sizeof(de->d_name));
-    de->d_reclen = (uint16_t)(((sizeof(struct dirent) - (__DARWIN_MAXPATHLEN)) + (((de->d_namlen + 1 + 3) & ~3))));
+    /*
+     * The kernel builds the 32-bit getdirentries(2) record:
+     * u32 ino, u16 reclen, u8 type, u8 namlen, name.
+     * Subtracting MAXPATHLEN from that small struct wrapped reclen
+     * and the copy was skipped, so ls saw zero bytes.
+     */
+    {
+        size_t namelen = strlen(name);
+        if (namelen > 255) {
+            namelen = 255;
+        }
+        de->d_namlen = (uint8_t)namelen;
+        de->d_type = dtype;
+        strlcpy(de->d_name, name, sizeof(de->d_name));
+        de->d_reclen = (uint16_t)(offsetof(struct dirent, d_name) +
+            ((namelen + 1u + 3u) & ~3u));
+    }
 
     return 0;
 }
@@ -245,7 +258,7 @@ xzsfs_d5m3_probe(dev_t root_dev)
     /* 5. Initialize In-Memory Core Filesystem */
     bzero(&s_core_fs, sizeof(s_core_fs));
     error = xzsfs_core_init_fs(&s_core_fs, &s_sb, s_disk_objects, s_disk_strtab);
-    if (error != 0 || s_core_fs.node_count != 9 || s_core_fs.nodes[0].object_id != 1) {
+    if (error != 0 || s_core_fs.node_count != 12 || s_core_fs.nodes[0].object_id != 1) {
         xzs_early_puts("D5-M3 FATAL: xzsfs_core_init_fs failed!\n");
         xzs_breadcrumb(CP_D5M3, 0xF0);
         vnode_put(devvp);
@@ -273,8 +286,8 @@ xzsfs_d5m3_probe(dev_t root_dev)
     }
 
     /* Dot and dot-dot lookups */
-    error = xzsfs_core_lookup(&s_core_fs, 6, ".", 1, &node);
-    if (error != 0 || node->object_id != 6) {
+    error = xzsfs_core_lookup(&s_core_fs, 9, ".", 1, &node);
+    if (error != 0 || node->object_id != 9) {
         xzs_early_puts("D5-M3 FATAL: Lookup /sbin/. failed!\n");
         xzs_breadcrumb(CP_D5M3, 0xF2);
         vnode_put(devvp);
@@ -282,7 +295,7 @@ xzsfs_d5m3_probe(dev_t root_dev)
         xzs_spin_halt();
         return EINVAL;
     }
-    error = xzsfs_core_lookup(&s_core_fs, 6, "..", 2, &node);
+    error = xzsfs_core_lookup(&s_core_fs, 9, "..", 2, &node);
     if (error != 0 || node->object_id != 1) {
         xzs_early_puts("D5-M3 FATAL: Lookup /sbin/.. failed!\n");
         xzs_breadcrumb(CP_D5M3, 0xF2);
@@ -304,8 +317,8 @@ xzsfs_d5m3_probe(dev_t root_dev)
     }
 
     /* Lookup /sbin/launchd */
-    error = xzsfs_core_lookup(&s_core_fs, 6, "launchd", 7, &node);
-    if (error != 0 || node->object_id != 7 || node->type != XZSFS_TYPE_REG) {
+    error = xzsfs_core_lookup(&s_core_fs, 9, "launchd", 7, &node);
+    if (error != 0 || node->object_id != 10 || node->type != XZSFS_TYPE_REG) {
         xzs_early_puts("D5-M3 FATAL: Lookup /sbin/launchd failed!\n");
         xzs_breadcrumb(CP_D5M3, 0xF4);
         vnode_put(devvp);
@@ -316,7 +329,7 @@ xzsfs_d5m3_probe(dev_t root_dev)
 
     /* Lookup /bin/sh */
     error = xzsfs_core_lookup(&s_core_fs, 2, "sh", 2, &node);
-    if (error != 0 || node->object_id != 3 || node->type != XZSFS_TYPE_REG) {
+    if (error != 0 || node->object_id != 5 || node->type != XZSFS_TYPE_REG) {
         xzs_early_puts("D5-M3 FATAL: Lookup /bin/sh failed!\n");
         xzs_breadcrumb(CP_D5M3, 0xF5);
         vnode_put(devvp);
@@ -345,8 +358,8 @@ xzsfs_d5m3_probe(dev_t root_dev)
 
     /* 8. Getattr Formatting Helper Test */
     struct vnode_attr vap;
-    xzsfs_helper_format_getattr(&s_core_fs.nodes[6], &vap); /* /sbin/launchd */
-    if (vap.va_fileid != 7 || vap.va_total_size != 16472 || vap.va_type != VREG || vap.va_mode != 0755) {
+    xzsfs_helper_format_getattr(&s_core_fs.nodes[9], &vap); /* /sbin/launchd */
+    if (vap.va_fileid != 10 || vap.va_total_size != 16472 || vap.va_type != VREG || vap.va_mode != 0755) {
         xzs_early_puts("D5-M3 FATAL: Getattr format failed!\n");
         xzs_breadcrumb(CP_D5M3, 0xF7);
         vnode_put(devvp);
@@ -359,7 +372,7 @@ xzsfs_d5m3_probe(dev_t root_dev)
     xzs_early_puts("D5-M3: Getattr formatting helper verified\n");
 
     /* 9. Payload Verification: /sbin/launchd */
-    const struct xzsfs_core_node *launchd_node = &s_core_fs.nodes[6];
+    const struct xzsfs_core_node *launchd_node = &s_core_fs.nodes[9];
     size_t bytes_read = 0;
     uint32_t launchd_crc = 0;
     for (uint64_t off = 0; off < launchd_node->data_length; off += 512) {
@@ -393,7 +406,7 @@ xzsfs_d5m3_probe(dev_t root_dev)
     xzs_early_puts("D5-M3: /sbin/launchd payload verified (size=16472, CRC32=0xe212a8a2)\n");
 
     /* 10. Payload Verification: /bin/sh */
-    const struct xzsfs_core_node *sh_node = &s_core_fs.nodes[2];
+    const struct xzsfs_core_node *sh_node = &s_core_fs.nodes[4];
     bytes_read = 0;
     uint32_t sh_crc = 0;
     for (uint64_t off = 0; off < sh_node->data_length; off += 512) {
@@ -414,7 +427,7 @@ xzsfs_d5m3_probe(dev_t root_dev)
         sh_crc = xzsfs_crc32(sh_crc, s_chunk_buf, n);
         bytes_read += n;
     }
-    if (bytes_read != 16608 || sh_crc != 0x7e255109) {
+    if (bytes_read != 16736 || sh_crc != 0x79551619) {
         xzs_early_puts("D5-M3 FATAL: /bin/sh payload mismatch!\n");
         xzs_breadcrumb(CP_D5M3, 0xFB);
         vnode_put(devvp);
@@ -424,7 +437,7 @@ xzsfs_d5m3_probe(dev_t root_dev)
     }
     /* 0x71: sh read pass */
     xzs_breadcrumb(CP_D5M3, 0x71);
-    xzs_early_puts("D5-M3: /bin/sh payload verified (size=16608, CRC32=0x7e255109)\n");
+    xzs_early_puts("D5-M3: /bin/sh payload verified (size=16736, CRC32=0x79551619)\n");
 
     /* 11. Partial, Unaligned, Cross-Sector, and EOF Reads */
     /* First byte (off=0, len=1) */
@@ -510,8 +523,8 @@ xzsfs_d5m3_probe(dev_t root_dev)
     xzs_early_puts("D5-M3: Partial, unaligned, cross-sector, and EOF reads verified\n");
 
     /* 12. PRE-Mutation Whole-md0 CRC32 Verification */
-    uint32_t pre_crc = xzsfs_compute_ramdisk_crc32(devvp, 70);
-    if (pre_crc != 0x757cbd9d) {
+    uint32_t pre_crc = xzsfs_compute_ramdisk_crc32(devvp, 137);
+    if (pre_crc != 0xaf218178) {
         xzs_early_puts("D5-M3 FATAL: Pre-mutation CRC mismatch!\n");
         xzs_breadcrumb(CP_D5M3, 0xFE);
         vnode_put(devvp);
@@ -521,7 +534,7 @@ xzsfs_d5m3_probe(dev_t root_dev)
     }
     /* 0x73: PRE mutation whole-md0 CRC32 pass */
     xzs_breadcrumb(CP_D5M3, 0x73);
-    xzs_early_puts("D5-M3: PRE-mutation md0 CRC32 verified (0x757cbd9d)\n");
+    xzs_early_puts("D5-M3: PRE-mutation md0 CRC32 verified (0xaf218178)\n");
 
     /* 13. Read-Only Rejection Test */
     int rofs_res = xzsfs_rofs_err(NULL);
@@ -538,8 +551,8 @@ xzsfs_d5m3_probe(dev_t root_dev)
     xzs_early_puts("D5-M3: Read-only rejection verified (EROFS returned)\n");
 
     /* 14. POST-Mutation Whole-md0 CRC32 Verification */
-    uint32_t post_crc = xzsfs_compute_ramdisk_crc32(devvp, 70);
-    if (post_crc != 0x757cbd9d) {
+    uint32_t post_crc = xzsfs_compute_ramdisk_crc32(devvp, 137);
+    if (post_crc != 0xaf218178) {
         xzs_early_puts("D5-M3 FATAL: Post-mutation CRC mismatch!\n");
         xzs_breadcrumb(CP_D5M3, 0xFE);
         vnode_put(devvp);
@@ -559,7 +572,7 @@ xzsfs_d5m3_probe(dev_t root_dev)
     }
     /* 0x81: POST mutation whole-md0 CRC32 pass */
     xzs_breadcrumb(CP_D5M3, 0x81);
-    xzs_early_puts("D5-M3: POST-mutation md0 CRC32 verified (0x757cbd9d)\n");
+    xzs_early_puts("D5-M3: POST-mutation md0 CRC32 verified (0xaf218178)\n");
 
     /* 15. D5-M3 Complete Telemetry Banner */
     /* 0x90: D5-M3 complete */
@@ -587,8 +600,8 @@ xzsfs_d5m3_probe(dev_t root_dev)
     xzs_early_puts("XZSFS_UNALIGNED_READ_MATCH=yes\n");
     xzs_early_puts("XZSFS_CROSS_SECTOR_READ_MATCH=yes\n");
     xzs_early_puts("XZSFS_EOF_SEMANTICS_PASS=yes\n");
-    xzs_early_puts("PRE_MUTATION_MD0_CRC32=0x757cbd9d\n");
-    xzs_early_puts("POST_MUTATION_MD0_CRC32=0x757cbd9d\n");
+    xzs_early_puts("PRE_MUTATION_MD0_CRC32=0xaf218178\n");
+    xzs_early_puts("POST_MUTATION_MD0_CRC32=0xaf218178\n");
     xzs_early_puts("RAMDISK_CONTENT_UNCHANGED=yes\n");
     xzs_early_puts("XZSFS_REAL_VNODE_CREATED=no\n");
     xzs_early_puts("XZSFS_VNOP_DISPATCH_VERIFIED=no\n");
@@ -920,7 +933,7 @@ xzsfs_d5m5_predevfs_probe(void)
     VATTR_WANTED(&va, va_data_size);
     error = VNOP_GETATTR(launchdvp, &va, vfs_context_kernel());
     if (error != 0 || va.va_type != VREG || va.va_mode != 0755 ||
-        va.va_fileid != 7 || va.va_data_size != 16472) {
+        va.va_fileid != 10 || va.va_data_size != 16472) {
         vnode_put(launchdvp);
         return xzsfs_d5m5_fatal(0xE2, "launchd vnode identity/getattr mismatch", error);
     }
@@ -999,7 +1012,7 @@ xzsfs_d5m5_postdevfs_probe(int devfs_mount_error)
     xzs_early_puts("ROOT_NAMEI_RETURNS_GLOBAL_ROOTVNODE=yes\n");
     xzs_early_puts("LAUNCHD_NAMEI_PASS=yes\n");
     xzs_early_puts("LAUNCHD_VNODE_TYPE=VREG\n");
-    xzs_early_puts("LAUNCHD_OBJECT_ID=7\n");
+    xzs_early_puts("LAUNCHD_OBJECT_ID=10\n");
     xzs_early_puts("LAUNCHD_MODE=0755\n");
     xzs_early_puts("LAUNCHD_SIZE=16472\n");
     xzs_early_puts("DEVFS_KERNEL_MOUNT_PASS=yes\n");
@@ -1108,7 +1121,7 @@ xzsfs_d5m6_probe(void)
     xzs_breadcrumb(CP_D5M6, 0x50);
     xzs_early_puts("[XZSFS] namei('/bin/sh') resolved VREG (PASS)\n");
 
-    /* D550/51: /bin/sh getattr identity PASS (fileid 3, size 16608, mode 0755) */
+    /* D550/51: /bin/sh getattr identity PASS (fileid 3, size 16736, mode 0755) */
     VATTR_INIT(&va);
     VATTR_WANTED(&va, va_type);
     VATTR_WANTED(&va, va_mode);
@@ -1116,7 +1129,7 @@ xzsfs_d5m6_probe(void)
     VATTR_WANTED(&va, va_data_size);
     error = VNOP_GETATTR(shvp, &va, vfs_context_kernel());
     if (error != 0 || va.va_type != VREG || va.va_mode != 0755 ||
-        va.va_fileid != 3 || va.va_data_size != 16608) {
+        va.va_fileid != 5 || va.va_data_size != 16736) {
         vnode_put(shvp);
         return xzsfs_d5m6_fatal(0xE5, "/bin/sh vnode identity/getattr mismatch", error);
     }
@@ -1160,9 +1173,9 @@ xzsfs_d5m6_probe(void)
     xzs_early_puts("NAMEI_SBIN_LAUNCHD_PASS=yes\n");
     xzs_early_puts("NAMEI_BIN_SH_PASS=yes\n");
     xzs_early_puts("BIN_SH_VNODE_TYPE=VREG\n");
-    xzs_early_puts("BIN_SH_OBJECT_ID=3\n");
+    xzs_early_puts("BIN_SH_OBJECT_ID=5\n");
     xzs_early_puts("BIN_SH_MODE=0755\n");
-    xzs_early_puts("BIN_SH_SIZE=16608\n");
+    xzs_early_puts("BIN_SH_SIZE=16736\n");
     xzs_early_puts("DEVFS_MOUNTED=yes\n");
     xzs_early_puts("NAMEI_DEV_PASS=yes\n");
     xzs_early_puts("NAMEI_DEV_CONSOLE_PASS=yes\n");
