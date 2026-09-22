@@ -23,15 +23,18 @@ dmesg-ramoops-* = 4084 bytes each
 
 `262132` is `256 KiB - 12`. `4084` is `4 KiB - 12`. Linux `persistent_ram` uses a 12-byte header (`sig`, `start`, `size`) and exports the following bytes. Those sizes are what TWRP exposed. They are not a substitute for a marker.
 
-Calculated zone layout if those sizes are the zone sizes, with 190 dump slots, then console, ftrace, and pmsg:
+TWRP `/proc/iomem` on the kagura recovery kernel shows the live layout:
 
 ```text
-RECORD0        0xa7f00000  0x1000
-...
-CONSOLE_OFFSET 0xa7fbe000  0x40000
+0xa7f00000  190 records × 0x1000
+0xa7fbe000  console, 0x40000
+0xa7ffe000  one 0x1000 record
+0xa7fff000  one 0x1000 record
 ```
 
-`0xa7fbe000` is also the address XNU already writes. That agreement is inference until a marker is recovered from `console-ramoops` or `dmesg-ramoops-0`.
+XNU's console header address matches that console zone. The record at `0xa7f00000` is `dmesg-ramoops-0`.
+
+Candidate `94c1c84` wrote `MAGIC=XZSP` and the running CPU read both headers back as `sig=0x43474244`, `size=0x7b`. After shutdown, both pstore files were still the full zone (`262132` and `4084` bytes) and neither contained the marker. The write-back mapping had kept the record in the cache. The ramoops block is now Normal write-combine so a `dsb sy` publishes the store without a new cache-maintenance instruction.
 
 ## What XNU writes
 
