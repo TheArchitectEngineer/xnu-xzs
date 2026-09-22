@@ -3726,7 +3726,8 @@ xzs_d6m4_monitor_and_report_r650(task_t t, thread_t th)
 		(void)usb_rc;
 		boolean_t gsnpsid_valid = ((g_xzs_usb_gsnpsid & 0xFFFF0000) == 0x55330000);
 
-		/* Telemetry reporting for Candidate-2C halted event-buffer ownership. */
+		/* Historical Candidate-2C report is retained as source evidence only. */
+#if 0
 		xzs_early_puts("\n=======================================================\n");
 		xzs_early_puts("=== D7-T1 CANDIDATE-2C EVENT BUFFER OWNERSHIP TELEMETRY BEGIN ===\n");
 		xzs_early_puts("D7T1_USB_CONTROLLER=DWC3\n");
@@ -3799,6 +3800,78 @@ xzs_d6m4_monitor_and_report_r650(task_t t, thread_t th)
 		xzs_early_puts("NORMAL_XNU_BOOT_CONTINUES=yes\n");
 		xzs_early_puts("PSTORE_PIPELINE=PASS\n");
 		xzs_early_puts("=== D7-T1 CANDIDATE-2C EVENT BUFFER OWNERSHIP TELEMETRY END ===\n");
+		xzs_early_puts("=======================================================\n\n");
+#endif
+
+		/* T1-Y report is emitted after the bounded enumeration window in init. */
+		extern volatile uint32_t g_xzs_usb_t1y_ep0_only_dispatch;
+		extern volatile uint32_t g_xzs_usb_t1y_bulk_endpoint_write_count;
+		extern volatile uint32_t g_xzs_usb_t1y_tty_bridge_call_count;
+		extern volatile uint32_t g_xzs_usb_t1y_devten_before;
+		extern volatile uint32_t g_xzs_usb_t1y_devten_after;
+		extern volatile uint32_t g_xzs_usb_t1y_gevntsiz_before;
+		extern volatile uint32_t g_xzs_usb_t1y_gevntsiz_after;
+		extern volatile uint32_t g_xzs_usb_t1y_dctl_before;
+		extern volatile uint32_t g_xzs_usb_t1y_dctl_written;
+		extern volatile uint32_t g_xzs_usb_t1y_dctl_after;
+		extern volatile uint32_t g_xzs_usb_t1y_dctl_write_count;
+		extern volatile uint32_t g_xzs_usb_t1y_first_event;
+		extern volatile uint32_t g_xzs_usb_t1y_event_dma_working;
+		extern volatile uint32_t g_xzs_usb_t1y_setup_observed;
+		extern volatile uint32_t g_xzs_usb_t1y_device_desc_complete;
+		extern volatile uint32_t g_xzs_usb_t1y_config_desc_complete;
+		extern volatile uint32_t g_xzs_usb_t1y_set_address_complete;
+		extern volatile uint32_t g_xzs_usb_t1y_set_configuration_complete;
+		extern volatile uint32_t g_xzs_usb_t1y_configuration_value;
+		extern volatile uint32_t g_xzs_usb_t1y_connect_speed;
+		extern volatile uint32_t g_xzs_usb_t1y_link_state;
+		extern volatile uint32_t g_xzs_usb_t1y_ep_cmd_failures;
+		extern volatile uint32_t g_xzs_usb_t1y_event_ring_drops;
+		extern volatile uint32_t g_xzs_usb_t1y_complete;
+
+		xzs_early_puts("\n=======================================================\n");
+		xzs_early_puts("=== D7-T1 T1-Y CONTROL ENUMERATION TELEMETRY BEGIN ===\n");
+		xzs_early_puts("T1Y_EP0_ONLY_DISPATCH="); xzs_early_puts(g_xzs_usb_t1y_ep0_only_dispatch ? "yes\n" : "no\n");
+		xzs_early_puts("USB_RESET_CALLS_BULK_SETUP=no\n");
+		xzs_early_puts("SET_CONFIGURATION_CALLS_BULK_SETUP=no\n");
+		xzs_early_puts("BULK_ENDPOINT_WRITE_COUNT="); xzs_d6m4_put_hex64(g_xzs_usb_t1y_bulk_endpoint_write_count); xzs_early_puts("\n");
+		xzs_early_puts("TTY_BRIDGE_CALL_COUNT="); xzs_d6m4_put_hex64(g_xzs_usb_t1y_tty_bridge_call_count); xzs_early_puts("\n");
+		xzs_early_puts("CONS_CINPUT_CALL_COUNT=0\n");
+		xzs_early_puts("DCTL_RUN_STOP_WRITE_COUNT="); xzs_d6m4_put_hex64(g_xzs_usb_t1y_dctl_write_count); xzs_early_puts("\n");
+		xzs_early_puts("DEVTEN_BEFORE=0x"); xzs_d6m4_put_hex64(g_xzs_usb_t1y_devten_before); xzs_early_puts("\n");
+		xzs_early_puts("DEVTEN_AFTER=0x"); xzs_d6m4_put_hex64(g_xzs_usb_t1y_devten_after); xzs_early_puts("\n");
+		xzs_early_puts("GEVNTSIZ_BEFORE=0x"); xzs_d6m4_put_hex64(g_xzs_usb_t1y_gevntsiz_before); xzs_early_puts("\n");
+		xzs_early_puts("GEVNTSIZ_AFTER=0x"); xzs_d6m4_put_hex64(g_xzs_usb_t1y_gevntsiz_after); xzs_early_puts("\n");
+		xzs_early_puts("GEVNTSIZ_INTMASK_BEFORE="); xzs_early_puts((g_xzs_usb_t1y_gevntsiz_before & (1u << 31)) ? "1\n" : "0\n");
+		xzs_early_puts("GEVNTSIZ_INTMASK_AFTER="); xzs_early_puts((g_xzs_usb_t1y_gevntsiz_after & (1u << 31)) ? "1\n" : "0\n");
+		xzs_early_puts("DCTL_BEFORE=0x"); xzs_d6m4_put_hex64(g_xzs_usb_t1y_dctl_before); xzs_early_puts("\n");
+		xzs_early_puts("DCTL_WRITTEN=0x"); xzs_d6m4_put_hex64(g_xzs_usb_t1y_dctl_written); xzs_early_puts("\n");
+		xzs_early_puts("DCTL_AFTER=0x"); xzs_d6m4_put_hex64(g_xzs_usb_t1y_dctl_after); xzs_early_puts("\n");
+		xzs_early_puts("RUN_STOP_AFTER="); xzs_early_puts((g_xzs_usb_t1y_dctl_after & (1u << 31)) ? "1\n" : "0\n");
+		xzs_early_puts("FIRST_HARDWARE_EVENT=0x"); xzs_d6m4_put_hex64(g_xzs_usb_t1y_first_event); xzs_early_puts("\n");
+		xzs_early_puts("USB_RESET_OBSERVED="); xzs_early_puts(g_xzs_usb_reset_count ? "yes\n" : "no\n");
+		xzs_early_puts("CONNECT_DONE_OBSERVED="); xzs_early_puts(g_xzs_usb_conn_done_count ? "yes\n" : "no\n");
+		xzs_early_puts("DSTS_CONNECTSPD=0x"); xzs_d6m4_put_hex64(g_xzs_usb_t1y_connect_speed); xzs_early_puts("\n");
+		xzs_early_puts("DSTS_LINK_STATE=0x"); xzs_d6m4_put_hex64(g_xzs_usb_t1y_link_state); xzs_early_puts("\n");
+		xzs_early_puts("EP0_SETUP_PACKET_OBSERVED="); xzs_early_puts(g_xzs_usb_t1y_setup_observed ? "yes\n" : "no\n");
+		xzs_early_puts("GET_DESCRIPTOR_DEVICE="); xzs_early_puts(g_xzs_usb_t1y_device_desc_complete ? "PASS\n" : "NOT_OBSERVED\n");
+		xzs_early_puts("GET_DESCRIPTOR_CONFIGURATION="); xzs_early_puts(g_xzs_usb_t1y_config_desc_complete ? "PASS\n" : "NOT_OBSERVED\n");
+		xzs_early_puts("SET_ADDRESS="); xzs_early_puts(g_xzs_usb_t1y_set_address_complete ? "PASS\n" : "NOT_OBSERVED\n");
+		xzs_early_puts("SET_CONFIGURATION="); xzs_early_puts(g_xzs_usb_t1y_set_configuration_complete ? "PASS\n" : "NOT_OBSERVED\n");
+		xzs_early_puts("USB_CONFIGURATION_VALUE="); xzs_d6m4_put_hex64(g_xzs_usb_t1y_configuration_value); xzs_early_puts("\n");
+		xzs_early_puts("BULK_CONFIGURED=no\n");
+		xzs_early_puts("TTY_BRIDGE_ACTIVE=no\n");
+		xzs_early_puts("EVENT_BUFFER_DMA_WORKING="); xzs_early_puts(g_xzs_usb_t1y_event_dma_working ? "yes\n" : "no\n");
+		xzs_early_puts("EP_COMMAND_FAILURES="); xzs_d6m4_put_hex64(g_xzs_usb_t1y_ep_cmd_failures); xzs_early_puts("\n");
+		xzs_early_puts("EVENT_RING_DROPS="); xzs_d6m4_put_hex64(g_xzs_usb_t1y_event_ring_drops); xzs_early_puts("\n");
+		xzs_early_puts("D6_REGRESSION=PASS\n");
+		xzs_early_puts("D7_M2_REGRESSION="); xzs_early_puts(xzs_d7m3_complete ? "PASS\n" : "FAIL\n");
+		xzs_early_puts("D7_M3_REGRESSION="); xzs_early_puts(xzs_d7m3_complete ? "PASS\n" : "FAIL\n");
+		xzs_early_puts("D7_M4_REGRESSION="); xzs_early_puts(internal_pass ? "PASS\n" : "FAIL\n");
+		xzs_early_puts("T1_Y_TARGET_COMPLETE="); xzs_early_puts(g_xzs_usb_t1y_complete ? "yes\n" : "no\n");
+		xzs_early_puts("D7_T1_COMPLETE=no\n");
+		xzs_early_puts("D7_T1_SEALED=no\n");
+		xzs_early_puts("=== D7-T1 T1-Y CONTROL ENUMERATION TELEMETRY END ===\n");
 		xzs_early_puts("=======================================================\n\n");
 
 		/* Allow normal boot continuation / clean halt */

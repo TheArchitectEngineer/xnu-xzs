@@ -71,7 +71,8 @@
 #define DWC3_DCTL                     0xC704
 #define DWC3_DEVTEN                   0xC708
 #define DWC3_DSTS                     0xC70C
-#define DWC3_DALEPENA                 0xC714
+#define DWC3_DGCMD                    0xC714
+#define DWC3_DALEPENA                 0xC720
 #define DWC3_OSTS                     0xCC10
 
 /* Candidate-2B DCFG-only halted-state normalization masks. */
@@ -79,6 +80,15 @@
 #define DWC3_DCFG_DEVADDR_MASK        0x000003F8u
 #define DWC3_DCTL_RUN_STOP            (1u << 31)
 #define DWC3_DSTS_DEVCTRLHLT          (1u << 22)
+#define DWC3_DSTS_USBLNKST_MASK       (0x0fu << 18)
+#define DWC3_DSTS_CONNECTSPD_MASK     0x00000007u
+
+#define DWC3_DEVTEN_DISCONNECT        (1u << 0)
+#define DWC3_DEVTEN_USBRESET          (1u << 1)
+#define DWC3_DEVTEN_CONNECTDONE       (1u << 2)
+#define DWC3_DEVTEN_T1Y_MASK          (DWC3_DEVTEN_DISCONNECT | \
+                                      DWC3_DEVTEN_USBRESET | \
+                                      DWC3_DEVTEN_CONNECTDONE)
 
 /* Candidate-2C DWC3 2.70a event-buffer ownership definitions. */
 #define DWC3_NUM_EVENT_INTERRUPTS(n)  (((n) >> 15) & 0x3fu)
@@ -105,6 +115,18 @@
 
 #define DEPCMD_CMDACT                 (1u << 10)
 #define DEPCMD_CMDIOC                 (1u << 8)
+#define DEPCMD_PARAM(n)               ((uint32_t)(n) << 16)
+#define DEPCMD_STATUS(n)              (((n) >> 12) & 0x0fu)
+#define DEPCMD_RESOURCE_INDEX(n)      (((n) >> 16) & 0x7fu)
+
+#define DWC3_DEPEVT_XFERCOMPLETE      0x01u
+#define DWC3_DEPEVT_XFERNOTREADY      0x03u
+#define DWC3_DEPEVT_STATUS_PHASE(n)   (((n) >> 12) & 0x03u)
+#define DWC3_DEPEVT_STATUS_CONTROL_STATUS 0x02u
+
+#define DWC3_DEVICE_EVENT_DISCONNECT  0x00u
+#define DWC3_DEVICE_EVENT_RESET       0x01u
+#define DWC3_DEVICE_EVENT_CONNECT_DONE 0x02u
 
 /* Endpoint Numbers */
 #define DWC3_PHYS_EP_CTRL_OUT         0
@@ -260,5 +282,29 @@ extern volatile uint32_t g_xzs_usb_irq_count;
 extern volatile uint32_t g_xzs_usb_enumerated;
 extern volatile uint32_t g_xzs_usb_configured;
 extern volatile uint32_t g_xzs_usb_console_ready;
+extern volatile uint32_t g_xzs_usb_t1y_ep0_only_dispatch;
+extern volatile uint32_t g_xzs_usb_t1y_bulk_endpoint_write_count;
+extern volatile uint32_t g_xzs_usb_t1y_tty_bridge_call_count;
+extern volatile uint32_t g_xzs_usb_t1y_devten_before;
+extern volatile uint32_t g_xzs_usb_t1y_devten_after;
+extern volatile uint32_t g_xzs_usb_t1y_gevntsiz_before;
+extern volatile uint32_t g_xzs_usb_t1y_gevntsiz_after;
+extern volatile uint32_t g_xzs_usb_t1y_dctl_before;
+extern volatile uint32_t g_xzs_usb_t1y_dctl_written;
+extern volatile uint32_t g_xzs_usb_t1y_dctl_after;
+extern volatile uint32_t g_xzs_usb_t1y_dctl_write_count;
+extern volatile uint32_t g_xzs_usb_t1y_first_event;
+extern volatile uint32_t g_xzs_usb_t1y_event_dma_working;
+extern volatile uint32_t g_xzs_usb_t1y_setup_observed;
+extern volatile uint32_t g_xzs_usb_t1y_device_desc_complete;
+extern volatile uint32_t g_xzs_usb_t1y_config_desc_complete;
+extern volatile uint32_t g_xzs_usb_t1y_set_address_complete;
+extern volatile uint32_t g_xzs_usb_t1y_set_configuration_complete;
+extern volatile uint32_t g_xzs_usb_t1y_configuration_value;
+extern volatile uint32_t g_xzs_usb_t1y_connect_speed;
+extern volatile uint32_t g_xzs_usb_t1y_link_state;
+extern volatile uint32_t g_xzs_usb_t1y_ep_cmd_failures;
+extern volatile uint32_t g_xzs_usb_t1y_event_ring_drops;
+extern volatile uint32_t g_xzs_usb_t1y_complete;
 
 #endif /* _PEXPERT_ARM_XZS_USB_H_ */
