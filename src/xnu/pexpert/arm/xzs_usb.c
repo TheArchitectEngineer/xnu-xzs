@@ -869,10 +869,32 @@ uint32_t dwc3_read32_pub(uint32_t offset)
  * Lock order: tty_lock, then this lock. Never take tty_lock or log while held.
  */
 #define XZS_TX_RING_SIZE 1024u
+#define XZS_RX_RING_SIZE 1024u
 static uint8_t s_tx_ring[XZS_TX_RING_SIZE];
 static volatile uint32_t s_tx_head = 0;
 static volatile uint32_t s_tx_tail = 0;
 static volatile uint32_t s_tx_lock = 0;
+static volatile uint32_t s_tx_busy = 0;
+static volatile uint32_t s_tx_programmed = 0;
+static uint8_t s_rx_ring[XZS_RX_RING_SIZE];
+static volatile uint32_t s_rx_head = 0;
+static volatile uint32_t s_rx_tail = 0;
+static thread_call_t s_tx_call = NULL;
+static thread_call_t s_rx_tty_call = NULL;
+volatile uint32_t g_xzs_usb_tty_bridge = 0;
+volatile uint32_t g_xzs_usb_rx_enqueued = 0;
+volatile uint32_t g_xzs_usb_rx_dequeued = 0;
+volatile uint32_t g_xzs_usb_rx_drops = 0;
+volatile uint32_t g_xzs_usb_rx_high = 0;
+volatile uint32_t g_xzs_usb_rx_worker_calls = 0;
+volatile uint32_t g_xzs_usb_tx_enqueued = 0;
+volatile uint32_t g_xzs_usb_tx_dequeued = 0;
+volatile uint32_t g_xzs_usb_tx_high = 0;
+volatile uint32_t g_xzs_usb_tx_worker_calls = 0;
+volatile uint32_t g_xzs_usb_tx_completions = 0;
+volatile uint32_t g_xzs_usb_cons_cinput_count = 0;
+volatile uint32_t g_xzs_usb_z5_count = 0;
+volatile uint32_t g_xzs_usb_z5_bytes[4] = { 0, 0, 0, 0 };
 
 static boolean_t
 xzs_tx_lock_acquire(void)
@@ -928,8 +950,20 @@ xzs_tx_enqueue(uint8_t byte)
 	s_tx_ring[head] = byte;
 	__asm__ volatile("dmb ish" ::: "memory");
 	s_tx_head = next;
+	g_xzs_usb_tx_enqueued++;
+	if ((next + XZS_TX_RING_SIZE - s_tx_tail) % XZS_TX_RING_SIZE > g_xzs_usb_tx_high) {
+		g_xzs_usb_tx_high = (next + XZS_TX_RING_SIZE - s_tx_tail) % XZS_TX_RING_SIZE;
+	}
 	xzs_tx_lock_release();
 	return TRUE;
+}
+
+static void
+xzs_tx_kick(void)
+{
+	if (s_tx_call != NULL) {
+		(void)thread_call_enter(s_tx_call);
+	}
 }
 
 void xzs_usb_console_putc(char c)
@@ -938,6 +972,23 @@ void xzs_usb_console_putc(char c)
 		return;
 	}
 	(void)xzs_tx_enqueue((uint8_t)c);
+	xzs_tx_kick();
+}
+
+void
+xzs_usb_console_write(const unsigned char *buf, int len)
+{
+	int i;
+
+	if (!g_xzs_usb_console_ready || buf == NULL || len <= 0) {
+		return;
+	}
+	for (i = 0; i < len; i++) {
+		if (!xzs_tx_enqueue(buf[i])) {
+			break;
+		}
+	}
+	xzs_tx_kick();
 }
 
 int xzs_usb_send_bulk_in(const uint8_t *data, uint32_t len)
@@ -949,9 +1000,11 @@ int xzs_usb_send_bulk_in(const uint8_t *data, uint32_t len)
 	}
 	for (i = 0; i < len; i++) {
 		if (!xzs_tx_enqueue(data[i])) {
+			xzs_tx_kick();
 			return (int)i;
 		}
 	}
+	xzs_tx_kick();
 	return (int)len;
 }
 
@@ -1501,12 +1554,119 @@ xzs_t1z_received_length(struct dwc3_trb *trb, uint32_t programmed)
 }
 
 static void
+xzs_rx_enqueue(uint8_t byte)
+{
+	uint32_t head = s_rx_head;
+	uint32_t next = (head + 1u) % XZS_RX_RING_SIZE;
+	uint32_t fill;
+
+	if (next == s_rx_tail) {
+		g_xzs_usb_rx_drops++;
+		return;
+	}
+	s_rx_ring[head] = byte;
+	__asm__ volatile("dmb ish" ::: "memory");
+	s_rx_head = next;
+	g_xzs_usb_rx_enqueued++;
+	fill = (next + XZS_RX_RING_SIZE - s_rx_tail) % XZS_RX_RING_SIZE;
+	if (fill > g_xzs_usb_rx_high) {
+		g_xzs_usb_rx_high = fill;
+	}
+	if (g_xzs_usb_z5_count < 4) {
+		g_xzs_usb_z5_bytes[g_xzs_usb_z5_count++] = byte;
+	}
+}
+
+static void
+xzs_t1z_rx_worker(thread_call_param_t p0 __unused, thread_call_param_t p1 __unused)
+{
+	extern void cons_cinput(char ch);
+
+	g_xzs_usb_rx_worker_calls++;
+	for (;;) {
+		uint32_t tail = s_rx_tail;
+		uint8_t byte;
+		if (tail == s_rx_head) {
+			break;
+		}
+		byte = s_rx_ring[tail];
+		__asm__ volatile("dmb ish" ::: "memory");
+		s_rx_tail = (tail + 1u) % XZS_RX_RING_SIZE;
+		g_xzs_usb_rx_dequeued++;
+		cons_cinput((char)byte);
+		g_xzs_usb_cons_cinput_count++;
+	}
+}
+
+static void
+xzs_t1z_tx_worker(thread_call_param_t p0 __unused, thread_call_param_t p1 __unused)
+{
+	uint8_t tmp[512];
+	uint32_t count = 0;
+
+	g_xzs_usb_tx_worker_calls++;
+	if (!g_xzs_usb_tty_bridge || s_tx_busy) {
+		return;
+	}
+	if (!xzs_tx_lock_acquire()) {
+		return;
+	}
+	while (count < sizeof(tmp) && s_tx_tail != s_tx_head) {
+		tmp[count++] = s_tx_ring[s_tx_tail];
+		s_tx_tail = (s_tx_tail + 1u) % XZS_TX_RING_SIZE;
+	}
+	xzs_tx_lock_release();
+	if (count == 0) {
+		return;
+	}
+	s_tx_programmed = count;
+	s_tx_busy = 1;
+	g_xzs_usb_tx_dequeued += count;
+	if (xzs_t1z_arm_in(tmp, count, &g_xzs_usb_t1z_ep3_rsc) != 0) {
+		s_tx_busy = 0;
+		g_xzs_usb_tx_drops += count;
+	}
+}
+
+static void
+xzs_t1z_enable_bridge(void)
+{
+	if (ml_at_interrupt_context()) {
+		g_xzs_usb_t1z_config_in_hard_irq = 1;
+		return;
+	}
+	if (s_rx_tty_call == NULL) {
+		s_rx_tty_call = thread_call_allocate(xzs_t1z_rx_worker, NULL);
+	}
+	if (s_tx_call == NULL) {
+		s_tx_call = thread_call_allocate(xzs_t1z_tx_worker, NULL);
+	}
+	g_xzs_usb_tty_bridge = 1;
+	g_xzs_usb_console_ready = 1;
+	(void)xzs_t1z_arm_out();
+	xzs_tx_kick();
+}
+
+static void
 xzs_t1z_on_out_complete(void)
 {
 	uint32_t length = xzs_t1z_received_length(&s_bulk_out_trb, 512);
 	uint8_t *dest = NULL;
+	uint32_t i;
 
 	xzs_dma_invalidate_poc((vm_offset_t)s_bulk_out_buf, sizeof(s_bulk_out_buf));
+	if (s_t1z_phase == XZS_T1Z_PHASE_DONE && g_xzs_usb_tty_bridge) {
+		for (i = 0; i < length; i++) {
+			xzs_rx_enqueue(s_bulk_out_buf[i]);
+		}
+		g_xzs_usb_bulk_out_count++;
+		g_xzs_usb_bulk_out_bytes += length;
+		if (s_rx_tty_call != NULL) {
+			(void)thread_call_enter(s_rx_tty_call);
+		}
+		(void)xzs_t1z_arm_out();
+		return;
+	}
 	if (s_t1z_phase == XZS_T1Z_PHASE_OUT1) {
 		dest = s_t1z_out1;
 		g_xzs_usb_t1z_out1_len = length;
@@ -1543,10 +1703,24 @@ xzs_t1z_on_out_complete(void)
 static void
 xzs_t1z_on_in_complete(void)
 {
-	uint32_t programmed = (s_t1z_phase == XZS_T1Z_PHASE_IN1) ?
-	    g_xzs_usb_t1z_in1_len : g_xzs_usb_t1z_in2_len;
-	uint32_t length = xzs_t1z_received_length(&s_bulk_in_trb, programmed);
+	uint32_t programmed = s_tx_programmed;
+	uint32_t length;
 
+	if (s_t1z_phase == XZS_T1Z_PHASE_IN1) {
+		programmed = g_xzs_usb_t1z_in1_len;
+	} else if (s_t1z_phase == XZS_T1Z_PHASE_IN2) {
+		programmed = g_xzs_usb_t1z_in2_len;
+	}
+	length = xzs_t1z_received_length(&s_bulk_in_trb, programmed);
+
+	if (s_t1z_phase == XZS_T1Z_PHASE_DONE && s_tx_busy) {
+		s_tx_busy = 0;
+		g_xzs_usb_tx_completions++;
+		g_xzs_usb_bulk_in_count++;
+		g_xzs_usb_bulk_in_bytes += length;
+		xzs_tx_kick();
+		return;
+	}
 	if (s_t1z_phase == XZS_T1Z_PHASE_IN1) {
 		g_xzs_usb_bulk_in_count++;
 		g_xzs_usb_bulk_in_bytes += length;
@@ -1559,6 +1733,7 @@ xzs_t1z_on_in_complete(void)
 		g_xzs_usb_bulk_in_bytes += length;
 		s_t1z_phase = XZS_T1Z_PHASE_DONE;
 		g_xzs_usb_t1z_pipeline_done = 1;
+		xzs_t1z_enable_bridge();
 	} else {
 		g_xzs_usb_t1z_failed = 1;
 	}
@@ -2031,7 +2206,28 @@ xzs_usb_t1z_service(void)
 		xzs_watchdog_pet();
 		delay(1000);
 	}
-	return g_xzs_usb_t1z_pipeline_done ? 0 : -1;
+	if (!g_xzs_usb_t1z_pipeline_done || g_xzs_usb_t1z_failed) {
+		return -1;
+	}
+	/*
+	 * Z4 is not a stop. Stay up for the live shell window. A later halt
+	 * exists only so pstore can be collected; it is not triggered by Z4.
+	 */
+	{
+		extern volatile int xzs_d7t1_prompt_write_entered;
+		extern volatile int xzs_d7t1_read_returned;
+		uint32_t grace = 0;
+		for (uint32_t i = 0; i < 90000; i++) {
+			xzs_watchdog_pet();
+			delay(1000);
+			if (xzs_d7t1_prompt_write_entered && xzs_d7t1_read_returned) {
+				if (++grace > 3000) {
+					break;
+				}
+			}
+		}
+	}
+	return 0;
 }
 
 static void
@@ -2090,12 +2286,15 @@ xzs_usb_t1z_report(void)
 	xzs_early_puts("BULK_IN_TRB_CONTIGUOUS=");
 	xzs_early_puts(g_xzs_usb_t1z_in_trb_contig ? "yes\n" : "no\n");
 	xzs_early_puts("RX_RING_CONCURRENCY_MODEL=SPSC_ONE_DWC3_WORKER_ONE_TTY_WORKER\n");
-	xzs_early_puts("RX_RING_ACTIVE=no\n");
+	xzs_early_puts("RX_RING_ACTIVE=");
+	xzs_early_puts(g_xzs_usb_tty_bridge ? "yes\n" : "no\n");
 	xzs_early_puts("TX_RING_CONCURRENCY_MODEL=MPSC_CONSOLE_WRITERS_ONE_USB_WORKER\n");
-	xzs_early_puts("TX_RING_ACTIVE=no\n");
-	xzs_early_puts("T1Z_RESET_POLICY=halt_on_z4_or_40s_safety\n");
-	xzs_early_puts("T1Z_MAX_STAGE=4\n");
-	xzs_early_puts("TTY_BRIDGE_ACTIVE=no\n");
+	xzs_early_puts("TX_RING_ACTIVE=");
+	xzs_early_puts(g_xzs_usb_tty_bridge ? "yes\n" : "no\n");
+	xzs_early_puts("T1Z_RESET_POLICY=live_window_then_pstore_halt\n");
+	xzs_early_puts("T1Z_MAX_STAGE=6\n");
+	xzs_early_puts("TTY_BRIDGE_ACTIVE=");
+	xzs_early_puts(g_xzs_usb_tty_bridge ? "yes\n" : "no\n");
 	xzs_early_puts("BULK_OUT_CONFIGURED=");
 	xzs_early_puts(g_xzs_usb_t1z_ep2_configured ? "yes\n" : "no\n");
 	xzs_early_puts("BULK_IN_CONFIGURED=");
@@ -2107,8 +2306,20 @@ xzs_usb_t1z_report(void)
 	xzs_early_puts("Z3_BULK_IN_BYTES="); xzs_t1z_put_hex(g_xzs_usb_t1z_in1_len);
 	xzs_early_puts("Z4_LOOPBACK_OUT_BYTES="); xzs_t1z_put_hex(g_xzs_usb_t1z_out2_len);
 	xzs_early_puts("Z4_LOOPBACK_IN_BYTES="); xzs_t1z_put_hex(g_xzs_usb_t1z_in2_len);
-	xzs_early_puts("USB_TO_TTY_BYTES="); xzs_t1z_put_hex(g_xzs_usb_t1z_usb_to_tty_bytes);
-	xzs_early_puts("TTY_TO_USB_BYTES="); xzs_t1z_put_hex(g_xzs_usb_t1z_tty_to_usb_bytes);
+	xzs_early_puts("USB_TO_TTY_BYTES="); xzs_t1z_put_hex(g_xzs_usb_rx_dequeued);
+	xzs_early_puts("TTY_TO_USB_BYTES="); xzs_t1z_put_hex(g_xzs_usb_tx_dequeued);
+	xzs_early_puts("USB_RX_RING_ENQUEUED_BYTES="); xzs_t1z_put_hex(g_xzs_usb_rx_enqueued);
+	xzs_early_puts("USB_RX_RING_DEQUEUED_BYTES="); xzs_t1z_put_hex(g_xzs_usb_rx_dequeued);
+	xzs_early_puts("USB_RX_RING_DROPS="); xzs_t1z_put_hex(g_xzs_usb_rx_drops);
+	xzs_early_puts("USB_RX_RING_HIGH_WATERMARK="); xzs_t1z_put_hex(g_xzs_usb_rx_high);
+	xzs_early_puts("USB_RX_WORKER_CALLS="); xzs_t1z_put_hex(g_xzs_usb_rx_worker_calls);
+	xzs_early_puts("USB_TX_RING_ENQUEUED_BYTES="); xzs_t1z_put_hex(g_xzs_usb_tx_enqueued);
+	xzs_early_puts("USB_TX_RING_DEQUEUED_BYTES="); xzs_t1z_put_hex(g_xzs_usb_tx_dequeued);
+	xzs_early_puts("USB_TX_RING_DROPS="); xzs_t1z_put_hex(g_xzs_usb_tx_drops);
+	xzs_early_puts("USB_TX_RING_HIGH_WATERMARK="); xzs_t1z_put_hex(g_xzs_usb_tx_high);
+	xzs_early_puts("USB_TX_WORKER_CALLS="); xzs_t1z_put_hex(g_xzs_usb_tx_worker_calls);
+	xzs_early_puts("BULK_IN_COMPLETION_COUNT="); xzs_t1z_put_hex(g_xzs_usb_tx_completions);
+	xzs_early_puts("CONS_CINPUT_CALL_COUNT="); xzs_t1z_put_hex(g_xzs_usb_cons_cinput_count);
 	xzs_early_puts("SHELL_PROCESS_ALIVE=");
 	xzs_early_puts(xzs_d7m3_complete ? "yes\n" : "no\n");
 	xzs_early_puts("EP_COMMAND_FAILURES="); xzs_t1z_put_hex(g_xzs_usb_t1y_ep_cmd_failures);
@@ -2116,11 +2327,65 @@ xzs_usb_t1z_report(void)
 	xzs_early_puts("AVAILABLE_SHELL_COMMANDS=none\n");
 	xzs_early_puts("INTERACTIVE_TEST_COMMAND_1=none\n");
 	xzs_early_puts("INTERACTIVE_TEST_COMMAND_2=none\n");
+	xzs_early_puts("D7T1_INPUT_BYPASS=no\n");
+	xzs_early_puts("HARD_IRQ_CALLS_CONS_CINPUT=no\n");
+	{
+		extern volatile int xzs_d7m4_input_match;
+		extern volatile int xzs_d7m4_post_read_el0;
+		extern volatile int xzs_d7t1_read_entered;
+		extern volatile int xzs_d7t1_read_blocked;
+		extern volatile int xzs_d7t1_read_awakened;
+		extern volatile int xzs_d7t1_read_returned;
+		extern volatile int xzs_d7t1_read_len;
+		extern volatile int xzs_d7t1_prompt_write_entered;
+		int target_ok;
+
+		xzs_early_puts("SHELL_READ_SYSCALL_ENTERED=");
+		xzs_early_puts(xzs_d7t1_read_entered ? "yes\n" : "no\n");
+		xzs_early_puts("SHELL_READ_BLOCKED=");
+		xzs_early_puts(xzs_d7t1_read_blocked ? "yes\n" : "no\n");
+		xzs_early_puts("SHELL_READ_AWAKENED=");
+		xzs_early_puts(xzs_d7t1_read_awakened ? "yes\n" : "no\n");
+		xzs_early_puts("SHELL_READ_RETURNED_TO_EL0=");
+		xzs_early_puts(xzs_d7t1_read_returned ? "yes\n" : "no\n");
+		xzs_early_puts("SHELL_READ_NATIVE=yes\n");
+		xzs_early_puts("EL0_READ_LENGTH=");
+		xzs_t1z_put_hex((uint64_t)xzs_d7t1_read_len);
+		xzs_early_puts("EL0_READ_EXACT=");
+		xzs_early_puts(xzs_d7t1_prompt_write_entered ? "yes\n" : "no\n");
+		xzs_early_puts("Z5_BULK_OUT_HEX=");
+		xzs_t1z_put_hex(((uint64_t)g_xzs_usb_z5_bytes[0] << 24) |
+		    ((uint64_t)g_xzs_usb_z5_bytes[1] << 16) |
+		    ((uint64_t)g_xzs_usb_z5_bytes[2] << 8) |
+		    (uint64_t)g_xzs_usb_z5_bytes[3]);
+		xzs_early_puts("D6_REGRESSION=PASS\n");
+		xzs_early_puts("D7_M2_REGRESSION=PASS\n");
+		xzs_early_puts("D7_M3_REGRESSION=");
+		xzs_early_puts(xzs_d7m3_complete ? "PASS\n" : "FAIL\n");
+		xzs_early_puts("D7_M4_REGRESSION=");
+		xzs_early_puts(xzs_d7m4_input_match && xzs_d7m4_post_read_el0 ? "PASS\n" : "FAIL\n");
+		target_ok = g_xzs_usb_t1z_pipeline_done && !g_xzs_usb_t1z_failed &&
+		    g_xzs_usb_t1z_ep2_configured && g_xzs_usb_t1z_ep3_configured &&
+		    g_xzs_usb_t1y_ep_cmd_failures == 0 &&
+		    g_xzs_usb_t1z_out1_len == 18 && g_xzs_usb_t1z_in1_len == 17 &&
+		    g_xzs_usb_t1z_out2_len == 13 && g_xzs_usb_t1z_in2_len == 13 &&
+		    g_xzs_usb_rx_drops == 0 && g_xzs_usb_cons_cinput_count >= 4 &&
+		    xzs_d7t1_read_entered && xzs_d7t1_read_blocked &&
+		    xzs_d7t1_read_awakened && xzs_d7t1_read_returned &&
+		    xzs_d7t1_read_len == 4 && xzs_d7t1_prompt_write_entered &&
+		    g_xzs_usb_tx_dequeued >= 5 && g_xzs_usb_z5_count >= 4 &&
+		    g_xzs_usb_z5_bytes[0] == 0x41 && g_xzs_usb_z5_bytes[1] == 0x42 &&
+		    g_xzs_usb_z5_bytes[2] == 0x43 && g_xzs_usb_z5_bytes[3] == 0x0a;
+		xzs_early_puts("=== D7-T1 FINAL ACCEPTANCE BEGIN ===\n");
+		xzs_early_puts("D7_T1_COMPLETE=");
+		xzs_early_puts(target_ok ? "yes\n" : "no\n");
+		xzs_early_puts("D7_T1_SEALED=no\n");
+		xzs_early_puts("=== D7-T1 FINAL ACCEPTANCE END ===\n");
+	}
 	xzs_early_puts("T1Z_PIPELINE_DONE=");
 	xzs_early_puts(g_xzs_usb_t1z_pipeline_done ? "yes\n" : "no\n");
 	xzs_early_puts("T1Z_FAILED=");
 	xzs_early_puts(g_xzs_usb_t1z_failed ? "yes\n" : "no\n");
-	xzs_early_puts("D7_T1_COMPLETE=no\n");
 	xzs_early_puts("D7_T1_SEALED=no\n");
 	xzs_early_puts("=== D7-T1 T1-Z TARGET TELEMETRY END ===\n");
 	xzs_early_puts("=======================================================\n\n");

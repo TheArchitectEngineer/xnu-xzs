@@ -792,6 +792,9 @@ sleh_synchronous(arm_context_t *context, uint64_t esr, vm_offset_t far, __unused
 	extern volatile int xzs_d7m4_read_returned;
 	extern volatile int xzs_d7m4_input_match;
 	extern volatile int xzs_d7m4_post_read_el0;
+	extern volatile int xzs_d7t1_read_entered;
+	extern volatile int xzs_d7t1_read_returned;
+	extern volatile int xzs_d7t1_prompt_write_entered;
 	extern int xzs_d7m2_handoff_to_shell(proc_t p, task_t t, thread_t th, void *saved_state);
 	extern void xzs_d7m2_report_completion(void);
 	extern void xzs_d7m3_report_completion(void);
@@ -869,6 +872,19 @@ sleh_synchronous(arm_context_t *context, uint64_t esr, vm_offset_t far, __unused
 				return;
 			}
 			/* Subsequent known-safe getpid calls remain on the native path. */
+			goto xzs_d6m5_dispatch_first_svc;
+		} else if (is_user && class == ESR_EC_SVC_64 && xzs_d7m4_post_read_el0 &&
+		    ESR_ISS(esr) == 0x80 &&
+		    (ss64->x[16] == 3 || ss64->x[16] == 4 || ss64->x[16] == 20)) {
+			if (ss64->x[16] == 3 && ss64->x[0] == 0 && !xzs_d7t1_read_entered) {
+				xzs_d7t1_read_entered = 1;
+				__asm__ volatile("dmb ish" ::: "memory");
+			}
+			if (ss64->x[16] == 4 && ss64->x[0] == 1 && ss64->x[2] == 5 &&
+			    xzs_d7t1_read_returned) {
+				xzs_d7t1_prompt_write_entered = 1;
+				__asm__ volatile("dmb ish" ::: "memory");
+			}
 			goto xzs_d6m5_dispatch_first_svc;
 		} else if (is_user && class == ESR_EC_SVC_64 && xzs_d7m4_armed) {
 			if (!xzs_d7m4_read_entered &&
@@ -1173,6 +1189,15 @@ xzs_d6m5_dispatch_first_svc:
 					}
 				}
 			}
+		}
+		if (xzs_d7t1_read_entered && !xzs_d7t1_read_returned) {
+			arm_saved_state64_t *ss_usb = saved_state64(state);
+			xzs_d7t1_read_returned = 1;
+			{
+				extern volatile int xzs_d7t1_read_len;
+				xzs_d7t1_read_len = (int)ss_usb->x[0];
+			}
+			__asm__ volatile("dmb ish" ::: "memory");
 		}
 		if (xzs_d7m4_armed && xzs_d7m4_read_entered && !xzs_d7m4_read_returned) {
 			arm_saved_state64_t *ss_ret = saved_state64(state);

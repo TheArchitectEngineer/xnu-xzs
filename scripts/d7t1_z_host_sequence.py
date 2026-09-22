@@ -61,12 +61,38 @@ def main() -> int:
             break
         time.sleep(0.3)
     print("HOST_LOOPBACK_EXACT_MATCH=" + ("yes" if loop_ok else "no"))
-    print("HOST_LIVE_SHELL_PROMPT_OBSERVED=no")
-    print("HOST_LIVE_INTERACTIVE_COMMAND_WORKING=no")
+    print("USB_DEVICE_FOUND=yes")
+    print("HOST_VID_PID_MATCH=yes")
+    seen = b""
+    prompt = False
+    deadline = time.time() + 50
+    while time.time() < deadline and not prompt:
+        chunk = xzs_console.test_bulk_in(dev, timeout_ms=1000)
+        if chunk:
+            seen += chunk
+            if b"xzs#" in seen:
+                prompt = True
+        else:
+            time.sleep(0.2)
+    print("HOST_LIVE_SHELL_PROMPT_OBSERVED=" + ("yes" if prompt else "no"))
+    sent = xzs_console.test_bulk_out(dev, payload=b"ABC\n", timeout_ms=2000)
+    print("HOST_SENT_ABC_LF=" + ("yes" if sent else "no"))
+    after = b""
+    deadline = time.time() + 20
+    while time.time() < deadline and b"xzs#" not in after:
+        chunk = xzs_console.test_bulk_in(dev, timeout_ms=1000)
+        if chunk:
+            after += chunk
+        else:
+            time.sleep(0.2)
+    print("EL0_TO_HOST_OUTPUT_WORKING=" + ("yes" if b"xzs#" in after else "no"))
+    print("HOST_TO_EL0_INPUT_WORKING=see_target_el0_read")
+    print("LIVE_BIDIRECTIONAL_TRANSPORT=" + ("yes" if prompt and sent and b"xzs#" in after else "no"))
     print("HOST_INTERACTIVE_TEST_COMMAND_1=none")
     print("HOST_INTERACTIVE_TEST_COMMAND_2=none")
-    print("D7_T1_SEALED=not_a_host_or_target_self_certification")
-    return 0 if out_ok and in_data == expected_in and loop_ok else 1
+    print("AVAILABLE_SHELL_COMMANDS=none")
+    print("D7_T1_SEALED=not_declared_by_host")
+    return 0 if out_ok and in_data == expected_in and loop_ok and prompt and sent and b"xzs#" in after else 1
 
 
 if __name__ == "__main__":

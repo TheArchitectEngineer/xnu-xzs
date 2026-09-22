@@ -376,6 +376,10 @@ xzs_console_write(const unsigned char *buf, int len)
 	for (int i = 0; i < len; i++) {
 		xzs_early_putc((char)buf[i]);
 	}
+	{
+		extern void xzs_usb_console_write(const unsigned char *buf, int len);
+		xzs_usb_console_write(buf, len);
+	}
 	if (g_xzs_ttbr0 != 0) {
 		__asm__ volatile("msr TTBR0_EL1, %0; isb sy" :: "r"(saved_ttbr0));
 	}

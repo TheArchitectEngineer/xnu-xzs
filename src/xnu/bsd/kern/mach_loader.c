@@ -5691,9 +5691,9 @@ xzs_d7m2_handoff_to_shell(proc_t p, task_t t, thread_t th, void *saved_state)
 	VATTR_WANTED(&va, va_data_size);
 	VATTR_WANTED(&va, va_mode);
 	if (vnode_getattr(vp, &va, ctx) != 0 || !VATTR_IS_SUPPORTED(&va, va_data_size) ||
-	    va.va_data_size != 16584) {
+	    va.va_data_size != 16608) {
 		vnode_put(vp);
-		xzs_d7m2_fatal(0x30, "/bin/sh vnode size mismatch (expected 16584)");
+		xzs_d7m2_fatal(0x30, "/bin/sh vnode size mismatch (expected 16608)");
 		return -1;
 	}
 
@@ -6004,6 +6004,12 @@ volatile int xzs_d7m4_read_awakened = 0;
 volatile int xzs_d7m4_read_returned = 0;
 volatile int xzs_d7m4_input_match = 0;
 volatile int xzs_d7m4_post_read_el0 = 0;
+volatile int xzs_d7t1_read_entered = 0;
+volatile int xzs_d7t1_read_blocked = 0;
+volatile int xzs_d7t1_read_awakened = 0;
+volatile int xzs_d7t1_read_returned = 0;
+volatile int xzs_d7t1_read_len = 0;
+volatile int xzs_d7t1_prompt_write_entered = 0;
 
 void
 xzs_d7m3_report_completion(void)

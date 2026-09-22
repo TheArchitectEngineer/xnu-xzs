@@ -2172,17 +2172,17 @@ xzs_d5m2_r5_verify(dev_t root_dev, const char *root_name)
 	xzs_early_puts(" (expected: 0x1)\n");
 	xzs_early_puts("  SECTOR0_METADATA_CRC32:                  0x");
 	xzs_early_puthex64((uint64_t)meta_crc0);
-	xzs_early_puts(" (expected: 0x5b525e26)\n");
+	xzs_early_puts(" (expected: 0x61673b42)\n");
 	xzs_early_puts("  SECTOR0_RAW_CRC32:                       0x");
 	xzs_early_puthex64((uint64_t)sec0_crc);
-	xzs_early_puts(" (expected: 0x16c57339)\n\n");
+	xzs_early_puts(" (expected: 0x8457e01f)\n\n");
 
 	buf_brelse(bp0);
 	bp0 = NULL;
 
 	boolean_t s0_valid = (magic0 == 0x5346535A && ver0 == 1 && hdr_sz0 == 512 &&
 	                      sec_sz0 == 512 && img_sz0 == 35840 && obj_cnt0 == 9 &&
-	                      root_id0 == 1 && meta_crc0 == 0x5b525e26 && sec0_crc == 0x16c57339);
+	                      root_id0 == 1 && meta_crc0 == 0x61673b42 && sec0_crc == 0x8457e01f);
 
 	if (!s0_valid) {
 		xzs_early_puts("[XZS-RAMDISK] FATAL: Sector 0 validation failed!\n");
@@ -2285,12 +2285,12 @@ xzs_d5m2_r6_verify(dev_t root_dev, const char *root_name)
 	xzs_early_puts(" (expected: 0x5346535A 'XZSF')\n");
 	xzs_early_puts("  SECTOR0_RAW_CRC32:                       0x");
 	xzs_early_puthex64((uint64_t)sec0_crc);
-	xzs_early_puts(" (expected: 0x16c57339)\n");
+	xzs_early_puts(" (expected: 0x8457e01f)\n");
 
 	buf_brelse(bp0);
 	bp0 = NULL;
 
-	if (magic0 != 0x5346535A || ver0 != 1 || sec0_crc != 0x16c57339) {
+	if (magic0 != 0x5346535A || ver0 != 1 || sec0_crc != 0x8457e01f) {
 		xzs_early_puts("[XZS-RAMDISK] FATAL: Sector 0 validation failed!\n");
 		xzs_breadcrumb(0xD510, 0xED);
 		xzs_spin_halt();
@@ -2471,12 +2471,12 @@ xzs_d5m2_r7_verify(dev_t root_dev, const char *root_name)
 	xzs_early_puts(" (expected: 0x5346535A 'XZSF')\n");
 	xzs_early_puts("  SECTOR0_RAW_CRC32:                       0x");
 	xzs_early_puthex64((uint64_t)sec0_crc);
-	xzs_early_puts(" (expected: 0x16c57339)\n");
+	xzs_early_puts(" (expected: 0x8457e01f)\n");
 
 	buf_brelse(bp0);
 	bp0 = NULL;
 
-	if (magic0 != 0x5346535A || ver0 != 1 || sec0_crc != 0x16c57339) {
+	if (magic0 != 0x5346535A || ver0 != 1 || sec0_crc != 0x8457e01f) {
 		xzs_early_puts("[XZS-RAMDISK] FATAL: Sector 0 validation failed!\n");
 		xzs_breadcrumb(0xD510, 0xED);
 		xzs_spin_halt();
@@ -2590,11 +2590,11 @@ xzs_d5m2_r7_verify(dev_t root_dev, const char *root_name)
 	xzs_early_puts("  70_SECTORS_READ_COMPLETE:                yes\n");
 	xzs_early_puts("  COMPUTED_LOGICAL_IMAGE_CRC32:            0x");
 	xzs_early_puthex64((uint64_t)full_img_crc);
-	xzs_early_puts(" (expected: 0x68bccf48)\n");
+	xzs_early_puts(" (expected: 0x757cbd9d)\n");
 
 	xzs_breadcrumb(0xD510, 0x55);
 
-	if (full_img_crc != 0x68bccf48) {
+	if (full_img_crc != 0x757cbd9d) {
 		xzs_early_puts("[XZS-RAMDISK] FATAL: Logical image CRC32 mismatch!\n");
 		xzs_breadcrumb(0xD510, 0xF4);
 		xzs_spin_halt();
@@ -2738,12 +2738,12 @@ xzs_d5m2_r8_seal(dev_t root_dev, const char *root_name)
 	xzs_early_puts(" (expected: 0x5346535A 'XZSF')\n");
 	xzs_early_puts("  SECTOR0_RAW_CRC32:                       0x");
 	xzs_early_puthex64((uint64_t)sec0_crc);
-	xzs_early_puts(" (expected: 0x16c57339)\n");
+	xzs_early_puts(" (expected: 0x8457e01f)\n");
 
 	buf_brelse(bp0);
 	bp0 = NULL;
 
-	if (magic0 != 0x5346535A || ver0 != 1 || sec0_crc != 0x16c57339) {
+	if (magic0 != 0x5346535A || ver0 != 1 || sec0_crc != 0x8457e01f) {
 		xzs_early_puts("[XZS-RAMDISK] FATAL: Sector 0 validation failed!\n");
 		xzs_breadcrumb(0xD510, 0xED);
 		xzs_spin_halt();
@@ -2857,11 +2857,11 @@ xzs_d5m2_r8_seal(dev_t root_dev, const char *root_name)
 	xzs_early_puts("  70_SECTORS_READ_COMPLETE:                yes\n");
 	xzs_early_puts("  COMPUTED_LOGICAL_IMAGE_CRC32:            0x");
 	xzs_early_puthex64((uint64_t)full_img_crc);
-	xzs_early_puts(" (expected: 0x68bccf48)\n");
+	xzs_early_puts(" (expected: 0x757cbd9d)\n");
 
 	xzs_breadcrumb(0xD510, 0x55);
 
-	if (full_img_crc != 0x68bccf48) {
+	if (full_img_crc != 0x757cbd9d) {
 		xzs_early_puts("[XZS-RAMDISK] FATAL: Logical image CRC32 mismatch!\n");
 		xzs_breadcrumb(0xD510, 0xF4);
 		xzs_spin_halt();

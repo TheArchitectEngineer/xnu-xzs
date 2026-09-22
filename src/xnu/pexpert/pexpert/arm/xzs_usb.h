@@ -207,6 +207,7 @@ void xzs_usb_t1z_report(void);
 void xzs_usb_poll_events(void);
 void xzs_usb_irq_handler(void);
 void xzs_usb_console_putc(char c);
+void xzs_usb_console_write(const unsigned char *buf, int len);
 int  xzs_usb_send_bulk_in(const uint8_t *data, uint32_t len);
 boolean_t xzs_usb_is_enumerated(void);
 boolean_t xzs_usb_is_console_ready(void);
