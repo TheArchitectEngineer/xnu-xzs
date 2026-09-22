@@ -877,6 +877,7 @@ xzs_t1x_ep_cmd(uint32_t ep, uint32_t opcode, uint32_t p0, uint32_t p1,
     uint32_t p2, uint32_t before, uint32_t passed)
 {
 	xzs_breadcrumb(0xD740, before);
+	xzs_early_puts("[XZS-D7T1] D740/X command BEFORE\n");
 	dwc3_write32(DWC3_DEPCMDPAR0(ep), p0);
 	dwc3_write32(DWC3_DEPCMDPAR1(ep), p1);
 	dwc3_write32(DWC3_DEPCMDPAR2(ep), p2);
@@ -886,6 +887,7 @@ xzs_t1x_ep_cmd(uint32_t ep, uint32_t opcode, uint32_t p0, uint32_t p1,
 		if ((raw & DEPCMD_CMDACT) == 0) {
 			if (((raw >> 12) & 0xf) == 0) {
 				xzs_breadcrumb(0xD740, passed);
+				xzs_early_puts("[XZS-D7T1] D740/X command PASS\n");
 				return 0;
 			}
 			return -2;
@@ -903,6 +905,10 @@ xzs_t1x_ep0_halted_setup(void)
 	uint32_t cfg0 = (64u << 3); /* control type 0, MPS 64, FIFO 0 */
 	uint32_t dalep;
 
+	xzs_breadcrumb(0xD740, 0x00); xzs_early_puts("[XZS-D7T1] D740/X00 T1-X function entered\n");
+	xzs_breadcrumb(0xD740, 0x01); xzs_early_puts("[XZS-D7T1] D740/X01 T1-X build identity\n");
+	xzs_breadcrumb(0xD740, 0x02); xzs_early_puts("[XZS-D7T1] D740/X02 T1-X runtime gate enabled\n");
+	xzs_breadcrumb(0xD740, 0x03); xzs_early_puts("[XZS-D7T1] D740/X03 pre-USB snapshot reached\n");
 	xzs_breadcrumb(0xD740, 0x10);
 	xzs_breadcrumb(0xD740, 0x11); /* INTID 163 route exists, source remains masked */
 	xzs_breadcrumb(0xD740, 0x12); /* synthetic parser paths are bounded/no live events */
