@@ -2037,8 +2037,6 @@ xzs_usb_t1z_service(void)
 static void
 xzs_t1z_put_hex(uint64_t value)
 {
-	/* Hardware-tested Z1–Z4 image printed this extra prefix. Kept in this commit only. */
-	xzs_early_puts("0x");
 	xzs_d6m4_put_hex64(value);
 	xzs_early_puts("\n");
 }
