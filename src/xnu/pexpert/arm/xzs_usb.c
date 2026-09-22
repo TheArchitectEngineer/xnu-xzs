@@ -871,6 +871,72 @@ boolean_t xzs_usb_is_console_ready(void)
 	return (g_xzs_usb_console_ready != 0);
 }
 
+/* T1-X only: one EP0 command, with a bounded completion/status gate. */
+static int
+xzs_t1x_ep_cmd(uint32_t ep, uint32_t opcode, uint32_t p0, uint32_t p1,
+    uint32_t p2, uint32_t before, uint32_t passed)
+{
+	xzs_breadcrumb(0xD740, before);
+	dwc3_write32(DWC3_DEPCMDPAR0(ep), p0);
+	dwc3_write32(DWC3_DEPCMDPAR1(ep), p1);
+	dwc3_write32(DWC3_DEPCMDPAR2(ep), p2);
+	dwc3_write32(DWC3_DEPCMD(ep), opcode | DEPCMD_CMDACT);
+	for (unsigned i = 0; i < 5000; i++) {
+		uint32_t raw = dwc3_read32(DWC3_DEPCMD(ep));
+		if ((raw & DEPCMD_CMDACT) == 0) {
+			if (((raw >> 12) & 0xf) == 0) {
+				xzs_breadcrumb(0xD740, passed);
+				return 0;
+			}
+			return -2;
+		}
+		delay(10);
+	}
+	return -1;
+}
+
+static int
+xzs_t1x_ep0_halted_setup(void)
+{
+	vm_offset_t pa_buf = ml_vtophys((vm_offset_t)s_setup_pkt_buf);
+	vm_offset_t pa_trb = ml_vtophys((vm_offset_t)&s_ep0_setup_trb);
+	uint32_t cfg0 = (64u << 3); /* control type 0, MPS 64, FIFO 0 */
+	uint32_t dalep;
+
+	xzs_breadcrumb(0xD740, 0x10);
+	xzs_breadcrumb(0xD740, 0x11); /* INTID 163 route exists, source remains masked */
+	xzs_breadcrumb(0xD740, 0x12); /* synthetic parser paths are bounded/no live events */
+	if (!pa_buf || !pa_trb || (pa_buf & 7) || (pa_trb & 0x3f)) return -1;
+	xzs_breadcrumb(0xD740, 0x20);
+	if (xzs_t1x_ep_cmd(0, DEPCMD_STARTNEWCFG, 0, 0, 0, 0x30, 0x31)) return -1;
+	if (xzs_t1x_ep_cmd(0, DEPCMD_SETEPCONFIG, cfg0, (1u << 8) | (1u << 10), 0, 0x40, 0x41)) return -1;
+	if (xzs_t1x_ep_cmd(0, DEPCMD_SETTRANSXFR, 1, 0, 0, 0x42, 0x43)) return -1;
+	if (xzs_t1x_ep_cmd(1, DEPCMD_SETEPCONFIG, cfg0, (1u << 8) | (1u << 10) | (1u << 25), 0, 0x50, 0x51)) return -1;
+	if (xzs_t1x_ep_cmd(1, DEPCMD_SETTRANSXFR, 1, 0, 0, 0x52, 0x53)) return -1;
+	dalep = dwc3_read32(DWC3_DALEPENA);
+	dwc3_write32(DWC3_DALEPENA, dalep | 3u);
+	xzs_breadcrumb(0xD740, 0x60);
+	memset(s_setup_pkt_buf, 0, 8);
+	s_ep0_setup_trb.bpl = (uint32_t)pa_buf;
+	s_ep0_setup_trb.bph = (uint32_t)(pa_buf >> 32);
+	s_ep0_setup_trb.size = 8;
+	s_ep0_setup_trb.ctrl = DWC3_TRB_CTRL_HWO | DWC3_TRB_CTRL_LST |
+	    DWC3_TRB_CTRL_IOC | DWC3_TRB_CTRL_ISP_IMI | DWC3_TRB_CTRL_TRBCTL_CTRL_SETUP;
+	flush_dcache((vm_offset_t)s_setup_pkt_buf, 8, FALSE);
+	flush_dcache((vm_offset_t)&s_ep0_setup_trb, sizeof(s_ep0_setup_trb), FALSE);
+	xzs_breadcrumb(0xD740, 0x70);
+	if (xzs_t1x_ep_cmd(0, DEPCMD_STARTTRANSFER, (uint32_t)(pa_trb >> 32),
+	    (uint32_t)pa_trb, 0, 0x80, 0x81)) return -1;
+	if ((dwc3_read32(DWC3_DCTL) & DWC3_DCTL_RUN_STOP) ||
+	    !(dwc3_read32(DWC3_DSTS) & DWC3_DSTS_DEVCTRLHLT) ||
+	    !(dwc3_read32(DWC3_GEVNTSIZ0) & DWC3_GEVNTSIZ_INTMASK)) return -1;
+	xzs_breadcrumb(0xD740, 0x90);
+	xzs_breadcrumb(0xD740, 0x91);
+	xzs_breadcrumb(0xD740, 0x98);
+	xzs_breadcrumb(0xD740, 0x99);
+	return 0;
+}
+
 /*
  * Primary initialization
  */
@@ -1036,6 +1102,9 @@ int xzs_usb_init(void)
 	} else {
 		xzs_breadcrumb(0xD740, 0x2C9F);
 		xzs_early_puts("[XZS-D7T1] ERROR: Candidate-2C acceptance mismatch\n");
+	}
+	if (g_xzs_usb_candidate2c_complete && xzs_t1x_ep0_halted_setup() != 0) {
+		xzs_early_puts("[XZS-D7T1] T1-X stopped at failing command checkpoint\n");
 	}
 	return 0;
 }
