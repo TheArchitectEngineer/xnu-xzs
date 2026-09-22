@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Host-side Z1–Z4 evidence. Does not certify a shell or seal D7-T1."""
+"""Host-side Z1–Z4 evidence. Does not certify EL0 consumption or seal D7-T1."""
 
 import importlib.util
 import sys
@@ -10,6 +10,54 @@ _TOOL = Path(__file__).resolve().parents[1] / "tools" / "xzs-console" / "xzs-con
 _spec = importlib.util.spec_from_file_location("xzs_console", _TOOL)
 xzs_console = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(xzs_console)
+
+_LIVE_FIELDS = (
+    "HOST_PRE_SEND_PROMPT_OBSERVED",
+    "HOST_SENT_ABC_LF",
+    "HOST_POST_READ_PROMPT_OBSERVED",
+    "HOST_TO_TARGET_TRANSFER_OBSERVED",
+    "TARGET_TO_HOST_TRANSFER_OBSERVED",
+    "TARGET_SIDE_READ_PROOF_AVAILABLE",
+    "LIVE_BIDIRECTIONAL_TRANSPORT_HOST_ONLY",
+    "FULL_EL0_BIDIRECTIONAL_ACCEPTANCE",
+)
+
+
+def evaluate_live_exchange(
+    pre_send_prompt_observed,
+    payload_sent,
+    post_send_prompt_observed,
+    device_present,
+):
+    """Classify the ABC / post-read prompt exchange.
+
+    A missed pre-send prompt does not fail host bidirectional transport.
+    Host bytes do not prove the target EL0 read.
+    """
+    if not device_present:
+        result = {key: "no" for key in _LIVE_FIELDS}
+        result["FULL_EL0_BIDIRECTIONAL_ACCEPTANCE"] = "requires_target_evidence"
+        result["transport_ok"] = False
+        return result
+
+    host_to_target = bool(payload_sent)
+    target_to_host = bool(post_send_prompt_observed)
+    result = {
+        "HOST_PRE_SEND_PROMPT_OBSERVED": "yes" if pre_send_prompt_observed else "no",
+        "HOST_SENT_ABC_LF": "yes" if payload_sent else "no",
+        "HOST_POST_READ_PROMPT_OBSERVED": "yes" if post_send_prompt_observed else "no",
+        "HOST_TO_TARGET_TRANSFER_OBSERVED": "yes" if host_to_target else "no",
+        "TARGET_TO_HOST_TRANSFER_OBSERVED": "yes" if target_to_host else "no",
+        "TARGET_SIDE_READ_PROOF_AVAILABLE": "no",
+        "LIVE_BIDIRECTIONAL_TRANSPORT_HOST_ONLY": "yes" if host_to_target and target_to_host else "no",
+        "FULL_EL0_BIDIRECTIONAL_ACCEPTANCE": "requires_target_evidence",
+        "transport_ok": host_to_target and target_to_host,
+    }
+    return result
+
+
+def format_live_exchange(result):
+    return "\n".join(f"{key}={result[key]}" for key in _LIVE_FIELDS)
 
 
 def main() -> int:
@@ -26,6 +74,7 @@ def main() -> int:
         print("HOST_LOOPBACK_EXACT_MATCH=no")
         print("HOST_LIVE_SHELL_PROMPT_OBSERVED=no")
         print("HOST_LIVE_INTERACTIVE_COMMAND_WORKING=no")
+        print(format_live_exchange(evaluate_live_exchange(False, False, False, False)))
         return 1
 
     try:
@@ -76,7 +125,6 @@ def main() -> int:
             time.sleep(0.2)
     print("HOST_LIVE_SHELL_PROMPT_OBSERVED=" + ("yes" if prompt else "no"))
     sent = xzs_console.test_bulk_out(dev, payload=b"ABC\n", timeout_ms=2000)
-    print("HOST_SENT_ABC_LF=" + ("yes" if sent else "no"))
     after = b""
     deadline = time.time() + 20
     while time.time() < deadline and b"xzs#" not in after:
@@ -85,14 +133,16 @@ def main() -> int:
             after += chunk
         else:
             time.sleep(0.2)
-    print("EL0_TO_HOST_OUTPUT_WORKING=" + ("yes" if b"xzs#" in after else "no"))
+    live = evaluate_live_exchange(prompt, bool(sent), b"xzs#" in after, True)
+    print(format_live_exchange(live))
+    print("EL0_TO_HOST_OUTPUT_WORKING=" + live["HOST_POST_READ_PROMPT_OBSERVED"])
     print("HOST_TO_EL0_INPUT_WORKING=see_target_el0_read")
-    print("LIVE_BIDIRECTIONAL_TRANSPORT=" + ("yes" if prompt and sent and b"xzs#" in after else "no"))
     print("HOST_INTERACTIVE_TEST_COMMAND_1=none")
     print("HOST_INTERACTIVE_TEST_COMMAND_2=none")
     print("AVAILABLE_SHELL_COMMANDS=none")
     print("D7_T1_SEALED=not_declared_by_host")
-    return 0 if out_ok and in_data == expected_in and loop_ok and prompt and sent and b"xzs#" in after else 1
+    z_ok = out_ok and in_data == expected_in and loop_ok
+    return 0 if z_ok and live["transport_ok"] else 1
 
 
 if __name__ == "__main__":
