@@ -2333,12 +2333,12 @@ xzs_d5m2_r6_verify(dev_t root_dev, const char *root_name)
 	xzs_early_puts(" (expected: 0x1ed / 0755)\n");
 	xzs_early_puts("  SECTOR1_CRC32:                           0x");
 	xzs_early_puthex64((uint64_t)sec1_crc);
-	xzs_early_puts(" (expected: 0x514f5867)\n");
+	xzs_early_puts(" (expected: 0x811ff249)\n");
 
 	buf_brelse(bp1);
 	bp1 = NULL;
 
-	if (root_obj_id != 1 || root_parent_id != 1 || root_type != 1 || sec1_crc != 0x514f5867) {
+	if (root_obj_id != 1 || root_parent_id != 1 || root_type != 1 || sec1_crc != 0x811ff249) {
 		xzs_early_puts("[XZS-RAMDISK] FATAL: Sector 1 root object invariant mismatch!\n");
 		xzs_breadcrumb(0xD510, 0xEF);
 		xzs_spin_halt();
@@ -2519,12 +2519,12 @@ xzs_d5m2_r7_verify(dev_t root_dev, const char *root_name)
 	xzs_early_puts(" (expected: 0x1ed / 0755)\n");
 	xzs_early_puts("  SECTOR1_CRC32:                           0x");
 	xzs_early_puthex64((uint64_t)sec1_crc);
-	xzs_early_puts(" (expected: 0x514f5867)\n");
+	xzs_early_puts(" (expected: 0x811ff249)\n");
 
 	buf_brelse(bp1);
 	bp1 = NULL;
 
-	if (root_obj_id != 1 || root_parent_id != 1 || root_type != 1 || sec1_crc != 0x514f5867) {
+	if (root_obj_id != 1 || root_parent_id != 1 || root_type != 1 || sec1_crc != 0x811ff249) {
 		xzs_early_puts("[XZS-RAMDISK] FATAL: Sector 1 root object invariant mismatch!\n");
 		xzs_breadcrumb(0xD510, 0xEF);
 		xzs_spin_halt();
@@ -2786,12 +2786,12 @@ xzs_d5m2_r8_seal(dev_t root_dev, const char *root_name)
 	xzs_early_puts(" (expected: 0x1ed / 0755)\n");
 	xzs_early_puts("  SECTOR1_CRC32:                           0x");
 	xzs_early_puthex64((uint64_t)sec1_crc);
-	xzs_early_puts(" (expected: 0x514f5867)\n");
+	xzs_early_puts(" (expected: 0x811ff249)\n");
 
 	buf_brelse(bp1);
 	bp1 = NULL;
 
-	if (root_obj_id != 1 || root_parent_id != 1 || root_type != 1 || sec1_crc != 0x514f5867) {
+	if (root_obj_id != 1 || root_parent_id != 1 || root_type != 1 || sec1_crc != 0x811ff249) {
 		xzs_early_puts("[XZS-RAMDISK] FATAL: Sector 1 root object invariant mismatch!\n");
 		xzs_breadcrumb(0xD510, 0xEF);
 		xzs_spin_halt();
