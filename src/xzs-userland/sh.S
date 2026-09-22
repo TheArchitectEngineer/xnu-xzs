@@ -147,11 +147,60 @@ _d7m4_read_start:
     // A second native syscall proves continued EL0 execution after read().
     mov     x16, #20           // SYS_getpid
     svc     #0x80
-1:
-    b       1b
+    b       _d7t1_live
 
 2:
     mov     x16, #20           // deterministic failure-side liveness marker
     svc     #0x80
 3:
     b       3b
+
+// After the sealed D7-M4 read, wait, reprint the prompt, then block in read
+// again so a USB-delivered "ABC\n" can arrive through the native tty path.
+.p2align 4
+.globl _d7t1_live
+_d7t1_live:
+    mov     x19, xzr
+1:
+    mov     x16, #20           // SYS_getpid
+    svc     #0x80
+    add     x19, x19, #1
+    mov     x20, #0x20000
+    cmp     x19, x20
+    b.lo    1b
+    mov     x19, xzr
+2:
+    mov     x0, #1
+    adr     x1, prompt
+    mov     x2, #5
+    mov     x16, #4            // SYS_write
+    svc     #0x80
+    add     x19, x19, #1
+    cmp     x19, #32
+    b.lo    2b
+    sub     sp, sp, #16
+    mov     x0, #0
+    mov     x1, sp
+    mov     x2, #16
+    mov     x16, #3            // SYS_read
+    svc     #0x80
+    cmp     x0, #4
+    b.ne    9f
+    ldr     w3, [sp]
+    movz    w4, #0x4241
+    movk    w4, #0x0a43, lsl #16
+    cmp     w3, w4
+    b.ne    9f
+    mov     x0, #1
+    adr     x1, prompt
+    mov     x2, #5
+    mov     x16, #4
+    svc     #0x80
+8:
+    mov     x16, #20
+    svc     #0x80
+    b       8b
+9:
+    mov     x16, #20
+    svc     #0x80
+    b       9b

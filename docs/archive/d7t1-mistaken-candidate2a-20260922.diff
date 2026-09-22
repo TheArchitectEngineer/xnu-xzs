@@ -1,0 +1,160 @@
+diff --git a/docs/D7_T1_CANDIDATE2A_REPORT.md b/docs/D7_T1_CANDIDATE2A_REPORT.md
+index 84b3f18..13bdf42 100644
+--- a/docs/D7_T1_CANDIDATE2A_REPORT.md
++++ b/docs/D7_T1_CANDIDATE2A_REPORT.md
+@@ -15,6 +15,8 @@
+ 
+ This candidate was booted only with `fastboot boot`. Neither kernel, system nor recovery partitions were flashed. The recovery image was not modified.
+ 
++The snapshot below is that boot. Later commits on this branch, including Candidate-2B, Candidate-2C, and the tty bridge, are outside this review and were not booted again. On 2026-09-22, TWRP `devmem` still cannot open `/dev/mem`, so no second MMIO read was taken.
++
+ ## Result
+ 
+ **HARDWARE VERIFIED — PASS.** The read-only code path completed all six Candidate-2A checkpoints, returned through the normal boot path, and preserved the D6, D7-M2, D7-M3 and D7-M4 regression prefix.
+@@ -87,8 +89,39 @@ The shell again reached `D720/91`; the sealed UARTDM native stdin pipeline reach
+ 
+ **SOURCE-AUDITED LIMITATION.** TWRP was booted only as a transient recovery path. Its `devmem` binary is present, but `/dev/mem` is absent, so a recovery-side MMIO snapshot was not available. No recovery MMIO read was performed and recovery was not patched.
+ 
++## Corrected decode
++
++`DCFG=0x0008080c` is `DEVSPD=4` (SuperSpeed configuration), `DEVADDR=1`, `NUMP=4`. It is not a High-Speed device configuration.
++
++`DSTS=0x00d38f74` is `CONNECTSPD=4`, `USBLNKST=4` (`SS.Disabled`), `DEVCTRLHLT=1`, `COREIDLE=1`. This is a halted device controller, not an active HS/FS link. A nonzero `SOFFN` field is not evidence of live SOF traffic while the controller is halted.
++
++`DCTL=0x00f00000` has `RUN_STOP=0`.
++
++`DEVTEN=0x47` sets bits 0, 1, 2, and 6. Bit 3 (`ULSTCNGEN` / link-state change) is clear, so link-state events are not enabled. `OSTS=0`.
++
++`QSCRATCH_HS_PHY_CTRL=0x10100000` has both `UTMI_OTG_VBUS_VALID` (bit 20) and `SW_SESSVLD_SEL` (bit 28) set. `QUSB2` `PORT_POWERDOWN` low byte `0x22` has `POWER_DOWN=0`, `PLL_STATUS` low byte `0x20` has `PLL_LOCKED=1`, and `GCC_QUSB2PHY_PRIM_BCR=0`.
++
+ ## Interpretation and next candidate
+ 
+-**INFERENCE/HYPOTHESIS.** The measured QUSB2 session-valid bits, PLL lock and non-powered-down state make a dead or unpowered QUSB2 PHY less likely than before; they do not prove cable ownership, host enumeration, endpoint correctness, or a root cause. `DCTL.RUN_STOP=0` and `DSTS.DEVCTRLHLT=1` show that the inherited DWC3 device controller is halted at the time of the snapshot.
++```text
++D7T1_PRIMARY_HYPOTHESIS=QUALCOMM_WRAPPER_QUSB2_PHY_SESSION_OWNERSHIP
++D7T1_ROOT_CAUSE_PROVEN=no
++```
++
++The failed pre-Candidate-1 command log reached the EP0 command path without an exception, a host bus-reset/connect event, or enumeration. That does not uniquely identify QUSB2 power/clock/reset, QSCRATCH session-valid state, DWC3 `RUN_STOP`, the inherited SuperSpeed `DCFG`, EP0 completion decoding, or event-buffer configuration. `ROOT_CAUSE=PHY_OWNERSHIP_PROVEN` is not recorded.
++
++Candidate-2A narrows the first two of those alternatives for this snapshot: the QUSB2 PHY is powered and PLL-locked, and both peripheral-session bits are already set. It does not prove that those bits reflect a real cable session.
++
++**Known-good reference.** On 2026-09-22 the phone was in TWRP with ADB up. `/sbin/devmem` is present and fails with `can't open '/dev/mem'`. No recovery patch was applied. Register meanings are taken from the audited Sony CAF / Linux MSM8996 DWC3 glue, QUSB2 PHY, and Tone DT.
++
++```text
++KNOWN_GOOD_USB_REFERENCE_SOURCE=SONY_CAF_DRIVER_REFERENCE
++```
++
++**Decision gate, not executed.** Case A would require the PHY powered and PLL-locked while `UTMI_OTG_VBUS_VALID` and `SW_SESSVLD_SEL` are absent. Both bits are set, so Case A is not met. Case B would require the PHY powered down or the PLL unlocked. The PHY is powered and the PLL lock bit is set, so Case B is not met. Neither authorized mutation applies.
++
++```text
++RECOMMENDED_CANDIDATE2B=CASE_C
++```
+ 
+-**Recommended Candidate-2B — do not execute automatically:** source-audit a DWC3-only, minimal device-takeover sequence starting from this frozen snapshot. It must retain the exact QSCRATCH, QUSB2 and GCC values as a before/after oracle; avoid PHY clocks, resets and wrapper writes; and separately prove each controlled DWC3 transition before endpoint or DMA work. Candidate-2A is complete evidence collection only, not enumeration.
++No QSCRATCH, QUSB2, DWC3, event-buffer, EP0, or `RUN_STOP` write is authorized from this snapshot. SuperSpeed and the QMP USB3 PHY stay out of scope. DCFG conversion to High-Speed is not part of Candidate-2A.
+diff --git a/src/xnu/pexpert/arm/xzs_usb.c b/src/xnu/pexpert/arm/xzs_usb.c
+index 228613f..ae171f2 100644
+--- a/src/xnu/pexpert/arm/xzs_usb.c
++++ b/src/xnu/pexpert/arm/xzs_usb.c
+@@ -393,6 +393,11 @@ static const uint8_t s_device_qualifier_descriptor[10] = {
+ /* Reset and configure physical endpoints */
+ static void dwc3_configure_endpoints(void)
+ {
++	/*
++	 * Historical rc prints below copied DEPCMD[3:0]. That nibble is the
++	 * opcode (9/1/2), not DEPCMD.STATUS in bits [15:12]. This block stays
++	 * excluded from the image.
++	 */
+ 	xzs_early_puts("[XZS-USB] DEPSTARTCFG on EP0\n");
+ 	int rc = dwc3_ep_cmd(DWC3_PHYS_EP_CTRL_OUT, DEPCMD_STARTNEWCFG, 0, 0, 0);
+ 	xzs_early_puts("[XZS-USB] DEPSTARTCFG rc="); xzs_d6m4_put_hex64(rc); xzs_early_puts("\n");
+@@ -1038,11 +1043,45 @@ static volatile enum xzs_t1y_completion s_t1y_completion = XZS_T1Y_COMPLETE_NONE
+ static volatile boolean_t s_t1y_ep0_setup_armed = FALSE;
+ static volatile boolean_t s_t1y_three_stage = FALSE;
+ 
++/*
++ * DEPCMD bits [3:0] stay equal to the opcode after CMDACT clears.
++ * Completion status is bits [15:12]. A zero low nibble is not success.
++ */
++static void
++xzs_depcmd_emit(uint32_t opcode, uint32_t raw_before, uint32_t raw_after,
++    int completed)
++{
++	uint32_t cmdact = (raw_after & DEPCMD_CMDACT) ? 1u : 0u;
++
++	xzs_early_puts("DEPCMD_RAW_BEFORE=");
++	xzs_d6m4_put_hex64(raw_before);
++	xzs_early_puts("\nDEPCMD_RAW_AFTER=");
++	xzs_d6m4_put_hex64(raw_after);
++	xzs_early_puts("\nDEPCMD_OPCODE=");
++	xzs_d6m4_put_hex64(opcode & 0x0fu);
++	xzs_early_puts("\nDEPCMD_CMDACT_AFTER=");
++	xzs_d6m4_put_hex64(cmdact);
++	xzs_early_puts("\nDEPCMD_STATUS=");
++	if (completed && cmdact == 0) {
++		xzs_d6m4_put_hex64(DEPCMD_STATUS(raw_after));
++		xzs_early_puts("\n");
++	} else {
++		xzs_early_puts("UNAVAILABLE\n");
++	}
++	if ((opcode & 0x0fu) == DEPCMD_STARTTRANSFER && completed && cmdact == 0) {
++		xzs_early_puts("TRANSFER_RESOURCE_INDEX=");
++		xzs_d6m4_put_hex64(DEPCMD_RESOURCE_INDEX(raw_after));
++		xzs_early_puts("\n");
++	}
++}
++
+ /* T1-X only: one EP0 command, with a bounded completion/status gate. */
+ static int
+ xzs_t1x_ep_cmd(uint32_t ep, uint32_t opcode, uint32_t p0, uint32_t p1,
+     uint32_t p2, uint32_t before, uint32_t passed)
+ {
++	uint32_t raw_before = dwc3_read32(DWC3_DEPCMD(ep));
++
+ 	xzs_breadcrumb(0xD740, before);
+ 	xzs_early_puts("[XZS-D7T1] D740/X command BEFORE\n");
+ 	dwc3_write32(DWC3_DEPCMDPAR0(ep), p0);
+@@ -1052,7 +1091,8 @@ xzs_t1x_ep_cmd(uint32_t ep, uint32_t opcode, uint32_t p0, uint32_t p1,
+ 	for (unsigned i = 0; i < 5000; i++) {
+ 		uint32_t raw = dwc3_read32(DWC3_DEPCMD(ep));
+ 		if ((raw & DEPCMD_CMDACT) == 0) {
+-			if (((raw >> 12) & 0xf) == 0) {
++			xzs_depcmd_emit(opcode, raw_before, raw, 1);
++			if (DEPCMD_STATUS(raw) == 0) {
+ 				xzs_breadcrumb(0xD740, passed);
+ 				xzs_early_puts("[XZS-D7T1] D740/X command PASS\n");
+ 				return 0;
+@@ -1061,6 +1101,7 @@ xzs_t1x_ep_cmd(uint32_t ep, uint32_t opcode, uint32_t p0, uint32_t p1,
+ 		}
+ 		delay(10);
+ 	}
++	xzs_depcmd_emit(opcode, raw_before, dwc3_read32(DWC3_DEPCMD(ep)), 0);
+ 	return -1;
+ }
+ 
+@@ -1121,6 +1162,8 @@ static int
+ xzs_t1y_ep_cmd(uint32_t ep, uint32_t opcode, uint32_t p0, uint32_t p1,
+     uint32_t p2, uint32_t *completed)
+ {
++	uint32_t raw_before = dwc3_read32(DWC3_DEPCMD(ep));
++
+ 	xzs_early_puts("[XZS-D7T1] D740/Y BEFORE endpoint command\n");
+ 	dwc3_write32(DWC3_DEPCMDPAR0(ep), p0);
+ 	dwc3_write32(DWC3_DEPCMDPAR1(ep), p1);
+@@ -1130,6 +1173,7 @@ xzs_t1y_ep_cmd(uint32_t ep, uint32_t opcode, uint32_t p0, uint32_t p1,
+ 	for (unsigned i = 0; i < 5000; i++) {
+ 		uint32_t raw = dwc3_read32(DWC3_DEPCMD(ep));
+ 		if ((raw & DEPCMD_CMDACT) == 0) {
++			xzs_depcmd_emit(opcode, raw_before, raw, 1);
+ 			if (completed != NULL) {
+ 				*completed = raw;
+ 			}
+@@ -1143,6 +1187,7 @@ xzs_t1y_ep_cmd(uint32_t ep, uint32_t opcode, uint32_t p0, uint32_t p1,
+ 		delay(10);
+ 	}
+ 
++	xzs_depcmd_emit(opcode, raw_before, dwc3_read32(DWC3_DEPCMD(ep)), 0);
+ 	g_xzs_usb_t1y_ep_cmd_failures++;
+ 	return -1;
+ }

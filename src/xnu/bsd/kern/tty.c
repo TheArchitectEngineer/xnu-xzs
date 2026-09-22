@@ -2292,6 +2292,16 @@ sleep: ;
 			xzs_d7m4_read_blocked = 1;
 			__asm__ volatile("dmb ish" ::: "memory");
 		}
+		{
+			extern volatile int xzs_d7t1_read_entered;
+			extern volatile int xzs_d7t1_read_returned;
+			extern volatile int xzs_d7t1_read_blocked;
+			if (xzs_d7t1_read_entered && !xzs_d7t1_read_returned &&
+			    p != PROC_NULL && proc_getpid(p) == 1) {
+				xzs_d7t1_read_blocked = 1;
+				__asm__ volatile("dmb ish" ::: "memory");
+			}
+		}
 #endif
 		error = ttysleep(tp, TSA_HUP_OR_INPUT(tp), TTIPRI | PCATCH,
 		    ISSET(tp->t_state, TS_CONNECTED) ?
@@ -2301,6 +2311,15 @@ sleep: ;
 		    p != PROC_NULL && proc_getpid(p) == 1) {
 			xzs_d7m4_read_awakened = 1;
 			__asm__ volatile("dmb ish" ::: "memory");
+		}
+		{
+			extern volatile int xzs_d7t1_read_blocked;
+			extern volatile int xzs_d7t1_read_awakened;
+			if (xzs_d7t1_read_blocked && error == 0 &&
+			    p != PROC_NULL && proc_getpid(p) == 1) {
+				xzs_d7t1_read_awakened = 1;
+				__asm__ volatile("dmb ish" ::: "memory");
+			}
 		}
 #endif
 		if (error == EWOULDBLOCK) {
