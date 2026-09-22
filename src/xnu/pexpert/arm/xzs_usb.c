@@ -139,7 +139,19 @@ volatile uint32_t g_xzs_usb_t1y_word_before_sync_0 = 0;
 volatile uint32_t g_xzs_usb_t1y_word_before_sync_1 = 0;
 volatile uint32_t g_xzs_usb_t1y_word_after_sync_0 = 0;
 volatile uint32_t g_xzs_usb_t1y_word_after_sync_1 = 0;
+volatile uint32_t g_xzs_usb_t1y_word_uncached_0 = 0;
+volatile uint32_t g_xzs_usb_t1y_word_uncached_1 = 0;
+volatile uint32_t g_xzs_usb_t1y_word_fb_0 = 0;
+volatile uint32_t g_xzs_usb_t1y_word_fb_1 = 0;
+volatile int32_t  g_xzs_usb_t1y_modified_slot_idx = -1;
+volatile uint32_t g_xzs_usb_t1y_modified_slot_val = 0;
+volatile int32_t  g_xzs_usb_t1y_fb_modified_idx = -1;
+volatile uint32_t g_xzs_usb_t1y_fb_modified_val = 0;
 volatile uint32_t g_xzs_usb_t1y_gevntcount_raw = 0;
+
+static volatile uint32_t *s_uncached_event_buf = NULL;
+static volatile uint32_t *s_fb_event_buf = NULL;
+static uint32_t s_fb_initial_words[4] = {0};
 
 /* Virtual MMIO bases */
 static vm_offset_t s_dwc3_base = 0;
@@ -1332,15 +1344,6 @@ xzs_t1y_drain_event_buffer(void)
 		uint32_t gevntadrhi = dwc3_read32(DWC3_GEVNTADR_HI0);
 		uint64_t gevntadr_comb = ((uint64_t)gevntadrhi << 32) | gevntadrlo;
 
-		xzs_early_puts("\n[XZS-D7T1] === DMA VISIBILITY BEFORE/AFTER SYNC ===\n");
-		xzs_early_puts("EVENT_BUFFER_VA=0x"); xzs_d6m4_put_hex64((uint64_t)(vm_offset_t)s_candidate2c_event_buffer); xzs_early_puts("\n");
-		xzs_early_puts("EVENT_BUFFER_PA=0x"); xzs_d6m4_put_hex64(ml_vtophys((vm_offset_t)s_candidate2c_event_buffer)); xzs_early_puts("\n");
-		xzs_early_puts("GEVNTADR_COMBINED=0x"); xzs_d6m4_put_hex64(gevntadr_comb); xzs_early_puts("\n");
-		xzs_early_puts("EVENT_LPOS=0x"); xzs_d6m4_put_hex64(s_t1y_event_buf_pos); xzs_early_puts("\n");
-		xzs_early_puts("GEVNTCOUNT=0x"); xzs_d6m4_put_hex64(count); xzs_early_puts("\n");
-		xzs_early_puts("WORD_BEFORE_SYNC_0=0x"); xzs_d6m4_put_hex64(w_before0); xzs_early_puts("\n");
-		xzs_early_puts("WORD_BEFORE_SYNC_1=0x"); xzs_d6m4_put_hex64(w_before1); xzs_early_puts("\n");
-
 		/* Invalidate the event buffer from CPU cache to PoC */
 		xzs_dma_clean_invalidate((vm_offset_t)s_candidate2c_event_buffer, XZS_DWC3_EVENT_BUFFER_SIZE);
 
@@ -1349,8 +1352,70 @@ xzs_t1y_drain_event_buffer(void)
 		g_xzs_usb_t1y_word_after_sync_0 = w_after0;
 		g_xzs_usb_t1y_word_after_sync_1 = w_after1;
 
+		uint32_t w_uncached0 = 0, w_uncached1 = 0;
+		if (s_uncached_event_buf != NULL) {
+			w_uncached0 = s_uncached_event_buf[s_t1y_event_buf_pos / sizeof(uint32_t)];
+			w_uncached1 = s_uncached_event_buf[((s_t1y_event_buf_pos + 4) % XZS_DWC3_EVENT_BUFFER_SIZE) / sizeof(uint32_t)];
+		}
+		g_xzs_usb_t1y_word_uncached_0 = w_uncached0;
+		g_xzs_usb_t1y_word_uncached_1 = w_uncached1;
+
+		uint32_t w_fb0 = 0, w_fb1 = 0;
+		if (s_fb_event_buf != NULL) {
+			w_fb0 = s_fb_event_buf[s_t1y_event_buf_pos / sizeof(uint32_t)];
+			w_fb1 = s_fb_event_buf[((s_t1y_event_buf_pos + 4) % XZS_DWC3_EVENT_BUFFER_SIZE) / sizeof(uint32_t)];
+		}
+		g_xzs_usb_t1y_word_fb_0 = w_fb0;
+		g_xzs_usb_t1y_word_fb_1 = w_fb1;
+
+		int32_t mod_idx = -1;
+		uint32_t mod_val = 0;
+		if (s_uncached_event_buf != NULL) {
+			for (uint32_t i = 0; i < (XZS_DWC3_EVENT_BUFFER_SIZE / sizeof(uint32_t)); i++) {
+				uint32_t expected = 0xA5A50000u | i;
+				if (s_uncached_event_buf[i] != expected) {
+					mod_idx = (int32_t)i;
+					mod_val = s_uncached_event_buf[i];
+					break;
+				}
+			}
+		}
+		g_xzs_usb_t1y_modified_slot_idx = mod_idx;
+		g_xzs_usb_t1y_modified_slot_val = mod_val;
+
+		int32_t fb_mod_idx = -1;
+		uint32_t fb_mod_val = 0;
+		if (s_fb_event_buf != NULL) {
+			for (uint32_t i = 0; i < (XZS_DWC3_EVENT_BUFFER_SIZE / sizeof(uint32_t)); i++) {
+				uint32_t orig = (i < 4) ? s_fb_initial_words[i] : 0;
+				if (s_fb_event_buf[i] != orig) {
+					fb_mod_idx = (int32_t)i;
+					fb_mod_val = s_fb_event_buf[i];
+					break;
+				}
+			}
+		}
+		g_xzs_usb_t1y_fb_modified_idx = fb_mod_idx;
+		g_xzs_usb_t1y_fb_modified_val = fb_mod_val;
+
+		xzs_early_puts("\n[XZS-D7T1] === DMA VISIBILITY BEFORE/AFTER SYNC ===\n");
+		xzs_early_puts("EVENT_BUFFER_VA=0x"); xzs_d6m4_put_hex64((uint64_t)(vm_offset_t)s_candidate2c_event_buffer); xzs_early_puts("\n");
+		xzs_early_puts("EVENT_BUFFER_PA=0x"); xzs_d6m4_put_hex64(ml_vtophys((vm_offset_t)s_candidate2c_event_buffer)); xzs_early_puts("\n");
+		xzs_early_puts("GEVNTADR_COMBINED=0x"); xzs_d6m4_put_hex64(gevntadr_comb); xzs_early_puts("\n");
+		xzs_early_puts("EVENT_LPOS=0x"); xzs_d6m4_put_hex64(s_t1y_event_buf_pos); xzs_early_puts("\n");
+		xzs_early_puts("GEVNTCOUNT=0x"); xzs_d6m4_put_hex64(count); xzs_early_puts("\n");
+		xzs_early_puts("WORD_BEFORE_SYNC_0=0x"); xzs_d6m4_put_hex64(w_before0); xzs_early_puts("\n");
+		xzs_early_puts("WORD_BEFORE_SYNC_1=0x"); xzs_d6m4_put_hex64(w_before1); xzs_early_puts("\n");
 		xzs_early_puts("WORD_AFTER_SYNC_0=0x"); xzs_d6m4_put_hex64(w_after0); xzs_early_puts("\n");
 		xzs_early_puts("WORD_AFTER_SYNC_1=0x"); xzs_d6m4_put_hex64(w_after1); xzs_early_puts("\n");
+		xzs_early_puts("WORD_UNCACHED_0=0x"); xzs_d6m4_put_hex64(w_uncached0); xzs_early_puts("\n");
+		xzs_early_puts("WORD_UNCACHED_1=0x"); xzs_d6m4_put_hex64(w_uncached1); xzs_early_puts("\n");
+		xzs_early_puts("WORD_FB_EVBUF_0=0x"); xzs_d6m4_put_hex64(w_fb0); xzs_early_puts("\n");
+		xzs_early_puts("WORD_FB_EVBUF_1=0x"); xzs_d6m4_put_hex64(w_fb1); xzs_early_puts("\n");
+		xzs_early_puts("MODIFIED_SLOT_IDX=0x"); xzs_d6m4_put_hex64((uint64_t)(int64_t)mod_idx); xzs_early_puts("\n");
+		xzs_early_puts("MODIFIED_SLOT_VAL=0x"); xzs_d6m4_put_hex64(mod_val); xzs_early_puts("\n");
+		xzs_early_puts("FB_MODIFIED_IDX=0x"); xzs_d6m4_put_hex64((uint64_t)(int64_t)fb_mod_idx); xzs_early_puts("\n");
+		xzs_early_puts("FB_MODIFIED_VAL=0x"); xzs_d6m4_put_hex64(fb_mod_val); xzs_early_puts("\n");
 		xzs_early_puts("[XZS-D7T1] ========================================\n\n");
 	}
 
@@ -1362,13 +1427,22 @@ xzs_t1y_drain_event_buffer(void)
 		uint32_t next = (head + 1) % XZS_T1Y_EVENT_RING_ENTRIES;
 		uint32_t *slot;
 		uint32_t event;
+		uint32_t slot_idx = s_t1y_event_buf_pos / sizeof(uint32_t);
 		if (next == s_t1y_event_tail) {
 			g_xzs_usb_t1y_event_ring_drops++;
 			break;
 		}
-		slot = (uint32_t *)(void *)(s_candidate2c_event_buffer + s_t1y_event_buf_pos);
-		xzs_dma_clean_invalidate((vm_offset_t)slot, sizeof(*slot));
-		event = *slot;
+		if (s_uncached_event_buf != NULL &&
+		    s_uncached_event_buf[slot_idx] != (0xA5A50000u | slot_idx) &&
+		    s_uncached_event_buf[slot_idx] != 0) {
+			event = s_uncached_event_buf[slot_idx];
+		} else if (s_fb_event_buf != NULL && s_fb_event_buf[slot_idx] != 0) {
+			event = s_fb_event_buf[slot_idx];
+		} else {
+			slot = (uint32_t *)(void *)(s_candidate2c_event_buffer + s_t1y_event_buf_pos);
+			xzs_dma_clean_invalidate((vm_offset_t)slot, sizeof(*slot));
+			event = *slot;
+		}
 		s_t1y_event_ring[head] = event;
 		__asm__ volatile("dmb ish" ::: "memory");
 		s_t1y_event_head = next;
@@ -1377,8 +1451,10 @@ xzs_t1y_drain_event_buffer(void)
 		consumed_events++;
 		if (!g_xzs_usb_t1y_event_dma_working) {
 			g_xzs_usb_t1y_first_event = event;
-			g_xzs_usb_t1y_event_dma_working = 1;
-			xzs_breadcrumb(0xD740, 0x740);
+			g_xzs_usb_t1y_event_dma_working = (event != 0 && event != (0xA5A50000u | slot_idx));
+			if (g_xzs_usb_t1y_event_dma_working) {
+				xzs_breadcrumb(0xD740, 0x740);
+			}
 		}
 	}
 	if (consumed_events != 0) {
@@ -1577,8 +1653,33 @@ int xzs_usb_init(void)
 		xzs_early_puts("[XZS-D7T1] D740/2C40 normal boot continuing\n");
 		return -1;
 	}
-	memset(s_candidate2c_event_buffer, 0, sizeof(s_candidate2c_event_buffer));
+	for (uint32_t i = 0; i < (XZS_DWC3_EVENT_BUFFER_SIZE / sizeof(uint32_t)); i++) {
+		((uint32_t *)(void *)s_candidate2c_event_buffer)[i] = 0xA5A50000u | i;
+	}
 	xzs_dma_clean_invalidate(event_va, XZS_DWC3_EVENT_BUFFER_SIZE);
+	flush_dcache(event_va, XZS_DWC3_EVENT_BUFFER_SIZE, FALSE);
+
+	s_uncached_event_buf = (volatile uint32_t *)(void *)ml_io_map(event_pa, XZS_DWC3_EVENT_BUFFER_SIZE);
+	s_fb_event_buf = (volatile uint32_t *)(void *)ml_io_map(0xaa122000ULL, XZS_DWC3_EVENT_BUFFER_SIZE);
+	if (s_fb_event_buf != NULL) {
+		for (int i = 0; i < 4; i++) {
+			s_fb_initial_words[i] = s_fb_event_buf[i];
+		}
+	}
+	xzs_early_puts("[XZS-D7T1] UNCACHED_INIT_WORD0=0x");
+	if (s_uncached_event_buf != NULL) {
+		xzs_d6m4_put_hex64(s_uncached_event_buf[0]);
+	} else {
+		xzs_early_puts("NULL");
+	}
+	xzs_early_puts("\n");
+	xzs_early_puts("[XZS-D7T1] FB_INIT_WORD0=0x");
+	if (s_fb_event_buf != NULL) {
+		xzs_d6m4_put_hex64(s_fb_event_buf[0]);
+	} else {
+		xzs_early_puts("NULL");
+	}
+	xzs_early_puts("\n");
 	xzs_breadcrumb(0xD740, 0x2C10);
 	xzs_early_puts("[XZS-D7T1] D740/2C10 XNU event buffer allocated/reserved\n");
 	xzs_breadcrumb(0xD740, 0x2C11);
