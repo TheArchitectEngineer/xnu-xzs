@@ -75,6 +75,95 @@ xzs_diag_boot_args(void)
 	return (const boot_args *)PE_state.bootArgs;
 }
 
+/*
+ * Linux persistent_ram header. TWRP reads 0xa7f00000 as the first
+ * record and 0xa7fbe000 as the console record when its zones are
+ * 4 KiB dumps plus a 256 KiB console. Both addresses are inside the
+ * reserved 1 MiB region and outside the 88 MiB kernel window.
+ */
+#define XZS_PSTORE_SIG 0x43474244u
+#define XZS_PSTORE_CONSOLE 0xa7fbe000UL
+#define XZS_PSTORE_RECORD0 0xa7f00000UL
+
+extern uint64_t g_xzs_ttbr0;
+
+static void
+xzs_persist_hdr(volatile uint32_t *hdr, uint32_t *sig, uint32_t *size)
+{
+	if (sig != NULL) {
+		*sig = hdr[0];
+	}
+	if (size != NULL) {
+		*size = hdr[2];
+	}
+}
+
+static void
+xzs_persist_with_ttbr0(void (*fn)(void *), void *arg)
+{
+	uint64_t saved = 0;
+
+	__asm__ volatile("mrs %0, TTBR0_EL1" : "=r"(saved));
+	if (g_xzs_ttbr0 != 0) {
+		__asm__ volatile("msr TTBR0_EL1, %0; isb sy" :: "r"(g_xzs_ttbr0) : "memory");
+	}
+	fn(arg);
+	__asm__ volatile("dsb sy" ::: "memory");
+	if (g_xzs_ttbr0 != 0) {
+		__asm__ volatile("msr TTBR0_EL1, %0; isb sy" :: "r"(saved) : "memory");
+	}
+}
+
+static void
+xzs_persist_reset_fn(void *arg)
+{
+	volatile uint32_t *console = (volatile uint32_t *)XZS_PSTORE_CONSOLE;
+	volatile uint32_t *record0 = (volatile uint32_t *)XZS_PSTORE_RECORD0;
+
+	(void)arg;
+	console[0] = XZS_PSTORE_SIG;
+	console[1] = 0;
+	console[2] = 0;
+	record0[0] = XZS_PSTORE_SIG;
+	record0[1] = 0;
+	record0[2] = 0;
+}
+
+static uint32_t s_console_sig;
+static uint32_t s_console_size;
+static uint32_t s_record0_sig;
+static uint32_t s_record0_size;
+static int s_persist_armed;
+
+static void
+xzs_persist_read_fn(void *arg)
+{
+	(void)arg;
+	xzs_persist_hdr((volatile uint32_t *)XZS_PSTORE_CONSOLE,
+	    &s_console_sig, &s_console_size);
+	xzs_persist_hdr((volatile uint32_t *)XZS_PSTORE_RECORD0,
+	    &s_record0_sig, &s_record0_size);
+}
+
+static void
+xzs_persist_marker(void)
+{
+	if (s_persist_armed) {
+		return;
+	}
+	s_persist_armed = 1;
+	xzs_persist_with_ttbr0(xzs_persist_reset_fn, NULL);
+	xzs_diag_emit("[XZS-PSTORE] MAGIC=XZSP\n");
+	xzs_diag_emit("[XZS-PSTORE] VERSION=1\n");
+	xzs_diag_emit("[XZS-PSTORE] TEST=1122334455667788\n");
+	xzs_diag_emit("[XZS-PSTORE] CHECKPOINT=PERSIST_TEST\n");
+	xzs_persist_with_ttbr0(xzs_persist_read_fn, NULL);
+	xzs_diag_hex_line("[XZS-PSTORE] CONSOLE_SIG=", s_console_sig);
+	xzs_diag_hex_line("[XZS-PSTORE] CONSOLE_SIZE=", s_console_size);
+	xzs_diag_hex_line("[XZS-PSTORE] RECORD0_SIG=", s_record0_sig);
+	xzs_diag_hex_line("[XZS-PSTORE] RECORD0_SIZE=", s_record0_size);
+}
+
 static void
 xzs_display_dump_state(void)
 {
@@ -118,6 +207,7 @@ xzs_clock_dump_state(void)
 static void
 xzs_irq_dump_state(void)
 {
+	xzs_diag_emit("[XZS-DIAG] irq\n");
 	xzs_diag_emit("[XZS-D8M1] IRQ_AUDIT_ENTER\n");
 	xzs_diag_emit("[XZS-D8M1] usb_irq_class=TARGET\n");
 	xzs_diag_hex_line("[XZS-D8M1] usb_irq_count=", (uint64_t)g_xzs_usb_irq_count);
@@ -148,6 +238,7 @@ xzs_memory_dump_state(void)
 {
 	const boot_args *args = xzs_diag_boot_args();
 
+	xzs_diag_emit("[XZS-DIAG] mem\n");
 	xzs_diag_emit("[XZS-D8M1] MEM_AUDIT_ENTER\n");
 	xzs_diag_emit("[XZS-D8M1] class=TARGET\n");
 	if (args == NULL) {
@@ -165,6 +256,7 @@ xzs_memory_dump_state(void)
 void
 xzs_diag_dispatch(uint64_t which)
 {
+	xzs_persist_marker();
 	switch (which) {
 	case 1:
 		xzs_display_dump_state();

@@ -1795,6 +1795,7 @@ xzs_raw_tx:
 	add		x5, x5, w4, uxtw
 	strb	w0, [x5]
 	strb	wzr, [x5, #1]
+	dsb		sy
 	dc		cvac, x5
 	dc		cvac, x3
 7:
@@ -1821,6 +1822,7 @@ xzs_raw_tx:
 	strb	w0, [x5]
 	add		w4, w4, #1
 	str		w4, [x2, #8]
+	dsb		sy
 	dc		cvac, x5
 	dc		cvac, x2
 8:
@@ -1849,6 +1851,7 @@ xzs_raw_tx:
 	strb	w0, [x5]
 	add		w4, w4, #1
 	str		w4, [x2, #8]
+	dsb		sy
 	dc		cvac, x5
 	dc		cvac, x2
 9:
