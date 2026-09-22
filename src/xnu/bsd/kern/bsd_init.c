@@ -2738,12 +2738,12 @@ xzs_d5m2_r8_seal(dev_t root_dev, const char *root_name)
 	xzs_early_puts(" (expected: 0x5346535A 'XZSF')\n");
 	xzs_early_puts("  SECTOR0_RAW_CRC32:                       0x");
 	xzs_early_puthex64((uint64_t)sec0_crc);
-	xzs_early_puts(" (expected: 0x8c09cf6b)\n");
+	xzs_early_puts(" (expected: 0x5033373d)\n");
 
 	buf_brelse(bp0);
 	bp0 = NULL;
 
-	if (magic0 != 0x5346535A || ver0 != 1 || sec0_crc != 0x8c09cf6b) {
+	if (magic0 != 0x5346535A || ver0 != 1 || sec0_crc != 0x5033373d) {
 		xzs_early_puts("[XZS-RAMDISK] FATAL: Sector 0 validation failed!\n");
 		xzs_breadcrumb(0xD510, 0xED);
 		xzs_spin_halt();
@@ -2786,12 +2786,12 @@ xzs_d5m2_r8_seal(dev_t root_dev, const char *root_name)
 	xzs_early_puts(" (expected: 0x1ed / 0755)\n");
 	xzs_early_puts("  SECTOR1_CRC32:                           0x");
 	xzs_early_puthex64((uint64_t)sec1_crc);
-	xzs_early_puts(" (expected: 0x795ea47a)\n");
+	xzs_early_puts(" (expected: 0x4cfaea23)\n");
 
 	buf_brelse(bp1);
 	bp1 = NULL;
 
-	if (root_obj_id != 1 || root_parent_id != 1 || root_type != 1 || sec1_crc != 0x795ea47a) {
+	if (root_obj_id != 1 || root_parent_id != 1 || root_type != 1 || sec1_crc != 0x4cfaea23) {
 		xzs_early_puts("[XZS-RAMDISK] FATAL: Sector 1 root object invariant mismatch!\n");
 		xzs_breadcrumb(0xD510, 0xEF);
 		xzs_spin_halt();
@@ -2857,11 +2857,11 @@ xzs_d5m2_r8_seal(dev_t root_dev, const char *root_name)
 	xzs_early_puts("  70_SECTORS_READ_COMPLETE:                yes\n");
 	xzs_early_puts("  COMPUTED_LOGICAL_IMAGE_CRC32:            0x");
 	xzs_early_puthex64((uint64_t)full_img_crc);
-	xzs_early_puts(" (expected: 0xaf218178)\n");
+	xzs_early_puts(" (expected: 0x99e2e78a)\n");
 
 	xzs_breadcrumb(0xD510, 0x55);
 
-	if (full_img_crc != 0xaf218178) {
+	if (full_img_crc != 0x99e2e78a) {
 		xzs_early_puts("[XZS-RAMDISK] FATAL: Logical image CRC32 mismatch!\n");
 		xzs_breadcrumb(0xD510, 0xF4);
 		xzs_spin_halt();

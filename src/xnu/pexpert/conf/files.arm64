@@ -13,4 +13,5 @@ pexpert/arm/xzs_spmi.c                standard
 pexpert/arm/xzs_rpm.c                 standard
 pexpert/arm/xzs_sdhci.c               standard
 pexpert/arm/xzs_usb.c                 standard
+pexpert/arm/xzs_diag.c                standard
 

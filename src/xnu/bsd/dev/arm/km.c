@@ -384,6 +384,22 @@ xzs_console_write(const unsigned char *buf, int len)
 		__asm__ volatile("msr TTBR0_EL1, %0; isb sy" :: "r"(saved_ttbr0));
 	}
 }
+
+void
+xzs_bringup_console_write(const void *buf, int len)
+{
+	if (buf == NULL || len <= 0) {
+		return;
+	}
+	xzs_console_write((const unsigned char *)buf, len);
+}
+#else
+void
+xzs_bringup_console_write(const void *buf, int len)
+{
+	(void)buf;
+	(void)len;
+}
 #endif
 
 /*

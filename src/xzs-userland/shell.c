@@ -10,6 +10,7 @@
 #define SYS_CHDIR 12
 #define SYS_REBOOT 55
 #define SYS_EXECVE 59
+#define SYS_XZS_DIAG 58
 #define SYS_GETDIRENTRIES 196
 
 #define LINE_MAX 128
@@ -127,7 +128,13 @@ read_line(char *buf, int cap, int *swallow_lf)
 static void
 cmd_help(void)
 {
-	wr("help echo pwd cd ls cat exit\n");
+	wr("help echo pwd cd ls cat display dsi clocks irq fb mem exit\n");
+}
+
+static void
+cmd_diag(long which)
+{
+	(void)xzs_svc(SYS_XZS_DIAG, which, 0, 0, 0);
 }
 
 static void
@@ -419,6 +426,18 @@ xzs_d7t2_shell(void)
 			cmd_ls(argc, argv, cwd);
 		} else if (seq(argv[0], "cat")) {
 			cmd_cat(argc, argv);
+		} else if (seq(argv[0], "display")) {
+			cmd_diag(1);
+		} else if (seq(argv[0], "dsi")) {
+			cmd_diag(2);
+		} else if (seq(argv[0], "clocks")) {
+			cmd_diag(3);
+		} else if (seq(argv[0], "irq")) {
+			cmd_diag(4);
+		} else if (seq(argv[0], "fb")) {
+			cmd_diag(5);
+		} else if (seq(argv[0], "mem")) {
+			cmd_diag(6);
 		} else if (seq(argv[0], "exit")) {
 			(void)xzs_svc(SYS_EXIT, 0, 0, 0, 0);
 		} else if (seq(argv[0], "reboot")) {

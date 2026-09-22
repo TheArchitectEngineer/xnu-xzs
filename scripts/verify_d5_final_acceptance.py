@@ -62,7 +62,7 @@ REQUIRED_TELEMETRY = [
     ("BIN_SH_VNODE_TYPE", "VREG"),
     ("BIN_SH_OBJECT_ID", "5"),
     ("BIN_SH_MODE", "0755"),
-    ("BIN_SH_SIZE", "16736"),
+    ("BIN_SH_SIZE", "16768"),
     ("DEVFS_MOUNTED", "yes"),
     ("NAMEI_DEV_PASS", "yes"),
     ("NAMEI_DEV_CONSOLE_PASS", "yes"),
