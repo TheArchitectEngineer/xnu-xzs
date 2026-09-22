@@ -3901,12 +3901,9 @@ xzs_d6m4_monitor_and_report_r650(task_t t, thread_t th)
 		xzs_early_puts("=== D7-T1 T1-Y CONTROL ENUMERATION TELEMETRY END ===\n");
 		xzs_early_puts("=======================================================\n\n");
 
-		/* Allow normal boot continuation / clean halt */
-		extern void xzs_watchdog_pet(void);
-		for (int i = 0; i < 5; i++) {
-			xzs_watchdog_pet();
-			delay(100000);
-		}
+		/* Cleanly flush ramoops to DRAM and warm-reset directly back to Fastboot */
+		extern void xzs_spin_halt(void);
+		xzs_spin_halt();
 	} else if (xzs_d6m4_r650_telemetry.unexpected_exception) {
 		xzs_early_puts("\n[XZS-D6M4] UNEXPECTED EXCEPTION ON CPU 1\n");
 		xzs_early_puts("ESR_EL1="); xzs_d6m4_put_hex64(xzs_d6m4_r650_telemetry.esr); xzs_early_puts("\n");
