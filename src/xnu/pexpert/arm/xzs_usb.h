@@ -306,5 +306,10 @@ extern volatile uint32_t g_xzs_usb_t1y_link_state;
 extern volatile uint32_t g_xzs_usb_t1y_ep_cmd_failures;
 extern volatile uint32_t g_xzs_usb_t1y_event_ring_drops;
 extern volatile uint32_t g_xzs_usb_t1y_complete;
+extern volatile uint32_t g_xzs_usb_t1y_word_before_sync_0;
+extern volatile uint32_t g_xzs_usb_t1y_word_before_sync_1;
+extern volatile uint32_t g_xzs_usb_t1y_word_after_sync_0;
+extern volatile uint32_t g_xzs_usb_t1y_word_after_sync_1;
+extern volatile uint32_t g_xzs_usb_t1y_gevntcount_raw;
 
 #endif /* _PEXPERT_ARM_XZS_USB_H_ */

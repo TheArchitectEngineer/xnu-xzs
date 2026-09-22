@@ -135,6 +135,11 @@ volatile uint32_t g_xzs_usb_t1y_link_state = 0;
 volatile uint32_t g_xzs_usb_t1y_ep_cmd_failures = 0;
 volatile uint32_t g_xzs_usb_t1y_event_ring_drops = 0;
 volatile uint32_t g_xzs_usb_t1y_complete = 0;
+volatile uint32_t g_xzs_usb_t1y_word_before_sync_0 = 0;
+volatile uint32_t g_xzs_usb_t1y_word_before_sync_1 = 0;
+volatile uint32_t g_xzs_usb_t1y_word_after_sync_0 = 0;
+volatile uint32_t g_xzs_usb_t1y_word_after_sync_1 = 0;
+volatile uint32_t g_xzs_usb_t1y_gevntcount_raw = 0;
 
 /* Virtual MMIO bases */
 static vm_offset_t s_dwc3_base = 0;
@@ -174,6 +179,23 @@ static inline uint8_t xzs_mmio_read8(vm_offset_t base, uint32_t offset)
 	uint8_t v = *(volatile uint8_t *)(base + offset);
 	__asm__ volatile("dmb ish" ::: "memory");
 	return v;
+}
+
+/*
+ * Architectural Clean & Invalidate to Point of Coherency (PoC) for MSM8996 non-coherent DMA.
+ * In VMAPPLE builds, flush_dcache() is compiled as a NOP (dsb sy; ret) because Apple Silicon
+ * assumes fully-coherent IO. On MSM8996, DWC3 DMA requires real CPU cache invalidation.
+ */
+static inline void xzs_dma_clean_invalidate(vm_offset_t va, vm_size_t size)
+{
+	vm_offset_t addr = va & ~63UL;
+	vm_offset_t end = (va + size + 63UL) & ~63UL;
+	__asm__ volatile("dsb sy" ::: "memory");
+	while (addr < end) {
+		__asm__ volatile("dc civac, %0" :: "r"(addr) : "memory");
+		addr += 64;
+	}
+	__asm__ volatile("dsb sy\n\tisb sy" ::: "memory");
 }
 
 /* Candidate-2C: static XNU lifetime, 4 KiB aligned, DWC3-only event buffer. */
@@ -866,8 +888,8 @@ xzs_t1x_ep0_halted_setup(void)
 	s_ep0_setup_trb.size = 8;
 	s_ep0_setup_trb.ctrl = DWC3_TRB_CTRL_HWO | DWC3_TRB_CTRL_LST |
 	    DWC3_TRB_CTRL_IOC | DWC3_TRB_CTRL_ISP_IMI | DWC3_TRB_CTRL_TRBCTL_CTRL_SETUP;
-	flush_dcache((vm_offset_t)s_setup_pkt_buf, 8, FALSE);
-	flush_dcache((vm_offset_t)&s_ep0_setup_trb, sizeof(s_ep0_setup_trb), FALSE);
+	xzs_dma_clean_invalidate((vm_offset_t)s_setup_pkt_buf, 8);
+	xzs_dma_clean_invalidate((vm_offset_t)&s_ep0_setup_trb, sizeof(s_ep0_setup_trb));
 	xzs_breadcrumb(0xD740, 0x70);
 	if (xzs_t1x_ep_cmd(0, DEPCMD_STARTTRANSFER, (uint32_t)(pa_trb >> 32),
 	    (uint32_t)pa_trb, 0, 0x80, 0x81)) return -1;
@@ -927,7 +949,7 @@ xzs_t1y_start_transfer(uint32_t ep, struct dwc3_trb *trb, uint8_t *rsc_idx)
 	if (!pa_trb || (pa_trb & 0x0f)) {
 		return -1;
 	}
-	flush_dcache((vm_offset_t)trb, sizeof(*trb), FALSE);
+	xzs_dma_clean_invalidate((vm_offset_t)trb, sizeof(*trb));
 	__asm__ volatile("dsb sy" ::: "memory");
 	if (xzs_t1y_ep_cmd(ep, DEPCMD_STARTTRANSFER,
 	    (uint32_t)(pa_trb >> 32), (uint32_t)pa_trb, 0, &completed) != 0) {
@@ -943,7 +965,7 @@ xzs_t1y_submit_setup(void)
 	vm_offset_t pa_buf = ml_vtophys((vm_offset_t)s_setup_pkt_buf);
 
 	memset(s_setup_pkt_buf, 0, 8);
-	flush_dcache((vm_offset_t)s_setup_pkt_buf, 8, FALSE);
+	xzs_dma_clean_invalidate((vm_offset_t)s_setup_pkt_buf, 8);
 	s_ep0_setup_trb.bpl = (uint32_t)pa_buf;
 	s_ep0_setup_trb.bph = (uint32_t)(pa_buf >> 32);
 	s_ep0_setup_trb.size = 8;
@@ -969,7 +991,7 @@ xzs_t1y_send_data(const void *data, uint32_t length,
 		return -1;
 	}
 	memcpy(s_ep0_data_buf, data, length);
-	flush_dcache((vm_offset_t)s_ep0_data_buf, length, FALSE);
+	xzs_dma_clean_invalidate((vm_offset_t)s_ep0_data_buf, length);
 	pa_buf = ml_vtophys((vm_offset_t)s_ep0_data_buf);
 	s_ep0_data_trb.bpl = (uint32_t)pa_buf;
 	s_ep0_data_trb.bph = (uint32_t)(pa_buf >> 32);
@@ -1070,7 +1092,7 @@ xzs_t1y_handle_setup(void)
 	uint16_t index;
 	uint16_t length;
 
-	flush_dcache((vm_offset_t)s_setup_pkt_buf, 8, FALSE);
+	xzs_dma_clean_invalidate((vm_offset_t)s_setup_pkt_buf, 8);
 	pkt = (struct usb_setup_packet *)s_setup_pkt_buf;
 	value = pkt->wValue;
 	index = pkt->wIndex;
@@ -1288,12 +1310,49 @@ xzs_t1y_event_deferred(thread_call_param_t p0 __unused,
 	}
 }
 
+static volatile boolean_t s_t1y_sync_telemetry_logged = FALSE;
+
 static void
 xzs_t1y_drain_event_buffer(void)
 {
 	uint32_t count = dwc3_read32(DWC3_GEVNTCNT0) & DWC3_GEVNTCOUNT_PENDING_MASK;
 	uint32_t available_events = count / sizeof(uint32_t);
 	uint32_t consumed_events = 0;
+
+	if (count > 0 && !s_t1y_sync_telemetry_logged) {
+		s_t1y_sync_telemetry_logged = TRUE;
+		g_xzs_usb_t1y_gevntcount_raw = count;
+
+		uint32_t w_before0 = *(volatile uint32_t *)(void *)(s_candidate2c_event_buffer + s_t1y_event_buf_pos);
+		uint32_t w_before1 = *(volatile uint32_t *)(void *)(s_candidate2c_event_buffer + ((s_t1y_event_buf_pos + 4) % XZS_DWC3_EVENT_BUFFER_SIZE));
+		g_xzs_usb_t1y_word_before_sync_0 = w_before0;
+		g_xzs_usb_t1y_word_before_sync_1 = w_before1;
+
+		uint32_t gevntadrlo = dwc3_read32(DWC3_GEVNTADR0);
+		uint32_t gevntadrhi = dwc3_read32(DWC3_GEVNTADR_HI0);
+		uint64_t gevntadr_comb = ((uint64_t)gevntadrhi << 32) | gevntadrlo;
+
+		xzs_early_puts("\n[XZS-D7T1] === DMA VISIBILITY BEFORE/AFTER SYNC ===\n");
+		xzs_early_puts("EVENT_BUFFER_VA=0x"); xzs_d6m4_put_hex64((uint64_t)(vm_offset_t)s_candidate2c_event_buffer); xzs_early_puts("\n");
+		xzs_early_puts("EVENT_BUFFER_PA=0x"); xzs_d6m4_put_hex64(ml_vtophys((vm_offset_t)s_candidate2c_event_buffer)); xzs_early_puts("\n");
+		xzs_early_puts("GEVNTADR_COMBINED=0x"); xzs_d6m4_put_hex64(gevntadr_comb); xzs_early_puts("\n");
+		xzs_early_puts("EVENT_LPOS=0x"); xzs_d6m4_put_hex64(s_t1y_event_buf_pos); xzs_early_puts("\n");
+		xzs_early_puts("GEVNTCOUNT=0x"); xzs_d6m4_put_hex64(count); xzs_early_puts("\n");
+		xzs_early_puts("WORD_BEFORE_SYNC_0=0x"); xzs_d6m4_put_hex64(w_before0); xzs_early_puts("\n");
+		xzs_early_puts("WORD_BEFORE_SYNC_1=0x"); xzs_d6m4_put_hex64(w_before1); xzs_early_puts("\n");
+
+		/* Invalidate the event buffer from CPU cache to PoC */
+		xzs_dma_clean_invalidate((vm_offset_t)s_candidate2c_event_buffer, XZS_DWC3_EVENT_BUFFER_SIZE);
+
+		uint32_t w_after0 = *(volatile uint32_t *)(void *)(s_candidate2c_event_buffer + s_t1y_event_buf_pos);
+		uint32_t w_after1 = *(volatile uint32_t *)(void *)(s_candidate2c_event_buffer + ((s_t1y_event_buf_pos + 4) % XZS_DWC3_EVENT_BUFFER_SIZE));
+		g_xzs_usb_t1y_word_after_sync_0 = w_after0;
+		g_xzs_usb_t1y_word_after_sync_1 = w_after1;
+
+		xzs_early_puts("WORD_AFTER_SYNC_0=0x"); xzs_d6m4_put_hex64(w_after0); xzs_early_puts("\n");
+		xzs_early_puts("WORD_AFTER_SYNC_1=0x"); xzs_d6m4_put_hex64(w_after1); xzs_early_puts("\n");
+		xzs_early_puts("[XZS-D7T1] ========================================\n\n");
+	}
 
 	if (available_events > XZS_T1Y_IRQ_EVENT_BUDGET) {
 		available_events = XZS_T1Y_IRQ_EVENT_BUDGET;
@@ -1308,7 +1367,7 @@ xzs_t1y_drain_event_buffer(void)
 			break;
 		}
 		slot = (uint32_t *)(void *)(s_candidate2c_event_buffer + s_t1y_event_buf_pos);
-		flush_dcache((vm_offset_t)slot, sizeof(*slot), FALSE);
+		xzs_dma_clean_invalidate((vm_offset_t)slot, sizeof(*slot));
 		event = *slot;
 		s_t1y_event_ring[head] = event;
 		__asm__ volatile("dmb ish" ::: "memory");
@@ -1519,7 +1578,7 @@ int xzs_usb_init(void)
 		return -1;
 	}
 	memset(s_candidate2c_event_buffer, 0, sizeof(s_candidate2c_event_buffer));
-	flush_dcache(event_va, XZS_DWC3_EVENT_BUFFER_SIZE, FALSE);
+	xzs_dma_clean_invalidate(event_va, XZS_DWC3_EVENT_BUFFER_SIZE);
 	xzs_breadcrumb(0xD740, 0x2C10);
 	xzs_early_puts("[XZS-D7T1] D740/2C10 XNU event buffer allocated/reserved\n");
 	xzs_breadcrumb(0xD740, 0x2C11);

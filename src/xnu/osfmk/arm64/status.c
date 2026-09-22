@@ -3828,6 +3828,11 @@ xzs_d6m4_monitor_and_report_r650(task_t t, thread_t th)
 		extern volatile uint32_t g_xzs_usb_t1y_ep_cmd_failures;
 		extern volatile uint32_t g_xzs_usb_t1y_event_ring_drops;
 		extern volatile uint32_t g_xzs_usb_t1y_complete;
+		extern volatile uint32_t g_xzs_usb_t1y_word_before_sync_0;
+		extern volatile uint32_t g_xzs_usb_t1y_word_before_sync_1;
+		extern volatile uint32_t g_xzs_usb_t1y_word_after_sync_0;
+		extern volatile uint32_t g_xzs_usb_t1y_word_after_sync_1;
+		extern volatile uint32_t g_xzs_usb_t1y_gevntcount_raw;
 
 		xzs_early_puts("\n=======================================================\n");
 		xzs_early_puts("=== D7-T1 T1-Y CONTROL ENUMERATION TELEMETRY BEGIN ===\n");
@@ -3848,6 +3853,12 @@ xzs_d6m4_monitor_and_report_r650(task_t t, thread_t th)
 		xzs_early_puts("DCTL_WRITTEN=0x"); xzs_d6m4_put_hex64(g_xzs_usb_t1y_dctl_written); xzs_early_puts("\n");
 		xzs_early_puts("DCTL_AFTER=0x"); xzs_d6m4_put_hex64(g_xzs_usb_t1y_dctl_after); xzs_early_puts("\n");
 		xzs_early_puts("RUN_STOP_AFTER="); xzs_early_puts((g_xzs_usb_t1y_dctl_after & (1u << 31)) ? "1\n" : "0\n");
+		xzs_early_puts("GEVNTCOUNT_RAW=0x"); xzs_d6m4_put_hex64(g_xzs_usb_t1y_gevntcount_raw); xzs_early_puts("\n");
+		xzs_early_puts("WORD_BEFORE_SYNC_0=0x"); xzs_d6m4_put_hex64(g_xzs_usb_t1y_word_before_sync_0); xzs_early_puts("\n");
+		xzs_early_puts("WORD_BEFORE_SYNC_1=0x"); xzs_d6m4_put_hex64(g_xzs_usb_t1y_word_before_sync_1); xzs_early_puts("\n");
+		xzs_early_puts("WORD_AFTER_SYNC_0=0x"); xzs_d6m4_put_hex64(g_xzs_usb_t1y_word_after_sync_0); xzs_early_puts("\n");
+		xzs_early_puts("WORD_AFTER_SYNC_1=0x"); xzs_d6m4_put_hex64(g_xzs_usb_t1y_word_after_sync_1); xzs_early_puts("\n");
+		xzs_early_puts("EVENT_PAYLOAD_NONZERO="); xzs_early_puts((g_xzs_usb_t1y_first_event != 0) ? "yes\n" : "no\n");
 		xzs_early_puts("FIRST_HARDWARE_EVENT=0x"); xzs_d6m4_put_hex64(g_xzs_usb_t1y_first_event); xzs_early_puts("\n");
 		xzs_early_puts("USB_RESET_OBSERVED="); xzs_early_puts(g_xzs_usb_reset_count ? "yes\n" : "no\n");
 		xzs_early_puts("CONNECT_DONE_OBSERVED="); xzs_early_puts(g_xzs_usb_conn_done_count ? "yes\n" : "no\n");
