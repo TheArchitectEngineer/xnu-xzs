@@ -34,7 +34,11 @@ TWRP `/proc/iomem` on the kagura recovery kernel shows the live layout:
 
 XNU's console header address matches that console zone. The record at `0xa7f00000` is `dmesg-ramoops-0`.
 
-Candidate `94c1c84` wrote `MAGIC=XZSP` and the running CPU read both headers back as `sig=0x43474244`, `size=0x7b`. After shutdown, both pstore files were still the full zone (`262132` and `4084` bytes) and neither contained the marker. The write-back mapping had kept the record in the cache. The ramoops block is now Normal write-combine so a `dsb sy` publishes the store without a new cache-maintenance instruction.
+Candidate `94c1c84` wrote `MAGIC=XZSP` and the running CPU read both headers back as `sig=0x43474244`, `size=0x7b`. After shutdown, both pstore files were still the full zone (`262132` and `4084` bytes) and neither contained the marker.
+
+Candidate `7a57645` maps that block as Normal write-combine and repeats the same live readback. After another shutdown, `console-ramoops` is again `262132` bytes and `dmesg-ramoops-0` is `4084` bytes. A search of every file under `/sys/fs/pstore` finds no `XZSP`. The two pulls are not byte-identical, so the region is not a frozen image, but the exported bytes are not the XNU marker.
+
+No recovery path is authoritative yet. Do not treat `/sys/fs/pstore` as proof of an XNU run unless the file contains `MAGIC=XZSP` or another `[XZS]` line from the booted commit.
 
 ## What XNU writes
 
