@@ -119,6 +119,23 @@
 #define DEPCMD_STATUS(n)              (((n) >> 12) & 0x0fu)
 #define DEPCMD_RESOURCE_INDEX(n)      (((n) >> 16) & 0x7fu)
 
+/*
+ * DWC3 2.70a DEPCFG / DEPXFERCFG field positions used by the live EP0 path.
+ * SETTRANSFRESOURCE param0 is NUM_XFER_RES, not the XferRscIdx returned by
+ * STARTTRANSFER in DEPCMD[22:16].
+ */
+#define DWC3_DEPCFG_EP_TYPE(n)          ((uint32_t)(n) << 1)
+#define DWC3_DEPCFG_MAX_PACKET_SIZE(n)  ((uint32_t)(n) << 3)
+#define DWC3_DEPCFG_FIFO_NUMBER(n)      ((uint32_t)(n) << 17)
+#define DWC3_DEPCFG_XFER_COMPLETE_EN    (1u << 8)
+#define DWC3_DEPCFG_XFER_NOT_READY_EN   (1u << 10)
+#define DWC3_DEPCFG_EP_NUMBER(n)        ((uint32_t)(n) << 25)
+#define DWC3_DEPXFERCFG_NUM_XFER_RES(n) ((uint32_t)(n) & 0xffffu)
+#define DWC3_EP_TYPE_BULK               2u
+#define XZS_T1Z_XFER_RSC_NOT_ISSUED     0xffffffffu
+/* Z1 endpoint config through Z4 hardware loopback.  Z5/Z6 tty stay off. */
+#define XZS_T1Z_MAX_STAGE               4u
+
 #define DWC3_DEPEVT_XFERCOMPLETE      0x01u
 #define DWC3_DEPEVT_XFERNOTREADY      0x03u
 #define DWC3_DEPEVT_STATUS_PHASE(n)   (((n) >> 12) & 0x03u)
@@ -185,6 +202,8 @@ struct usb_setup_packet {
 
 /* Public Driver Interface */
 int  xzs_usb_init(void);
+int  xzs_usb_t1z_service(void);
+void xzs_usb_t1z_report(void);
 void xzs_usb_poll_events(void);
 void xzs_usb_irq_handler(void);
 void xzs_usb_console_putc(char c);

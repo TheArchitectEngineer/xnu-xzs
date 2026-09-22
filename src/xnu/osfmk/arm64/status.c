@@ -3901,6 +3901,12 @@ xzs_d6m4_monitor_and_report_r650(task_t t, thread_t th)
 		xzs_early_puts("=== D7-T1 T1-Y CONTROL ENUMERATION TELEMETRY END ===\n");
 		xzs_early_puts("=======================================================\n\n");
 
+		/* Z1–Z4 run after the T1-Y report.  Halt on completion or the 40s safety window. */
+		extern int xzs_usb_t1z_service(void);
+		extern void xzs_usb_t1z_report(void);
+		(void)xzs_usb_t1z_service();
+		xzs_usb_t1z_report();
+
 		/* Cleanly flush ramoops to DRAM and warm-reset directly back to Fastboot */
 		extern void xzs_spin_halt(void);
 		xzs_spin_halt();

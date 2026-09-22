@@ -60,11 +60,11 @@ def parse_evidence(log_text: str):
         val = m_in.group(1)
         results["TTY_TO_USB_BYTES"] = int(val, 16) if val.startswith("0x") else int(val)
 
-    # Live shell prompt observation
-    if re.search(r"LIVE_SHELL_PROMPT(?:_OBSERVED)?=yes", log_text) or re.search(r"(?:xzs#|sh-[0-9.]+[\$#]|\n# )", log_text):
+    # Host evidence only.  The target banner contains "xzs# " and must not certify this.
+    if re.search(r"HOST_LIVE_SHELL_PROMPT_OBSERVED=yes", log_text):
         results["LIVE_SHELL_PROMPT"] = True
 
-    if re.search(r"LIVE_INTERACTIVE_COMMAND_WORKING=yes", log_text) or re.search(r"COMMAND_OUTPUT_MATCH=yes", log_text):
+    if re.search(r"HOST_LIVE_INTERACTIVE_COMMAND_WORKING=yes", log_text):
         results["LIVE_COMMAND_ECHO"] = True
 
     return results

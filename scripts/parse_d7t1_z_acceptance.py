@@ -58,29 +58,25 @@ def main():
     elif "BULK_LOOPBACK_HARDWARE=NOT_TESTED" in host_text:
         loopback = "NOT_TESTED"
 
-    # 5. T1Z_USB_TO_TTY (Requires kernel pstore proof of bytes passed to tty)
+    # 5. T1Z_USB_TO_TTY — target byte count only. Bulk OUT alone is not tty delivery.
     usb_to_tty = "NOT_TESTED"
-    m_tty_in = re.search(r"(?:USB_TO_TTY_BYTES|USB_BULK_OUT_RX_BYTES)\s*=\s*(0x[0-9a-fA-F]+|[0-9]+)", pstore_text)
+    m_tty_in = re.search(r"USB_TO_TTY_BYTES\s*=\s*(0x[0-9a-fA-F]+|[0-9]+)", pstore_text)
     if m_tty_in:
         val = int(m_tty_in.group(1), 16) if m_tty_in.group(1).startswith("0x") else int(m_tty_in.group(1))
         usb_to_tty = "PASS" if val > 0 else "FAIL"
-    elif "USB_BULK_OUT_WORKING=yes" in pstore_text:
-        usb_to_tty = "PASS"
 
-    # 6. T1Z_CONSOLE_TO_USB (Requires kernel pstore proof of console bytes transmitted to Bulk IN)
+    # 6. T1Z_CONSOLE_TO_USB — target byte count only. A Bulk IN test payload is not console TX.
     console_to_usb = "NOT_TESTED"
-    m_tty_out = re.search(r"(?:TTY_TO_USB_BYTES|USB_BULK_IN_TX_BYTES)\s*=\s*(0x[0-9a-fA-F]+|[0-9]+)", pstore_text)
+    m_tty_out = re.search(r"TTY_TO_USB_BYTES\s*=\s*(0x[0-9a-fA-F]+|[0-9]+)", pstore_text)
     if m_tty_out:
         val = int(m_tty_out.group(1), 16) if m_tty_out.group(1).startswith("0x") else int(m_tty_out.group(1))
         console_to_usb = "PASS" if val > 0 else "FAIL"
-    elif "USB_BULK_IN_WORKING=yes" in pstore_text:
-        console_to_usb = "PASS"
 
-    # 7. T1Z_LIVE_SHELL (Live shell prompt in host session or pstore)
+    # 7. Live shell requires an explicit host observation. Target pstore cannot certify it.
     live_shell = "NOT_TESTED"
-    if re.search(r"(?:xzs#|sh-[0-9.]+[\$#])", host_text) or "LIVE_SHELL_PROMPT_OBSERVED=yes" in host_text:
+    if "HOST_LIVE_SHELL_PROMPT_OBSERVED=yes" in host_text:
         live_shell = "PASS"
-    elif "LIVE_SHELL_PROMPT=FAIL" in host_text:
+    elif "HOST_LIVE_SHELL_PROMPT_OBSERVED=no" in host_text:
         live_shell = "FAIL"
 
     print("========================================")

@@ -109,6 +109,38 @@ volatile uint32_t g_xzs_usb_enumerated = 0;
 volatile uint32_t g_xzs_usb_configured = 0;
 volatile uint32_t g_xzs_usb_console_ready = 0;
 volatile uint32_t g_xzs_usb_tx_drops = 0;
+volatile uint32_t g_xzs_usb_t1z_activation_pending = 0;
+volatile uint32_t g_xzs_usb_t1z_worker_entered = 0;
+volatile uint32_t g_xzs_usb_t1z_config_in_hard_irq = 0;
+volatile uint32_t g_xzs_usb_t1z_failed = 0;
+volatile uint32_t g_xzs_usb_t1z_ep2_configured = 0;
+volatile uint32_t g_xzs_usb_t1z_ep3_configured = 0;
+volatile uint32_t g_xzs_usb_t1z_dalepena = 0;
+volatile uint32_t g_xzs_usb_t1z_depstartcfg_param = 0;
+volatile uint32_t g_xzs_usb_t1z_num_xfer_res = 0;
+volatile uint32_t g_xzs_usb_t1z_ep2_rsc = XZS_T1Z_XFER_RSC_NOT_ISSUED;
+volatile uint32_t g_xzs_usb_t1z_ep3_rsc = XZS_T1Z_XFER_RSC_NOT_ISSUED;
+volatile uint32_t g_xzs_usb_t1z_ep3_rsc_echo = XZS_T1Z_XFER_RSC_NOT_ISSUED;
+volatile uint32_t g_xzs_usb_t1z_dma_ok = 0;
+volatile uint32_t g_xzs_usb_t1z_out1_len = 0;
+volatile uint32_t g_xzs_usb_t1z_in1_len = 0;
+volatile uint32_t g_xzs_usb_t1z_out2_len = 0;
+volatile uint32_t g_xzs_usb_t1z_in2_len = 0;
+volatile uint32_t g_xzs_usb_t1z_pipeline_done = 0;
+volatile uint32_t g_xzs_usb_t1z_usb_to_tty_bytes = 0;
+volatile uint32_t g_xzs_usb_t1z_tty_to_usb_bytes = 0;
+volatile uint64_t g_xzs_usb_t1z_out_buf_va = 0;
+volatile uint64_t g_xzs_usb_t1z_out_buf_pa = 0;
+volatile uint64_t g_xzs_usb_t1z_out_trb_va = 0;
+volatile uint64_t g_xzs_usb_t1z_out_trb_pa = 0;
+volatile uint64_t g_xzs_usb_t1z_in_buf_va = 0;
+volatile uint64_t g_xzs_usb_t1z_in_buf_pa = 0;
+volatile uint64_t g_xzs_usb_t1z_in_trb_va = 0;
+volatile uint64_t g_xzs_usb_t1z_in_trb_pa = 0;
+volatile uint32_t g_xzs_usb_t1z_out_buf_contig = 0;
+volatile uint32_t g_xzs_usb_t1z_out_trb_contig = 0;
+volatile uint32_t g_xzs_usb_t1z_in_buf_contig = 0;
+volatile uint32_t g_xzs_usb_t1z_in_trb_contig = 0;
 
 /* T1-Y control-plane telemetry. */
 volatile uint32_t g_xzs_usb_t1y_ep0_only_dispatch = 0;
@@ -205,6 +237,32 @@ static inline void xzs_dma_clean_invalidate(vm_offset_t va, vm_size_t size)
 	__asm__ volatile("dsb sy" ::: "memory");
 	while (addr < end) {
 		__asm__ volatile("dc civac, %0" :: "r"(addr) : "memory");
+		addr += 64;
+	}
+	__asm__ volatile("dsb sy\n\tisb sy" ::: "memory");
+}
+
+/* CPU → device. Clean to PoC and keep the line. Used for Bulk IN payloads and TRB handoff. */
+static inline void xzs_dma_clean_poc(vm_offset_t va, vm_size_t size)
+{
+	vm_offset_t addr = va & ~63UL;
+	vm_offset_t end = (va + size + 63UL) & ~63UL;
+	__asm__ volatile("dsb sy" ::: "memory");
+	while (addr < end) {
+		__asm__ volatile("dc cvac, %0" :: "r"(addr) : "memory");
+		addr += 64;
+	}
+	__asm__ volatile("dsb sy\n\tisb sy" ::: "memory");
+}
+
+/* Device → CPU. Invalidate to PoC. Used after Bulk OUT / TRB status writes. */
+static inline void xzs_dma_invalidate_poc(vm_offset_t va, vm_size_t size)
+{
+	vm_offset_t addr = va & ~63UL;
+	vm_offset_t end = (va + size + 63UL) & ~63UL;
+	__asm__ volatile("dsb sy" ::: "memory");
+	while (addr < end) {
+		__asm__ volatile("dc ivac, %0" :: "r"(addr) : "memory");
 		addr += 64;
 	}
 	__asm__ volatile("dsb sy\n\tisb sy" ::: "memory");
@@ -803,14 +861,98 @@ uint32_t dwc3_read32_pub(uint32_t offset)
 	return dwc3_read32(offset);
 }
 
-/* T1-Y deliberately provides no Bulk/TTY transport. */
-void xzs_usb_console_putc(char c __unused)
+/*
+ * TX ring is MPSC. xzs_console_write() runs under the console tty lock, but
+ * that lock is not the only caller that can reach this file, and four Kryo
+ * cores can be inside kernel console paths. One USB worker would drain it.
+ * Z1–Z4 leave g_xzs_usb_console_ready clear, so this path does not run.
+ * Lock order: tty_lock, then this lock. Never take tty_lock or log while held.
+ */
+#define XZS_TX_RING_SIZE 1024u
+static uint8_t s_tx_ring[XZS_TX_RING_SIZE];
+static volatile uint32_t s_tx_head = 0;
+static volatile uint32_t s_tx_tail = 0;
+static volatile uint32_t s_tx_lock = 0;
+
+static boolean_t
+xzs_tx_lock_acquire(void)
 {
+	for (uint32_t spin = 0; spin < 128; spin++) {
+		uint32_t locked;
+		uint32_t status;
+		__asm__ volatile(
+			"ldaxr %w0, [%2]\n"
+			"cbnz %w0, 1f\n"
+			"stlxr %w1, %w3, [%2]\n"
+			"cbnz %w1, 1f\n"
+			"mov %w0, #0\n"
+			"b 2f\n"
+			"1:\n"
+			"clrex\n"
+			"mov %w0, #1\n"
+			"2:\n"
+			: "=&r"(locked), "=&r"(status)
+			: "r"(&s_tx_lock), "r"(1)
+			: "memory");
+		if (locked == 0) {
+			return TRUE;
+		}
+		__asm__ volatile("yield");
+	}
+	return FALSE;
 }
 
-int xzs_usb_send_bulk_in(const uint8_t *data __unused, uint32_t len __unused)
+static void
+xzs_tx_lock_release(void)
 {
-	return -1;
+	__asm__ volatile("stlr %w0, [%1]" :: "r"(0), "r"(&s_tx_lock) : "memory");
+}
+
+static boolean_t
+xzs_tx_enqueue(uint8_t byte)
+{
+	uint32_t head;
+	uint32_t next;
+
+	if (!xzs_tx_lock_acquire()) {
+		g_xzs_usb_tx_drops++;
+		return FALSE;
+	}
+	head = s_tx_head;
+	next = (head + 1u) % XZS_TX_RING_SIZE;
+	if (next == s_tx_tail) {
+		g_xzs_usb_tx_drops++;
+		xzs_tx_lock_release();
+		return FALSE;
+	}
+	s_tx_ring[head] = byte;
+	__asm__ volatile("dmb ish" ::: "memory");
+	s_tx_head = next;
+	xzs_tx_lock_release();
+	return TRUE;
+}
+
+void xzs_usb_console_putc(char c)
+{
+	if (!g_xzs_usb_console_ready) {
+		return;
+	}
+	(void)xzs_tx_enqueue((uint8_t)c);
+}
+
+int xzs_usb_send_bulk_in(const uint8_t *data, uint32_t len)
+{
+	uint32_t i;
+
+	if (!g_xzs_usb_console_ready || data == NULL || len == 0) {
+		return -1;
+	}
+	for (i = 0; i < len; i++) {
+		if (!xzs_tx_enqueue(data[i])) {
+			return (int)i;
+		}
+	}
+	return (int)len;
 }
 
 boolean_t xzs_usb_is_enumerated(void)
@@ -1081,6 +1223,9 @@ xzs_t1y_finish_control_transfer(void)
 			xzs_early_puts("[XZS-D7T1] D740/Y98 acceptance\n");
 			xzs_breadcrumb(0xD740, 0x799);
 			xzs_early_puts("[XZS-D7T1] D740/Y99 PASS\n");
+			/* Long EP2/EP3 DEPCMD work stays on this thread_call, after it returns to the drain loop. */
+			g_xzs_usb_t1z_activation_pending = 1;
+			xzs_early_puts("[XZS-D7T1] D740/Z00 SET_CONFIGURATION activation pending\n");
 		}
 		break;
 	case XZS_T1Y_COMPLETE_NONE:
@@ -1240,6 +1385,280 @@ xzs_t1y_ep0_only_reset(void)
 	}
 }
 
+/*
+ * T1-Z Z1–Z4.  SET_CONFIGURATION completion only raises a pending flag.
+ * The long DEPCMD sequence runs at the end of xzs_t1y_event_deferred(),
+ * which is a thread_call.  xzs_usb_irq_handler only copies events.
+ * ml_at_interrupt_context() must be false before any EP2/EP3 command.
+ *
+ * DEPSTARTCFG resource index is 2 (non-control allocation).  Each endpoint
+ * then receives SETTRANSFRESOURCE with NUM_XFER_RES=1.  The XferRscIdx used
+ * by STARTTRANSFER is the value DWC3 returns in DEPCMD[22:16], never a
+ * compile-time guess.
+ *
+ * Bulk buffers are static kernel objects (Normal WBWA, not ml_io_map).
+ * Bulk OUT is device→CPU (dc ivac).  Bulk IN is CPU→device (dc cvac).
+ * TRBs are cleaned before handoff and invalidated before the CPU reads status.
+ */
+#define XZS_T1Z_PHASE_IDLE 0u
+#define XZS_T1Z_PHASE_OUT1 1u
+#define XZS_T1Z_PHASE_IN1  2u
+#define XZS_T1Z_PHASE_OUT2 3u
+#define XZS_T1Z_PHASE_IN2  4u
+#define XZS_T1Z_PHASE_DONE 5u
+
+static uint8_t s_bulk_out_buf[512] __attribute__((aligned(4096)));
+static uint8_t s_bulk_in_buf[512] __attribute__((aligned(4096)));
+static struct dwc3_trb s_bulk_out_trb __attribute__((aligned(4096)));
+static struct dwc3_trb s_bulk_in_trb __attribute__((aligned(4096)));
+static uint8_t s_t1z_out1[512];
+static uint8_t s_t1z_out2[512];
+static const uint8_t s_t1z_in_payload[] = {
+	'X','Z','S','-','B','U','L','K','-','I','N','-','T','E','S','T','\n'
+};
+
+static volatile uint32_t s_t1z_phase = XZS_T1Z_PHASE_IDLE;
+
+static int
+xzs_t1z_prove(const void *obj, uint32_t size, uint32_t align,
+    volatile uint64_t *va_out, volatile uint64_t *pa_out, volatile uint32_t *contig)
+{
+	vm_offset_t va = (vm_offset_t)obj;
+	vm_offset_t pa = ml_vtophys(va);
+	vm_offset_t pa_last = ml_vtophys(va + size - 1);
+
+	*va_out = (uint64_t)va;
+	*pa_out = (uint64_t)pa;
+	*contig = (pa != 0 && pa_last == pa + size - 1);
+	if (pa == 0 || (pa & (align - 1u)) != 0 || *contig == 0) {
+		return -1;
+	}
+	return 0;
+}
+
+static int
+xzs_t1z_start(uint32_t ep, struct dwc3_trb *trb, volatile uint32_t *rsc_out)
+{
+	vm_offset_t pa = ml_vtophys((vm_offset_t)trb);
+	uint32_t completed = 0;
+
+	if (pa == 0 || (pa & 63u) != 0) {
+		return -1;
+	}
+	xzs_dma_clean_poc((vm_offset_t)trb, sizeof(*trb));
+	if (xzs_t1y_ep_cmd(ep, DEPCMD_STARTTRANSFER,
+	    (uint32_t)(pa >> 32), (uint32_t)pa, 0, &completed) != 0) {
+		return -1;
+	}
+	*rsc_out = DEPCMD_RESOURCE_INDEX(completed);
+	return 0;
+}
+
+static int
+xzs_t1z_arm_out(void)
+{
+	vm_offset_t pa = (vm_offset_t)g_xzs_usb_t1z_out_buf_pa;
+
+	memset(s_bulk_out_buf, 0, sizeof(s_bulk_out_buf));
+	xzs_dma_invalidate_poc((vm_offset_t)s_bulk_out_buf, sizeof(s_bulk_out_buf));
+	s_bulk_out_trb.bpl = (uint32_t)pa;
+	s_bulk_out_trb.bph = (uint32_t)(pa >> 32);
+	s_bulk_out_trb.size = 512;
+	s_bulk_out_trb.ctrl = DWC3_TRB_CTRL_HWO | DWC3_TRB_CTRL_LST |
+	    DWC3_TRB_CTRL_IOC | DWC3_TRB_CTRL_TRBCTL_NORMAL;
+	return xzs_t1z_start(DWC3_PHYS_EP_BULK_OUT, &s_bulk_out_trb, &g_xzs_usb_t1z_ep2_rsc);
+}
+
+static int
+xzs_t1z_arm_in(const uint8_t *data, uint32_t length, volatile uint32_t *rsc_out)
+{
+	vm_offset_t pa = (vm_offset_t)g_xzs_usb_t1z_in_buf_pa;
+
+	if (length == 0 || length > sizeof(s_bulk_in_buf)) {
+		return -1;
+	}
+	memcpy(s_bulk_in_buf, data, length);
+	xzs_dma_clean_poc((vm_offset_t)s_bulk_in_buf, length);
+	s_bulk_in_trb.bpl = (uint32_t)pa;
+	s_bulk_in_trb.bph = (uint32_t)(pa >> 32);
+	s_bulk_in_trb.size = length;
+	s_bulk_in_trb.ctrl = DWC3_TRB_CTRL_HWO | DWC3_TRB_CTRL_LST |
+	    DWC3_TRB_CTRL_IOC | DWC3_TRB_CTRL_TRBCTL_NORMAL;
+	return xzs_t1z_start(DWC3_PHYS_EP_BULK_IN, &s_bulk_in_trb, rsc_out);
+}
+
+static uint32_t
+xzs_t1z_received_length(struct dwc3_trb *trb, uint32_t programmed)
+{
+	uint32_t remaining;
+
+	xzs_dma_invalidate_poc((vm_offset_t)trb, sizeof(*trb));
+	remaining = trb->size & 0x00ffffffu;
+	if (remaining > programmed) {
+		return 0;
+	}
+	return programmed - remaining;
+}
+
+static void
+xzs_t1z_on_out_complete(void)
+{
+	uint32_t length = xzs_t1z_received_length(&s_bulk_out_trb, 512);
+	uint8_t *dest = NULL;
+
+	xzs_dma_invalidate_poc((vm_offset_t)s_bulk_out_buf, sizeof(s_bulk_out_buf));
+	if (s_t1z_phase == XZS_T1Z_PHASE_OUT1) {
+		dest = s_t1z_out1;
+		g_xzs_usb_t1z_out1_len = length;
+	} else if (s_t1z_phase == XZS_T1Z_PHASE_OUT2) {
+		dest = s_t1z_out2;
+		g_xzs_usb_t1z_out2_len = length;
+	} else {
+		g_xzs_usb_t1z_failed = 1;
+		return;
+	}
+	if (length > sizeof(s_bulk_out_buf)) {
+		g_xzs_usb_t1z_failed = 1;
+		return;
+	}
+	memcpy(dest, s_bulk_out_buf, length);
+	g_xzs_usb_bulk_out_count++;
+	g_xzs_usb_bulk_out_bytes += length;
+	if (s_t1z_phase == XZS_T1Z_PHASE_OUT1) {
+		s_t1z_phase = XZS_T1Z_PHASE_IN1;
+		g_xzs_usb_t1z_in1_len = sizeof(s_t1z_in_payload);
+		if (xzs_t1z_arm_in(s_t1z_in_payload, sizeof(s_t1z_in_payload),
+		    &g_xzs_usb_t1z_ep3_rsc) != 0) {
+			g_xzs_usb_t1z_failed = 1;
+		}
+	} else {
+		s_t1z_phase = XZS_T1Z_PHASE_IN2;
+		g_xzs_usb_t1z_in2_len = length;
+		if (xzs_t1z_arm_in(s_t1z_out2, length, &g_xzs_usb_t1z_ep3_rsc_echo) != 0) {
+			g_xzs_usb_t1z_failed = 1;
+		}
+	}
+}
+
+static void
+xzs_t1z_on_in_complete(void)
+{
+	uint32_t programmed = (s_t1z_phase == XZS_T1Z_PHASE_IN1) ?
+	    g_xzs_usb_t1z_in1_len : g_xzs_usb_t1z_in2_len;
+	uint32_t length = xzs_t1z_received_length(&s_bulk_in_trb, programmed);
+
+	if (s_t1z_phase == XZS_T1Z_PHASE_IN1) {
+		g_xzs_usb_bulk_in_count++;
+		g_xzs_usb_bulk_in_bytes += length;
+		s_t1z_phase = XZS_T1Z_PHASE_OUT2;
+		if (xzs_t1z_arm_out() != 0) {
+			g_xzs_usb_t1z_failed = 1;
+		}
+	} else if (s_t1z_phase == XZS_T1Z_PHASE_IN2) {
+		g_xzs_usb_bulk_in_count++;
+		g_xzs_usb_bulk_in_bytes += length;
+		s_t1z_phase = XZS_T1Z_PHASE_DONE;
+		g_xzs_usb_t1z_pipeline_done = 1;
+	} else {
+		g_xzs_usb_t1z_failed = 1;
+	}
+}
+
+static void
+xzs_t1z_worker(void)
+{
+	uint32_t completed = 0;
+	uint32_t p0;
+	uint32_t p1;
+	uint32_t dalep;
+
+	g_xzs_usb_t1z_config_in_hard_irq = ml_at_interrupt_context() ? 1u : 0u;
+	if (g_xzs_usb_t1z_config_in_hard_irq) {
+		g_xzs_usb_t1z_failed = 1;
+		xzs_early_puts("[XZS-D7T1] D740/Z10 refused: hard IRQ context\n");
+		return;
+	}
+	xzs_early_puts("[XZS-D7T1] D740/Z10 thread_call endpoint configuration\n");
+	if (xzs_t1z_prove(s_bulk_out_buf, sizeof(s_bulk_out_buf), 64,
+	    &g_xzs_usb_t1z_out_buf_va, &g_xzs_usb_t1z_out_buf_pa,
+	    &g_xzs_usb_t1z_out_buf_contig) != 0 ||
+	    xzs_t1z_prove(&s_bulk_out_trb, sizeof(s_bulk_out_trb), 64,
+	    &g_xzs_usb_t1z_out_trb_va, &g_xzs_usb_t1z_out_trb_pa,
+	    &g_xzs_usb_t1z_out_trb_contig) != 0 ||
+	    xzs_t1z_prove(s_bulk_in_buf, sizeof(s_bulk_in_buf), 64,
+	    &g_xzs_usb_t1z_in_buf_va, &g_xzs_usb_t1z_in_buf_pa,
+	    &g_xzs_usb_t1z_in_buf_contig) != 0 ||
+	    xzs_t1z_prove(&s_bulk_in_trb, sizeof(s_bulk_in_trb), 64,
+	    &g_xzs_usb_t1z_in_trb_va, &g_xzs_usb_t1z_in_trb_pa,
+	    &g_xzs_usb_t1z_in_trb_contig) != 0) {
+		g_xzs_usb_t1z_failed = 1;
+		xzs_early_puts("[XZS-D7T1] D740/Z11 DMA proof failed\n");
+		return;
+	}
+	g_xzs_usb_t1z_dma_ok = 1;
+	xzs_early_puts("[XZS-D7T1] D740/Z11 DMA VA/PA proof passed\n");
+
+	g_xzs_usb_t1z_depstartcfg_param = 2;
+	if (xzs_t1y_ep_cmd(DWC3_PHYS_EP_CTRL_OUT,
+	    DEPCMD_STARTNEWCFG | DEPCMD_PARAM(2), 0, 0, 0, &completed) != 0) {
+		g_xzs_usb_t1z_failed = 1;
+		xzs_early_puts("[XZS-D7T1] D740/Z12 DEPSTARTCFG(2) failed\n");
+		return;
+	}
+	xzs_early_puts("[XZS-D7T1] D740/Z12 DEPSTARTCFG resource_index=2\n");
+
+	p0 = DWC3_DEPCFG_EP_TYPE(DWC3_EP_TYPE_BULK) |
+	    DWC3_DEPCFG_MAX_PACKET_SIZE(512) | DWC3_DEPCFG_FIFO_NUMBER(2);
+	p1 = DWC3_DEPCFG_XFER_COMPLETE_EN | DWC3_DEPCFG_XFER_NOT_READY_EN |
+	    DWC3_DEPCFG_EP_NUMBER(DWC3_PHYS_EP_BULK_OUT);
+	g_xzs_usb_t1z_num_xfer_res = DWC3_DEPXFERCFG_NUM_XFER_RES(1);
+	if (xzs_t1y_ep_cmd(DWC3_PHYS_EP_BULK_OUT, DEPCMD_SETEPCONFIG, p0, p1, 0,
+	    &completed) != 0 ||
+	    xzs_t1y_ep_cmd(DWC3_PHYS_EP_BULK_OUT, DEPCMD_SETTRANSXFR,
+	    g_xzs_usb_t1z_num_xfer_res, 0, 0, &completed) != 0) {
+		g_xzs_usb_t1z_failed = 1;
+		xzs_early_puts("[XZS-D7T1] D740/Z20 EP2 configuration failed\n");
+		return;
+	}
+	g_xzs_usb_t1z_ep2_configured = 1;
+	xzs_early_puts("[XZS-D7T1] D740/Z20 EP2 SETEPCONFIG+SETTRANSFRESOURCE\n");
+
+	p0 = DWC3_DEPCFG_EP_TYPE(DWC3_EP_TYPE_BULK) |
+	    DWC3_DEPCFG_MAX_PACKET_SIZE(512) | DWC3_DEPCFG_FIFO_NUMBER(3);
+	p1 = DWC3_DEPCFG_XFER_COMPLETE_EN | DWC3_DEPCFG_XFER_NOT_READY_EN |
+	    DWC3_DEPCFG_EP_NUMBER(DWC3_PHYS_EP_BULK_IN);
+	if (xzs_t1y_ep_cmd(DWC3_PHYS_EP_BULK_IN, DEPCMD_SETEPCONFIG, p0, p1, 0,
+	    &completed) != 0 ||
+	    xzs_t1y_ep_cmd(DWC3_PHYS_EP_BULK_IN, DEPCMD_SETTRANSXFR,
+	    g_xzs_usb_t1z_num_xfer_res, 0, 0, &completed) != 0) {
+		g_xzs_usb_t1z_failed = 1;
+		xzs_early_puts("[XZS-D7T1] D740/Z21 EP3 configuration failed\n");
+		return;
+	}
+	g_xzs_usb_t1z_ep3_configured = 1;
+	xzs_early_puts("[XZS-D7T1] D740/Z21 EP3 SETEPCONFIG+SETTRANSFRESOURCE\n");
+
+	dalep = dwc3_read32(DWC3_DALEPENA);
+	dwc3_write32(DWC3_DALEPENA, dalep | (1u << DWC3_PHYS_EP_BULK_OUT) |
+	    (1u << DWC3_PHYS_EP_BULK_IN));
+	g_xzs_usb_t1z_dalepena = dwc3_read32(DWC3_DALEPENA);
+	if ((g_xzs_usb_t1z_dalepena & ((1u << DWC3_PHYS_EP_BULK_OUT) |
+	    (1u << DWC3_PHYS_EP_BULK_IN))) !=
+	    ((1u << DWC3_PHYS_EP_BULK_OUT) | (1u << DWC3_PHYS_EP_BULK_IN))) {
+		g_xzs_usb_t1z_failed = 1;
+		xzs_early_puts("[XZS-D7T1] D740/Z22 DALEPENA readback failed\n");
+		return;
+	}
+	xzs_early_puts("[XZS-D7T1] D740/Z22 DALEPENA EP2+EP3 enabled\n");
+	s_t1z_phase = XZS_T1Z_PHASE_OUT1;
+	if (xzs_t1z_arm_out() != 0) {
+		g_xzs_usb_t1z_failed = 1;
+		xzs_early_puts("[XZS-D7T1] D740/Z30 Bulk OUT prime failed\n");
+		return;
+	}
+	xzs_early_puts("[XZS-D7T1] D740/Z30 Bulk OUT primed\n");
+}
+
 static void
 xzs_t1y_process_event(uint32_t event)
 {
@@ -1248,7 +1667,16 @@ xzs_t1y_process_event(uint32_t event)
 		uint32_t type = (event >> 6) & 0x0fu;
 
 		if (ep > DWC3_PHYS_EP_CTRL_IN) {
-			return; /* T1-Y has no enabled non-control endpoint. */
+			if (type == DWC3_DEPEVT_XFERCOMPLETE &&
+			    g_xzs_usb_t1z_ep2_configured &&
+			    g_xzs_usb_t1z_ep3_configured) {
+				if (ep == DWC3_PHYS_EP_BULK_OUT) {
+					xzs_t1z_on_out_complete();
+				} else if (ep == DWC3_PHYS_EP_BULK_IN) {
+					xzs_t1z_on_in_complete();
+				}
+			}
+			return;
 		}
 		if (type == DWC3_DEPEVT_XFERCOMPLETE) {
 			if (s_t1y_ep0_state == XZS_T1Y_EP0_SETUP &&
@@ -1319,6 +1747,10 @@ xzs_t1y_event_deferred(thread_call_param_t p0 __unused,
 		xzs_d6m4_put_hex64(event);
 		xzs_early_puts("\n");
 		xzs_t1y_process_event(event);
+	}
+	if (g_xzs_usb_t1z_activation_pending && !g_xzs_usb_t1z_worker_entered) {
+		g_xzs_usb_t1z_worker_entered = 1;
+		xzs_t1z_worker();
 	}
 }
 
@@ -1576,6 +2008,124 @@ xzs_t1y_connect(void)
 	    g_xzs_usb_t1y_tty_bridge_call_count == 0 &&
 	    g_xzs_usb_console_ready == 0;
 	return g_xzs_usb_t1y_complete ? 0 : -1;
+}
+
+int
+xzs_usb_t1z_service(void)
+{
+	if (!g_xzs_usb_t1z_activation_pending) {
+		return -1;
+	}
+	if (s_t1y_event_call != NULL) {
+		(void)thread_call_enter(s_t1y_event_call);
+	}
+	/*
+	 * Stay up until Z4 finishes or the safety window expires.
+	 * A fixed +25s halt is not used: completion ends the wait early,
+	 * and a missed host never runs forever.
+	 */
+	for (uint32_t i = 0; i < 40000; i++) {
+		if (g_xzs_usb_t1z_pipeline_done || g_xzs_usb_t1z_failed) {
+			break;
+		}
+		xzs_watchdog_pet();
+		delay(1000);
+	}
+	return g_xzs_usb_t1z_pipeline_done ? 0 : -1;
+}
+
+static void
+xzs_t1z_put_hex(uint64_t value)
+{
+	/* Hardware-tested Z1–Z4 image printed this extra prefix. Kept in this commit only. */
+	xzs_early_puts("0x");
+	xzs_d6m4_put_hex64(value);
+	xzs_early_puts("\n");
+}
+
+void
+xzs_usb_t1z_report(void)
+{
+	extern volatile int xzs_d7m3_complete;
+
+	xzs_early_puts("\n=======================================================\n");
+	xzs_early_puts("=== D7-T1 T1-Z TARGET TELEMETRY BEGIN ===\n");
+	xzs_early_puts("AUTHORITATIVE_XZS_USB_HEADER=src/xnu/pexpert/pexpert/arm/xzs_usb.h\n");
+	xzs_early_puts("SET_CONFIGURATION_EXECUTION_CONTEXT=thread_call:xzs_t1y_event_deferred\n");
+	xzs_early_puts("HARD_IRQ_CONFIGURES_ENDPOINTS=");
+	xzs_early_puts(g_xzs_usb_t1z_config_in_hard_irq ? "yes\n" : "no\n");
+	xzs_early_puts("EP2_CONFIG_SEMANTICS=DEPSTARTCFG_RSC_2+SETEPCONFIG+SETTRANSFRESOURCE_NUM_XFER_RES\n");
+	xzs_early_puts("EP3_CONFIG_SEMANTICS=DEPSTARTCFG_RSC_2+SETEPCONFIG+SETTRANSFRESOURCE_NUM_XFER_RES\n");
+	xzs_early_puts("TRANSFER_RESOURCE_POLICY=NUM_XFER_RES_1_START_RSC_FROM_DEPCMD\n");
+	xzs_early_puts("DEPSTARTCFG_RESOURCE_INDEX=");
+	xzs_t1z_put_hex(g_xzs_usb_t1z_depstartcfg_param);
+	xzs_early_puts("SETTRANSFRESOURCE_NUM_XFER_RES=");
+	xzs_t1z_put_hex(g_xzs_usb_t1z_num_xfer_res);
+	xzs_early_puts("BULK_OUT_XFER_RSC_IDX=");
+	xzs_t1z_put_hex(g_xzs_usb_t1z_ep2_rsc);
+	xzs_early_puts("BULK_IN_XFER_RSC_IDX=");
+	xzs_t1z_put_hex(g_xzs_usb_t1z_ep3_rsc);
+	xzs_early_puts("BULK_IN_ECHO_XFER_RSC_IDX=");
+	xzs_t1z_put_hex(g_xzs_usb_t1z_ep3_rsc_echo);
+	xzs_early_puts("BULK_OUT_DMA_POLICY=device_to_cpu_dc_ivac\n");
+	xzs_early_puts("BULK_IN_DMA_POLICY=cpu_to_device_dc_cvac\n");
+	xzs_early_puts("BULK_DMA_MAP=CACHED_NORMAL_WBWA\n");
+	xzs_early_puts("BULK_DMA_COHERENT=no\n");
+	xzs_early_puts("BULK_DMA_PROOF=");
+	xzs_early_puts(g_xzs_usb_t1z_dma_ok ? "yes\n" : "no\n");
+	xzs_early_puts("BULK_OUT_BUF_VA="); xzs_t1z_put_hex(g_xzs_usb_t1z_out_buf_va);
+	xzs_early_puts("BULK_OUT_BUF_PA="); xzs_t1z_put_hex(g_xzs_usb_t1z_out_buf_pa);
+	xzs_early_puts("BULK_OUT_BUF_SIZE=512\n");
+	xzs_early_puts("BULK_OUT_BUF_CONTIGUOUS=");
+	xzs_early_puts(g_xzs_usb_t1z_out_buf_contig ? "yes\n" : "no\n");
+	xzs_early_puts("BULK_OUT_TRB_VA="); xzs_t1z_put_hex(g_xzs_usb_t1z_out_trb_va);
+	xzs_early_puts("BULK_OUT_TRB_PA="); xzs_t1z_put_hex(g_xzs_usb_t1z_out_trb_pa);
+	xzs_early_puts("BULK_OUT_TRB_CONTIGUOUS=");
+	xzs_early_puts(g_xzs_usb_t1z_out_trb_contig ? "yes\n" : "no\n");
+	xzs_early_puts("BULK_IN_BUF_VA="); xzs_t1z_put_hex(g_xzs_usb_t1z_in_buf_va);
+	xzs_early_puts("BULK_IN_BUF_PA="); xzs_t1z_put_hex(g_xzs_usb_t1z_in_buf_pa);
+	xzs_early_puts("BULK_IN_BUF_SIZE=512\n");
+	xzs_early_puts("BULK_IN_BUF_CONTIGUOUS=");
+	xzs_early_puts(g_xzs_usb_t1z_in_buf_contig ? "yes\n" : "no\n");
+	xzs_early_puts("BULK_IN_TRB_VA="); xzs_t1z_put_hex(g_xzs_usb_t1z_in_trb_va);
+	xzs_early_puts("BULK_IN_TRB_PA="); xzs_t1z_put_hex(g_xzs_usb_t1z_in_trb_pa);
+	xzs_early_puts("BULK_IN_TRB_CONTIGUOUS=");
+	xzs_early_puts(g_xzs_usb_t1z_in_trb_contig ? "yes\n" : "no\n");
+	xzs_early_puts("RX_RING_CONCURRENCY_MODEL=SPSC_ONE_DWC3_WORKER_ONE_TTY_WORKER\n");
+	xzs_early_puts("RX_RING_ACTIVE=no\n");
+	xzs_early_puts("TX_RING_CONCURRENCY_MODEL=MPSC_CONSOLE_WRITERS_ONE_USB_WORKER\n");
+	xzs_early_puts("TX_RING_ACTIVE=no\n");
+	xzs_early_puts("T1Z_RESET_POLICY=halt_on_z4_or_40s_safety\n");
+	xzs_early_puts("T1Z_MAX_STAGE=4\n");
+	xzs_early_puts("TTY_BRIDGE_ACTIVE=no\n");
+	xzs_early_puts("BULK_OUT_CONFIGURED=");
+	xzs_early_puts(g_xzs_usb_t1z_ep2_configured ? "yes\n" : "no\n");
+	xzs_early_puts("BULK_IN_CONFIGURED=");
+	xzs_early_puts(g_xzs_usb_t1z_ep3_configured ? "yes\n" : "no\n");
+	xzs_early_puts("DALEPENA="); xzs_t1z_put_hex(g_xzs_usb_t1z_dalepena);
+	xzs_early_puts("BULK_OUT_BYTES_TOTAL="); xzs_t1z_put_hex(g_xzs_usb_bulk_out_bytes);
+	xzs_early_puts("BULK_IN_BYTES_TOTAL="); xzs_t1z_put_hex(g_xzs_usb_bulk_in_bytes);
+	xzs_early_puts("Z2_BULK_OUT_BYTES="); xzs_t1z_put_hex(g_xzs_usb_t1z_out1_len);
+	xzs_early_puts("Z3_BULK_IN_BYTES="); xzs_t1z_put_hex(g_xzs_usb_t1z_in1_len);
+	xzs_early_puts("Z4_LOOPBACK_OUT_BYTES="); xzs_t1z_put_hex(g_xzs_usb_t1z_out2_len);
+	xzs_early_puts("Z4_LOOPBACK_IN_BYTES="); xzs_t1z_put_hex(g_xzs_usb_t1z_in2_len);
+	xzs_early_puts("USB_TO_TTY_BYTES="); xzs_t1z_put_hex(g_xzs_usb_t1z_usb_to_tty_bytes);
+	xzs_early_puts("TTY_TO_USB_BYTES="); xzs_t1z_put_hex(g_xzs_usb_t1z_tty_to_usb_bytes);
+	xzs_early_puts("SHELL_PROCESS_ALIVE=");
+	xzs_early_puts(xzs_d7m3_complete ? "yes\n" : "no\n");
+	xzs_early_puts("EP_COMMAND_FAILURES="); xzs_t1z_put_hex(g_xzs_usb_t1y_ep_cmd_failures);
+	xzs_early_puts("EVENT_RING_DROPS="); xzs_t1z_put_hex(g_xzs_usb_t1y_event_ring_drops);
+	xzs_early_puts("AVAILABLE_SHELL_COMMANDS=none\n");
+	xzs_early_puts("INTERACTIVE_TEST_COMMAND_1=none\n");
+	xzs_early_puts("INTERACTIVE_TEST_COMMAND_2=none\n");
+	xzs_early_puts("T1Z_PIPELINE_DONE=");
+	xzs_early_puts(g_xzs_usb_t1z_pipeline_done ? "yes\n" : "no\n");
+	xzs_early_puts("T1Z_FAILED=");
+	xzs_early_puts(g_xzs_usb_t1z_failed ? "yes\n" : "no\n");
+	xzs_early_puts("D7_T1_COMPLETE=no\n");
+	xzs_early_puts("D7_T1_SEALED=no\n");
+	xzs_early_puts("=== D7-T1 T1-Z TARGET TELEMETRY END ===\n");
+	xzs_early_puts("=======================================================\n\n");
 }
 
 /*
