@@ -1324,12 +1324,28 @@ xzs_t1y_event_deferred(thread_call_param_t p0 __unused,
 
 static volatile boolean_t s_t1y_sync_telemetry_logged = FALSE;
 
+static volatile boolean_t s_t1y_pos_synchronized = FALSE;
+
 static void
 xzs_t1y_drain_event_buffer(void)
 {
 	uint32_t count = dwc3_read32(DWC3_GEVNTCNT0) & DWC3_GEVNTCOUNT_PENDING_MASK;
 	uint32_t available_events = count / sizeof(uint32_t);
 	uint32_t consumed_events = 0;
+
+	if (count > 0 && !s_t1y_pos_synchronized && s_uncached_event_buf != NULL) {
+		for (uint32_t i = 0; i < (XZS_DWC3_EVENT_BUFFER_SIZE / sizeof(uint32_t)); i++) {
+			uint32_t expected = 0xA5A50000u | i;
+			if (s_uncached_event_buf[i] != expected) {
+				s_t1y_event_buf_pos = i * sizeof(uint32_t);
+				s_t1y_pos_synchronized = TRUE;
+				xzs_early_puts("[XZS-D7T1] POS_SYNCHRONIZED_TO_SLOT=0x");
+				xzs_d6m4_put_hex64(i);
+				xzs_early_puts("\n");
+				break;
+			}
+		}
+	}
 
 	if (count > 0 && !s_t1y_sync_telemetry_logged) {
 		s_t1y_sync_telemetry_logged = TRUE;
@@ -1433,11 +1449,9 @@ xzs_t1y_drain_event_buffer(void)
 			break;
 		}
 		if (s_uncached_event_buf != NULL &&
-		    s_uncached_event_buf[slot_idx] != (0xA5A50000u | slot_idx) &&
-		    s_uncached_event_buf[slot_idx] != 0) {
+		    s_uncached_event_buf[slot_idx] != (0xA5A50000u | slot_idx)) {
 			event = s_uncached_event_buf[slot_idx];
-		} else if (s_fb_event_buf != NULL && s_fb_event_buf[slot_idx] != 0) {
-			event = s_fb_event_buf[slot_idx];
+			s_uncached_event_buf[slot_idx] = 0xA5A50000u | slot_idx;
 		} else {
 			slot = (uint32_t *)(void *)(s_candidate2c_event_buffer + s_t1y_event_buf_pos);
 			xzs_dma_clean_invalidate((vm_offset_t)slot, sizeof(*slot));
