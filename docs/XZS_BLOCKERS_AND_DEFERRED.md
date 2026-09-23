@@ -104,6 +104,6 @@ Status values: `ACTIVE_BLOCKER`, `DEFERRED`, `BYPASSED`, `RESOLVED`, `OBSOLETE`.
 | CURRENT_BYPASS | Stop after the timeout. Do not repeat the same branch write. Do not enable AXI or MDP until AHB is running. |
 | WHY_DEFERRED | Not deferred. This is the active D8-M2 blocker. |
 | RESUME_CONDITION | A new candidate must inspect the AHB root and its parents before another branch write. |
-| NEXT_INVESTIGATION | HYPOTHESIS, not a cause: Linux marks `mmss_mmagic_ahb`, `mmss_mmagic_cfg_ahb`, `mmagic_mdss_axi`, and `mmagic_mdss_noc_cfg_ahb` `CLK_IS_CRITICAL`, and `__clk_core_init` prepares and enables those clocks and refuses to drop the last count. XNU does not do that registration. Those branches are not the parent of `mdss_ahb`. The parent of `mdss_ahb` is `ahb_clk_src`, which already had `root_off=0`. A read of the current boot must show whether the critical branches and `axi_clk_src` still differ from that Linux baseline before any new enable. |
+| NEXT_INVESTIGATION | HYPOTHESIS, not a cause: Linux prepares and enables the four `CLK_IS_CRITICAL` MMAGIC branches at registration. On `059d58a` those four branches were enable 0 and halt 1, while `ahb_clk_src` and `axi_clk_src` had `root_off=0` and `gcc_mmss_noc_cfg_ahb` was running. They are not the parent of `mdss_ahb`. Separate enable commands exist and have not been booted. |
 
 HYPOTHESIS, not established: an upstream clock was stopped. The `94a2c37` read does not support "AHB RCG root is off" or "GCC MMSS NOC config clock is off" on that boot. The earlier halt-with-enable result is still unexplained.
