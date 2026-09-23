@@ -1,6 +1,6 @@
 # D8 display bring-up
 
-`main` carries the clean D8-M1 runtime from tag `xzs-d8-m1-complete` (`861032cb7b137096edeb1aa5caa04aef6737533a`). That tree matches the hardware-proven read-only image. D8-M2 writes are not in this file's tree. The measured collapsed-domain values below are the D8-M1 result. A later boot on `xzs-d8-m2-power` turned MDSS on and left `mdss_ahb` halted. See [`docs/XZS_BLOCKERS_AND_DEFERRED.md`](XZS_BLOCKERS_AND_DEFERRED.md).
+This branch is rebuilt from `b18ba07` and does not include the ramoops cache experiments. The MMCC values below were first measured on `93c511c`. A clean image must show the same power and halt state, or an explained difference, before it is tagged.
 
 First pixels, later, are CPU framebuffer to MDP5 to DSI to the panel. No GPU. D8-M1 does not turn anything on.
 
@@ -99,16 +99,157 @@ Host log `artifacts/hw/d8m1-93c511c/host.txt`. Nine MMCC loads each printed PRE 
 
 For a GDSC, bit 31 is power-on and bit 0 is software collapse. The parent domain reports power on. MDSS_GDSC reports collapsed. For a branch, bit 0 is enable and bit 31 set means halted. The display branches are halted.
 
-## D8-M2, not started
+## D8-M2 commands
 
-Each step is one shell transaction with a pre line, the action, and a readback. Nothing here is implemented as a write.
+The clean image `861032c` reproduced the table above (`artifacts/hw/d8m1-clean-861032c/host.txt`) and is tag `xzs-d8-m1-complete`. Later writes live on `xzs-d8-m2-power`.
+
+Shell commands, each one transaction:
 
 ```text
-1. Read MMAGIC_MDSS_GDSC and MDSS_GDSC.
-2. If PWR_ON is clear, enable MMAGIC_MDSS then MDSS_GDSC.
-3. Read both GDSCR values back.
-4. Enable mdss_ahb, then mdss_axi, then mdss_mdp.
-5. Read those branch registers back.
+display power status
+display power mmagic-on
+display power mdss-on
+clocks display status
+clocks mdss-ahb-on
+clocks mdss-axi-on
+clocks mdp-on
 ```
 
-No PLL, PHY, panel, backlight, or scanout in that first sequence.
+`mmagic-on` writes nothing when GDSCR bit 31 is set and bit 0 is clear. It reports `ALREADY_ON`.
+
+The write sequence is the Linux `gdsc_enable` path for these two domains, not a guess from bit names.
+
+MMAGIC_MDSS (`0x247c`, hw status `0x2480`, flags VOTABLE|ALWAYS_ON, pwrsts OFF_ON): clear `SW_COLLAPSE`, `delay(1)` because `gds_hw_ctrl` is set, poll `PWR_ON` on `0x2480` for at most 2000 µs, `delay(1)`, set `HW_CONTROL` (bit 1). No reset, clamp, or memory-retain registers.
+
+MDSS (`0x2304`, parent mmagic, cxcs `0x2310` and `0x231c`, pwrsts OFF_ON, no HW_CTRL, no SW_RESET, no CLAMP_IO): refuse if the parent is not already on. Clear `SW_COLLAPSE`, poll `PWR_ON` on `0x2304` for at most 2000 µs. On success set `RETAIN_MEM` (bit 14) and `RETAIN_PERIPH` (bit 13) on the two cxc registers, then `delay(1)`. Those bits are not the branch enable.
+
+Branch enable is `clk_branch2`: set CBCR bit 0 only, then poll until bit 31 (`CBCR_CLK_OFF`) clears or the NoC FSM field (bits 30:28) equals 2. Cap 2000 µs. A clock command writes nothing if MDSS_GDSC is not on.
+
+A timeout prints the readback and returns to the prompt. No MDSS, MDP, DSI, PHY, or PLL slave read is added by these commands.
+
+On `0b0e429`, `mdss_ahb` accepted enable bit 0 and stayed halted (`0x80008001`). Repeating that write is not the next step. `clocks mdss-ahb-status` only reads the audited chain:
+
+| Node | Register | Parent | Class |
+|---|---|---|---|
+| `mdss_ahb` | MMCC `0x2308` | `ahb_clk_src` | branch, bit 0 enable, bit 31 halt |
+| `ahb_clk_src` | MMCC CMD `0x5000`, CFG `0x5004` | XO=0, MMPLL0=1, GPLL0=5, GPLL0_DIV=6 | RCG. Root is on when CMD bit 31 is clear. Bit 1 is ROOT_EN. CFG bits 10:8 are the source. |
+| `mmss_mmagic_ahb` | MMCC `0x5024` | same RCG | critical branch |
+| `mmss_mmagic_cfg_ahb` | MMCC `0x5054` | same RCG | critical branch |
+| `mmagic_mdss_noc_cfg_ahb` | MMCC `0x2478` | `gcc_mmss_noc_cfg_ahb` | critical branch |
+| `gcc_mmss_noc_cfg_ahb` | GCC `0x00309008` | not named in the branch | GCC branch, `CLK_IGNORE_UNUSED` |
+
+Those addresses are reference evidence from Linux `mmcc-msm8996.c`, `gcc-msm8996.c`, and `clk-rcg2.c`. A value printed by the shell is hardware evidence. GCC and MMCC sit in the existing device window, so these reads do not touch MDSS slaves.
+
+Read-only hardware on `94a2c37` (`artifacts/hw/d8m2-94a2c37/host.txt`), after a fresh boot, with MDSS collapsed again:
+
+```text
+ahb_cmd            0x00000000   root_off=0 root_en=0 update=0
+ahb_cfg            0x00000513   source field = GPLL0
+mdss_ahb           0x80008000   enable=0 halt=1
+mmss_mmagic_ahb    0x80000000   enable=0 halt=1
+mmss_mmagic_cfg_ahb 0x80008000  enable=0 halt=1
+mmagic_mdss_noc    0x80000000   enable=0 halt=1
+gcc_mmss_noc       0x20008001   enable=1 halt=0
+```
+
+No clock write was issued on that boot.
+
+## Reset and AHB dependency
+
+Reference order used by the Linux clock and reset drivers. This is not a claim that every stage is the one blocking `mdss_ahb`.
+
+```text
+MMAGIC_MDSS_GDSC
+        ↓
+MDSS_GDSC
+        ↓
+BCR level (bit 0 held, not a status latch)
+        ↓
+ahb_clk_src
+        ↓
+mdss_ahb branch
+        ↓
+mdss_axi / axi_clk_src
+        ↓
+mdss_mdp / mdp_clk_src
+```
+
+`mdss_ahb` is `clk_branch2`. Enable and halt are both MMCC `0x2308`. Enable is bit 0. Halt check is `BRANCH_HALT` because `halt_check` is unset. That mode polls `CBCR_CLK_OFF` (bit 31) clear, or NoC FSM bits 30:28 equal to 2. It is not `BRANCH_HALT_DELAY`, `BRANCH_HALT_SKIP`, or `BRANCH_VOTED`. The parent is `ahb_clk_src` only. The branch is not a voted clock. Other MMSS branches share that RCG, but they do not vote `mdss_ahb` itself.
+
+| Item | Register | Bit | Assert | Deassert | Safe to read | Safe to write |
+|---|---|---|---|---|---|---|
+| MDSS_BCR | MMCC `0x2300` | 0 | write 1 | write 0 | yes, MMCC | only after a read shows bit 0 set |
+| MMAGIC_MDSS_BCR | MMCC `0x2470` | 0 | write 1 | write 0 | yes, MMCC | same rule |
+| MMAGICAHB_BCR | MMCC `0x5020` | 0 | write 1 | write 0 | yes, MMCC | same rule |
+| MMAGIC_CFG_BCR | MMCC `0x5050` | 0 | write 1 | write 0 | yes, MMCC | same rule |
+
+Source: Linux `mmcc-msm8996.c` reset map and `drivers/clk/qcom/reset.c`. `qcom_reset()` asserts, waits 1 µs when the map delay is zero, then deasserts. The read inside assert is discarded. A zero bit matches the deassert write. It is not a separate status bit.
+
+`clocks mdss-ahb-debug` reads those BCRs, the AHB chain, GPLL0 mode at GCC `0x000000` (`PLL_LOCK_DET` is bit 31), and the GPLL0 vote at GCC `0x052000` bit 0. It writes nothing.
+
+Hardware on `a5f47b5` (`artifacts/hw/d8m2-a5f47b5/host.txt`): all four BCR reads were `0x00000000`. GPLL0 mode was `0xc0118000` with lock set, and the vote enable bit was set. No reset write was issued.
+
+## Linux critical baseline
+
+`CLK_IS_CRITICAL` is handled in `__clk_core_init`. Linux calls `clk_core_prepare` and `clk_core_enable` for that clock. Later unprepare/disable refuse to drop the last count, so the clock stays enabled. Enable also enables the parent. This is a reference fact about the clock core, not proof that a missing critical branch is why `mdss_ahb` stayed halted.
+
+| Clock | Register | Parent | Critical | Linux at MMCC registration |
+|---|---|---|---|---|
+| `mmss_mmagic_ahb` | MMCC `0x5024` | `ahb_clk_src` | yes | prepared and enabled |
+| `mmss_mmagic_cfg_ahb` | MMCC `0x5054` | `ahb_clk_src` | yes | prepared and enabled |
+| `mmagic_mdss_noc_cfg_ahb` | MMCC `0x2478` | `gcc_mmss_noc_cfg_ahb` | yes | prepared and enabled |
+| `mmagic_mdss_axi` | MMCC `0x2474` | `axi_clk_src` | yes | prepared and enabled |
+| `mdss_ahb` | MMCC `0x2308` | `ahb_clk_src` | no | left for the MDSS driver |
+
+`axi_clk_src` CMD is MMCC `0x5040` and CFG is `0x5044`. Its source map is XO=0, MMPLL0=1, MMPLL1=2, GPLL0=5, GPLL0_DIV=6. Root-off is CMD bit 31. These MMCC branches can be read before MDSS_GDSC is on. `clocks mdss-critical-status` only reads them.
+
+On `059d58a` (`artifacts/hw/d8m2-059d58a/host.txt`), with MDSS still collapsed:
+
+```text
+mmss_mmagic_ahb         0x80000000  enable=0 halt=1
+mmss_mmagic_cfg_ahb     0x80008000  enable=0 halt=1
+mmagic_mdss_noc_cfg_ahb 0x80000000  enable=0 halt=1
+mmagic_mdss_axi         0x80000000  enable=0 halt=1
+ahb_clk_src             cmd 0x00000000 cfg 0x00000513 root_off=0 source=GPLL0
+axi_clk_src             cmd 0x00000000 cfg 0x00000000 root_off=0 source=XO
+gcc_mmss_noc_cfg_ahb    0x20008001
+```
+
+That differs from the Linux registration baseline. It does not by itself prove the difference causes the `mdss_ahb` halt. The four branch enables are separate commands and each one refuses to write if its own parent root is off. They do not require MDSS_GDSC.
+
+## Hardware proof on candidate 545398f (D8-M2 PASS)
+
+Hardware execution session `artifacts/hw/d8m2-545398f/host.txt` on candidate `545398f` (tag `xzs-d8-m2-complete`, SHA256: `5a5185fe9b53da69895cc2a6c1b68e96b0f46409cac8e4ca9fb044f6d0712704`).
+
+1. Baseline capture:
+   - `MMAGIC_MDSS_GDSC` = `0xa0222000` (ON)
+   - `MDSS_GDSC` = `0x00222001` (collapsed)
+   - All 4 critical MMAGIC branches: `enable=0, halt=1`
+   - Both roots running: `ahb_root_off=0` (GPLL0), `axi_root_off=0` (XO)
+   - GCC MMSS NOC: `0x20008001` (running)
+
+2. Critical MMAGIC clock enables:
+   - `mmss_mmagic_ahb` (MMCC 0x5024): `old=0x80000000, wrote=0x80000001, new=0x00000001` -> PASS (`enable=1, halt=0`)
+   - `mmss_mmagic_cfg_ahb` (MMCC 0x5054): `old=0x80008000, wrote=0x80008001, new=0x20008001` -> PASS (`enable=1, halt=0`)
+   - `mmagic_mdss_noc_cfg_ahb` (MMCC 0x2478): `old=0x80000000, wrote=0x80000001, new=0x00000001` -> PASS (`enable=1, halt=0`)
+   - `mmagic_mdss_axi` (MMCC 0x2474): `old=0x80000000, wrote=0x80000001, new=0x00000001` -> PASS (`enable=1, halt=0`)
+
+3. MDSS GDSC power on:
+   - `MDSS_GDSC` (MMCC 0x2304): `old=0x00222001, wrote=0x00222000, new=0xa0222000` -> PASS (`PWR_ON=1, SW_COLLAPSE=0`)
+
+4. Decisive retry: `mdss_ahb`:
+   - `mdss_ahb` (MMCC 0x2308): `old=0x80008000, wrote=0x80008001, new=0x20008001, readback=0x20008001` -> **PASS** (`enable=1, halt=0, FSM_ON=1`)
+   - Halt cleared immediately within 2000 µs.
+
+5. MDSS AXI & MDP clock bring-up:
+   - `mdss_axi` (MMCC 0x2310): `old=0x80006220, wrote=0x80006221, new=0x00006221, readback=0x00006221` -> PASS (`enable=1, halt=0`)
+   - `mdss_mdp` (MMCC 0x231c): `old=0x80006220, wrote=0x80006221, new=0x00006221, readback=0x00006221` -> PASS (`enable=1, halt=0`)
+
+6. Shell health:
+   - `pwd` returned `/`, shell responsive, zero panics, zero resets.
+
+Conclusion:
+D8-M2 acceptance criteria fully satisfied on physical silicon.
+Tag `xzs-d8-m2-complete` sealed at `545398f30d8fda592d4ca67ee867a016c2f37092`.
+D8-M3 is NOT STARTED.
+

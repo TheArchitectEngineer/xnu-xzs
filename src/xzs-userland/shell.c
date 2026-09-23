@@ -137,6 +137,68 @@ cmd_diag(long which)
 	(void)xzs_svc(SYS_XZS_DIAG, which, 0, 0, 0);
 }
 
+static long
+display_which(int argc, char **argv)
+{
+	if (argc == 1) {
+		return 1;
+	}
+	if (argc == 3 && seq(argv[1], "power")) {
+		if (seq(argv[2], "status")) {
+			return 7;
+		}
+		if (seq(argv[2], "mmagic-on")) {
+			return 8;
+		}
+		if (seq(argv[2], "mdss-on")) {
+			return 9;
+		}
+	}
+	return -1;
+}
+
+static long
+clocks_which(int argc, char **argv)
+{
+	if (argc == 1) {
+		return 3;
+	}
+	if (argc == 3 && seq(argv[1], "display") && seq(argv[2], "status")) {
+		return 3;
+	}
+	if (argc == 2 && seq(argv[1], "mdss-ahb-status")) {
+		return 13;
+	}
+	if (argc == 2 && seq(argv[1], "mdss-ahb-debug")) {
+		return 14;
+	}
+	if (argc == 2 && seq(argv[1], "mdss-critical-status")) {
+		return 15;
+	}
+	if (argc == 2 && seq(argv[1], "mmagic-ahb-on")) {
+		return 16;
+	}
+	if (argc == 2 && seq(argv[1], "mmagic-cfg-ahb-on")) {
+		return 17;
+	}
+	if (argc == 2 && seq(argv[1], "mmagic-mdss-noc-on")) {
+		return 18;
+	}
+	if (argc == 2 && seq(argv[1], "mmagic-mdss-axi-on")) {
+		return 19;
+	}
+	if (argc == 2 && seq(argv[1], "mdss-ahb-on")) {
+		return 10;
+	}
+	if (argc == 2 && seq(argv[1], "mdss-axi-on")) {
+		return 11;
+	}
+	if (argc == 2 && seq(argv[1], "mdp-on")) {
+		return 12;
+	}
+	return -1;
+}
+
 static void
 cmd_echo(int argc, char **argv)
 {
@@ -427,11 +489,21 @@ xzs_d7t2_shell(void)
 		} else if (seq(argv[0], "cat")) {
 			cmd_cat(argc, argv);
 		} else if (seq(argv[0], "display")) {
-			cmd_diag(1);
+			long which = display_which(argc, argv);
+			if (which < 0) {
+				werr("display: usage\n");
+			} else {
+				cmd_diag(which);
+			}
 		} else if (seq(argv[0], "dsi")) {
 			cmd_diag(2);
 		} else if (seq(argv[0], "clocks")) {
-			cmd_diag(3);
+			long which = clocks_which(argc, argv);
+			if (which < 0) {
+				werr("clocks: usage\n");
+			} else {
+				cmd_diag(which);
+			}
 		} else if (seq(argv[0], "irq")) {
 			cmd_diag(4);
 		} else if (seq(argv[0], "fb")) {

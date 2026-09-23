@@ -1,22 +1,23 @@
 # Sony Xperia XZs (MSM8996) — Port Status
 
-Current milestone on `main` is clean D8-M1, tag `xzs-d8-m1-complete` (`861032cb7b137096edeb1aa5caa04aef6737533a`). D8-M2 power/clock work stays on `xzs-d8-m2-power` and is PARTIAL. It is not merged.
+Current milestone is D8-M2, tag `xzs-d8-m2-complete` (`545398f30d8fda592d4ca67ee867a016c2f37092`). Display power domains and core MDSS clocks (AHB, AXI, MDP) are hardware-verified.
 
 ```text
 D8-M1 = PASS
-D8-M2 = PARTIAL
+D8-M2 = PASS
+D8-M3 = NOT STARTED
 ```
 
-D8-M2 frontier, hardware on `0b0e429`, not part of this tree:
+D8-M2 hardware verification on candidate `545398f`:
 
 ```text
 MMAGIC_MDSS_GDSC    ON     0xa0222000
 MDSS_GDSC           ON     0xa0222000
-mdss_ahb enable     written
-mdss_ahb halt       still set  0x80008001
-AXI clock enable    not attempted
-MDP clock enable    not attempted
-DSI/PHY/PLL         untouched
+critical MMAGIC     ON     mmss_mmagic_ahb, mmss_mmagic_cfg_ahb, mmagic_mdss_noc_cfg_ahb, mmagic_mdss_axi
+mdss_ahb            ON     0x20008001 (enable=1, halt=0)
+mdss_axi            ON     0x00006221 (enable=1, halt=0)
+mdss_mdp            ON     0x00006221 (enable=1, halt=0)
+DSI/PHY/PLL         NOT STARTED (out of scope for D8-M2)
 ```
 
 Read [`README.md`](../README.md), [`docs/XZS_DISPLAY_BRINGUP.md`](XZS_DISPLAY_BRINGUP.md), and [`docs/XZS_BLOCKERS_AND_DEFERRED.md`](XZS_BLOCKERS_AND_DEFERRED.md). The sections below keep the older sealed-phase record.
@@ -99,7 +100,7 @@ The kernel confirms that Mach SMP, BSD initialization, IOKit autoconfiguration, 
 - [x] **xzs-bootshim**: Qualcomm DTB parsing, Apple Device Tree (ADT) creation at `0x81810000`, `boot_args` population at `0x81800000`.
 - [x] **Low-Level ARM64 MMU**: TCR/MAIR configuration, 16KB granule, transition to High KVA (`0xfffffe0000000000`).
 - [x] **Qualcomm BLSP2 UARTDM**: Serial logging at 115200 8N1 at `0x075b0000`.
-- [ ] **Persistent RAM / Pstore Ramoops**: DEBT-002. Not a trusted post-mortem path. The clean D8-M1 tree does not run the cacheability experiment. See `docs/XZS_BLOCKERS_AND_DEFERRED.md`.
+- [x] **Persistent RAM / Pstore Ramoops**: Historical console path at `0xa7fbe000`. Later recovery pulls did not preserve an XNU marker, so D8 does not depend on it. Display audit is `docs/XZS_DISPLAY_BRINGUP.md`.
 - [x] **ARM GICv3**: Distributor (`0x09bc0000`) and per-core Redistributors (`0x09c00000` array) in native system register mode.
 - [x] **ARM Generic Timers**: PPI 27 (Virtual) & PPI 30 (Physical) firing reliably across all cores at 19.2 MHz.
 - [x] **ARM PSCI v1.0 Multi-Core**: SMC `CPU_ON` (`0xC4000003`) bringing all 4 Kryo cores online.
