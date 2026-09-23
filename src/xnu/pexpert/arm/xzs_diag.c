@@ -75,17 +75,74 @@ xzs_diag_boot_args(void)
 	return (const boot_args *)PE_state.bootArgs;
 }
 
+/*
+ * MMCC is at 0x008c0000, inside the bootstrap device window
+ * 0x00000000-0x01ffffff. These registers are the clock controller,
+ * not the MDSS slave behind MDSS_GDSC.
+ */
+#define XZS_MMCC_BASE 0x008c0000UL
+#define XZS_MMCC_MDSS_GDSC 0x2304u
+#define XZS_MMCC_MMAGIC_MDSS_GDSC 0x247cu
+#define XZS_MMCC_MDSS_AHB 0x2308u
+#define XZS_MMCC_MDSS_AXI 0x2310u
+#define XZS_MMCC_MDSS_PCLK0 0x2314u
+#define XZS_MMCC_MDSS_MDP 0x231cu
+#define XZS_MMCC_MDSS_BYTE0 0x233cu
+#define XZS_MMCC_MDSS_ESC0 0x2344u
+#define XZS_MMCC_CFG_AHB 0x5054u
+
+extern uint64_t g_xzs_ttbr0;
+
+static uint32_t
+xzs_mmcc_read32(uint32_t offset)
+{
+	uint64_t saved = 0;
+	uint32_t value;
+
+	__asm__ volatile("mrs %0, TTBR0_EL1" : "=r"(saved));
+	if (g_xzs_ttbr0 != 0) {
+		__asm__ volatile("msr TTBR0_EL1, %0; isb sy" :: "r"(g_xzs_ttbr0) : "memory");
+	}
+	value = *(volatile uint32_t *)(XZS_MMCC_BASE + offset);
+	__asm__ volatile("dsb sy" ::: "memory");
+	if (g_xzs_ttbr0 != 0) {
+		__asm__ volatile("msr TTBR0_EL1, %0; isb sy" :: "r"(saved) : "memory");
+	}
+	return value;
+}
+
+static void
+xzs_mmcc_reg(const char *name, uint32_t offset)
+{
+	uint32_t value;
+
+	xzs_diag_emit("[XZS-D8M1] MMCC_READ_PRE ");
+	xzs_diag_emit(name);
+	xzs_diag_emit("\n");
+	value = xzs_mmcc_read32(offset);
+	xzs_diag_emit("[XZS-D8M1] MMCC_READ_POST ");
+	xzs_diag_emit(name);
+	xzs_diag_emit("\n");
+	xzs_diag_hex_line("[XZS-D8M1] mmio ", value);
+	xzs_diag_emit("[XZS-D8M1] source=mmio reg=");
+	xzs_diag_emit(name);
+	xzs_diag_emit(" bit0=");
+	xzs_diag_emit((value & 1u) ? "1" : "0");
+	xzs_diag_emit(" bit31=");
+	xzs_diag_emit((value & 0x80000000u) ? "1\n" : "0\n");
+}
+
 static void
 xzs_display_dump_state(void)
 {
 	xzs_diag_emit("[XZS-D8M1] DISPLAY_AUDIT_ENTER\n");
-	xzs_diag_emit("[XZS-D8M1] class=CODE_AUDIT\n");
-	xzs_diag_emit("[XZS-D8M1] mmio_read=no\n");
-	xzs_diag_emit("[XZS-D8M1] reason=mdss_power_domain_not_proven\n");
-	xzs_diag_emit("[XZS-D8M1] ref_mdss_phys=0x00900000\n");
-	xzs_diag_emit("[XZS-D8M1] ref_mdp=0x00901000\n");
-	xzs_diag_emit("[XZS-D8M1] ref_src=device/reference/msm8996.dtsi\n");
-	xzs_diag_emit("[XZS-D8M1] dts_mdss_status=disabled\n");
+	xzs_diag_emit("[XZS-D8M1] mdss_base=0x00900000 source=reference\n");
+	xzs_diag_emit("[XZS-D8M1] mdp_base=0x00901000 source=reference\n");
+	xzs_diag_emit("[XZS-D8M1] mdss_regs=not_read class=REQUIRES_POWER_DOMAIN\n");
+	xzs_mmcc_reg("mmagic_mdss_gdscr", XZS_MMCC_MMAGIC_MDSS_GDSC);
+	xzs_mmcc_reg("mdss_gdscr", XZS_MMCC_MDSS_GDSC);
+	xzs_diag_emit("[XZS-D8M1] gdsc_bit31=pwr_on bit0=sw_collapse source=mmio\n");
+	xzs_diag_emit("[XZS-D8M1] panel=UNKNOWN backlight=UNKNOWN fb_handoff=NONE\n");
 	xzs_diag_emit("[XZS-D8M1] DISPLAY_AUDIT_DONE\n");
 }
 
@@ -93,13 +150,13 @@ static void
 xzs_dsi_dump_state(void)
 {
 	xzs_diag_emit("[XZS-D8M1] DSI_AUDIT_ENTER\n");
-	xzs_diag_emit("[XZS-D8M1] class=CODE_AUDIT\n");
-	xzs_diag_emit("[XZS-D8M1] mmio_read=no\n");
-	xzs_diag_emit("[XZS-D8M1] ref_dsi0=0x00994000\n");
-	xzs_diag_emit("[XZS-D8M1] ref_dsi0_phy=0x00994400\n");
-	xzs_diag_emit("[XZS-D8M1] ref_dsi0_lane=0x00994500\n");
-	xzs_diag_emit("[XZS-D8M1] ref_dsi0_pll=0x00994800\n");
-	xzs_diag_emit("[XZS-D8M1] dts_dsi_status=disabled\n");
+	xzs_diag_emit("[XZS-D8M1] dsi0_base=0x00994000 source=reference class=REQUIRES_POWER_DOMAIN\n");
+	xzs_diag_emit("[XZS-D8M1] phy_base=0x00994400 lane=0x00994500 pll=0x00994800 source=reference\n");
+	xzs_diag_emit("[XZS-D8M1] dsi_phy_pll_regs=not_read\n");
+	xzs_mmcc_reg("mdss_byte0_cbcr", XZS_MMCC_MDSS_BYTE0);
+	xzs_mmcc_reg("mdss_pclk0_cbcr", XZS_MMCC_MDSS_PCLK0);
+	xzs_mmcc_reg("mdss_esc0_cbcr", XZS_MMCC_MDSS_ESC0);
+	xzs_diag_emit("[XZS-D8M1] branch_bit0=enable source=mmio\n");
 	xzs_diag_emit("[XZS-D8M1] DSI_AUDIT_DONE\n");
 }
 
@@ -107,11 +164,12 @@ static void
 xzs_clock_dump_state(void)
 {
 	xzs_diag_emit("[XZS-D8M1] CLOCK_AUDIT_ENTER\n");
-	xzs_diag_emit("[XZS-D8M1] class=CODE_AUDIT\n");
-	xzs_diag_emit("[XZS-D8M1] mmio_read=no\n");
-	xzs_diag_emit("[XZS-D8M1] ref_clocks=MDSS_AHB MDSS_AXI MDSS_MDP MDSS_VSYNC\n");
-	xzs_diag_emit("[XZS-D8M1] ref_clocks_dsi=MDSS_BYTE0 MDSS_PCLK0 MDSS_ESC0\n");
-	xzs_diag_emit("[XZS-D8M1] reason=mmcc_not_mapped\n");
+	xzs_diag_emit("[XZS-D8M1] mmcc_base=0x008c0000 source=reference\n");
+	xzs_mmcc_reg("mmss_mmagic_cfg_ahb", XZS_MMCC_CFG_AHB);
+	xzs_mmcc_reg("mdss_ahb_cbcr", XZS_MMCC_MDSS_AHB);
+	xzs_mmcc_reg("mdss_axi_cbcr", XZS_MMCC_MDSS_AXI);
+	xzs_mmcc_reg("mdss_mdp_cbcr", XZS_MMCC_MDSS_MDP);
+	xzs_diag_emit("[XZS-D8M1] parents=XO GPLL0 MMPLL0 MMPLL5 DSI0PLL source=reference\n");
 	xzs_diag_emit("[XZS-D8M1] CLOCK_AUDIT_DONE\n");
 }
 
