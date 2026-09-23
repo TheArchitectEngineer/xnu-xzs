@@ -62,18 +62,17 @@ def send_cmd(dev, cmd_str, wait_sec=5.0, wait_for_prompt=True):
 
 
 def main():
-    mode = "run_a"
-    if "--mode=run_b" in sys.argv or "--run_b" in sys.argv:
-        mode = "run_b"
-    elif "--mode=run_2" in sys.argv or "--run_2" in sys.argv:
-        mode = "run_2"
-    elif "--mode=run_a" in sys.argv or "--run_a" in sys.argv:
-        mode = "run_a"
+    mode = "run_1"
+    for arg in sys.argv:
+        if arg.startswith("--mode="):
+            mode = arg.split("=")[1]
+        elif arg.startswith("--run_"):
+            mode = arg[2:]
 
     rev_res = subprocess.run(["git", "rev-parse", "--short=7", "HEAD"], capture_output=True, text=True)
     short_commit = rev_res.stdout.strip() if rev_res.returncode == 0 else "unknown"
 
-    log_dir = Path(f"artifacts/hw/t2n4r-{short_commit}-{mode}")
+    log_dir = Path(f"artifacts/hw/t2n4f-{short_commit}-{mode}")
     log_dir.mkdir(parents=True, exist_ok=True)
     log_file = log_dir / "host.txt"
 
@@ -85,6 +84,17 @@ def main():
     skip_boot = "--no-boot" in sys.argv
     if not skip_boot:
         print(f"=== STEP 0: BOOT CANDIDATE VIA FASTBOOT (MODE={mode.upper()}) ===", flush=True)
+        print("Waiting for fastboot device BH905SX976 (up to 120s)...", flush=True)
+        fb_found = False
+        for _ in range(120):
+            fb_check = subprocess.run(["fastboot", "devices"], capture_output=True, text=True)
+            if "BH905SX976" in fb_check.stdout:
+                fb_found = True
+                break
+            time.sleep(1)
+        if not fb_found:
+            print("ERROR: fastboot device BH905SX976 not found!", file=sys.stderr)
+            sys.exit(1)
         boot_res = subprocess.run(["fastboot", "-s", "BH905SX976", "boot", str(boot_img)], capture_output=True, text=True)
         print(boot_res.stdout, flush=True)
         print(boot_res.stderr, flush=True)
@@ -123,27 +133,25 @@ def main():
     # Step 1: Shell health baseline
     run_step("STEP 1: SHELL HEALTH PWD", "pwd\n", 1.0)
 
-    # Step 2: Baseline UBC diagnostic for /bin/hello
-    if mode in ("run_a", "run_2"):
-        # Pure UBC check, exactly reproducing T2N-3
+    # Optional intermediate steps
+    if mode in ("run_a",):
         run_step("STEP 2: BASELINE UBC /bin/hello (CONTROL - NO PAGECHECK)", "xzsfs ubc /bin/hello\n", 2.0)
-    else:
-        # Full UBC + Pagecheck sequence
+    elif mode in ("run_3", "run_b"):
         run_step("STEP 2: BASELINE UBC + PAGECHECK /bin/hello", "xzsfs ubc /bin/hello:pagecheck\n", 4.0)
 
-    # Step 3: Execute /bin/hello once
-    print("\n--- STEP 3: EXECUTE /bin/hello (ONCE) ---", flush=True)
+    # Execute /bin/hello
+    print("\n--- STEP: EXECUTE /bin/hello ---", flush=True)
     hello_out = send_cmd(dev, "/bin/hello\n", wait_sec=8.0, wait_for_prompt=True)
-    full_log.append(f"\n# STEP 3: EXECUTE /bin/hello\n> /bin/hello\n{hello_out}")
+    full_log.append(f"\n# STEP: EXECUTE /bin/hello\n> /bin/hello\n{hello_out}")
 
-    # Step 4: Post-exec health check
-    print("\n--- STEP 4: POST-EXEC HEALTH CHECK ---", flush=True)
+    # Post-exec health check
+    print("\n--- STEP: POST-EXEC HEALTH CHECK ---", flush=True)
     try:
         post_out = send_cmd(dev, "pwd\n", wait_sec=3.0, wait_for_prompt=True)
-        full_log.append(f"\n# STEP 4: POST-EXEC PWD\n> pwd\n{post_out}")
+        full_log.append(f"\n# STEP: POST-EXEC PWD\n> pwd\n{post_out}")
     except Exception as e:
         print(f"Post-exec communication check ended: {e}", flush=True)
-        full_log.append(f"\n# STEP 4: POST-EXEC PWD\nException: {e}\n")
+        full_log.append(f"\n# STEP: POST-EXEC PWD\nException: {e}\n")
 
     print("\n=== WRITING LOG FILE ===", flush=True)
     log_text = "".join(full_log)
