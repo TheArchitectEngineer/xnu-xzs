@@ -26,7 +26,7 @@ static void xzs_clock_dump_state(void);
 static void xzs_irq_dump_state(void);
 static void xzs_fb_dump_state(void);
 static void xzs_memory_dump_state(void);
-void xzs_diag_dispatch(uint64_t which);
+void xzs_diag_dispatch(uint64_t which, uint64_t arg1);
 
 static void
 xzs_diag_emit(const char *s)
@@ -775,7 +775,7 @@ xzs_d8m2_critical_on(const char *action, uint32_t offset, int parent)
 }
 
 void
-xzs_diag_dispatch(uint64_t which)
+xzs_diag_dispatch(uint64_t which, uint64_t arg1)
 {
 	switch (which) {
 	case 1:
@@ -835,6 +835,11 @@ xzs_diag_dispatch(uint64_t which)
 	case 19:
 		xzs_d8m2_critical_on("CLK-MMAGIC-AXI-001", XZS_MMCC_MMAGIC_MDSS_AXI, 2);
 		break;
+	case 20: {
+		extern void xzs_diag_xzsfs_ubc(uint64_t user_path);
+		xzs_diag_xzsfs_ubc(arg1);
+		break;
+	}
 	default:
 		xzs_diag_emit("[XZS-D8M1] unknown diag\n");
 		break;

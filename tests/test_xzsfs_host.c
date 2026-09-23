@@ -64,8 +64,8 @@ int main(int argc, char **argv) {
 
     /* /dev */
     err = xzsfs_core_lookup(&fs, 1, "dev", 3, &node);
-    assert(err == XZSFS_ERR_OK && node->object_id == 4 && node->type == XZSFS_TYPE_DIR);
-    printf("[PASS] Lookup /dev (id=4, dir)\n");
+    assert(err == XZSFS_ERR_OK && node->object_id == 6 && node->type == XZSFS_TYPE_DIR);
+    printf("[PASS] Lookup /dev (id=6, dir)\n");
 
     /* /sbin */
     err = xzsfs_core_lookup(&fs, 1, "sbin", 4, &node);
@@ -140,7 +140,7 @@ int main(int argc, char **argv) {
     assert(err == XZSFS_ERR_OK && bytes_read == 16768);
     uint32_t sh_crc = xzsfs_crc32(0, sh_buf, bytes_read);
     printf("[PASS] /bin/sh: size=%zu, CRC32=0x%08x\n", bytes_read, sh_crc);
-    assert(sh_crc == 0x05d600f6);
+    assert(sh_crc == 0xf3116149);
 
     /* Partial & Unaligned Read Tests */
     /* 1. First byte */

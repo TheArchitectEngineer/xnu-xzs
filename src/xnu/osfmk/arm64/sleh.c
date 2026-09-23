@@ -888,10 +888,10 @@ sleh_synchronous(arm_context_t *context, uint64_t esr, vm_offset_t far, __unused
 			goto xzs_d6m5_dispatch_first_svc;
 		} else if (is_user && class == ESR_EC_SVC_64 && xzs_d7m4_post_read_el0 &&
 		    ESR_ISS(esr) == 0x80 && ss64->x[16] == 58) {
-			extern void xzs_diag_dispatch(uint64_t which);
+			extern void xzs_diag_dispatch(uint64_t which, uint64_t arg1);
 			/* Shell diagnostics. Carry must be clear for xzs_svc. */
 			ml_set_interrupts_enabled(TRUE);
-			xzs_diag_dispatch(ss64->x[0]);
+			xzs_diag_dispatch(ss64->x[0], ss64->x[1]);
 			ss64->x[0] = 0;
 			ss64->cpsr &= ~0x20000000ULL;
 			return;

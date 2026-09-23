@@ -386,7 +386,7 @@ cmd_cat(int argc, char **argv)
 	(void)xzs_svc(SYS_CLOSE, fd, 0, 0, 0);
 }
 
-static int
+__attribute__((always_inline)) static inline int
 join2(char *dst, int cap, const char *a, const char *b)
 {
 	int na = slen(a);
@@ -510,6 +510,19 @@ xzs_d7t2_shell(void)
 			cmd_diag(5);
 		} else if (seq(argv[0], "mem")) {
 			cmd_diag(6);
+		} else if (seq(argv[0], "xzsfs")) {
+			if (argc >= 3 && seq(argv[1], "ubc")) {
+				char full_path[CWD_MAX];
+				const char *p = argv[2];
+				if (p[0] != '/') {
+					if (join2(full_path, CWD_MAX, cwd, p) == 0) {
+						p = full_path;
+					}
+				}
+				(void)xzs_svc(SYS_XZS_DIAG, 20, (long)p, 0, 0);
+			} else {
+				werr("usage: xzsfs ubc <path>\n");
+			}
 		} else if (seq(argv[0], "exit")) {
 			(void)xzs_svc(SYS_EXIT, 0, 0, 0, 0);
 		} else if (seq(argv[0], "reboot")) {

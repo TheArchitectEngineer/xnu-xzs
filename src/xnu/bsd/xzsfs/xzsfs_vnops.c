@@ -7,6 +7,9 @@
 #include "xzsfs.h"
 #include <sys/vnode_internal.h>
 #include <vfs/vfs_support.h>
+#include <sys/ubc.h>
+#include <sys/ubc_internal.h>
+#include <libkern/libkern.h>
 
 #define VOPFUNC int (*)(void *)
 
@@ -262,3 +265,85 @@ const struct vnodeopv_desc xzsfs_vnodeop_opv_desc = {
     .opv_desc_vector_p = &xzsfs_vnodeop_p,
     .opv_desc_ops = xzsfs_vnodeop_entries
 };
+
+extern void xzs_bringup_console_write(const void *buf, int len);
+
+static void
+xzs_ubc_emit(const char *s)
+{
+    int n = 0;
+    while (s[n] != '\0') n++;
+    xzs_bringup_console_write(s, n);
+}
+
+void
+xzs_diag_xzsfs_ubc(uint64_t user_path)
+{
+    char kpath[256];
+    char line[128];
+    size_t len = 0;
+    int err;
+    vnode_t vp = NULL;
+
+    err = copyinstr((user_addr_t)user_path, kpath, sizeof(kpath), &len);
+    if (err != 0) {
+        snprintf(line, sizeof(line), "[XZS-UBC] copyinstr failed err=%d\n", err);
+        xzs_ubc_emit(line);
+        return;
+    }
+
+    err = vnode_lookup(kpath, 0, &vp, vfs_context_current());
+    if (err != 0 || vp == NULL) {
+        snprintf(line, sizeof(line), "[XZS-UBC] vnode_lookup failed path=%s err=%d\n", kpath, err);
+        xzs_ubc_emit(line);
+        return;
+    }
+
+    enum vtype vtype = vnode_vtype(vp);
+    const char *vtype_str = "VOTHER";
+    if (vtype == VREG) {
+        vtype_str = "VREG";
+    } else if (vtype == VDIR) {
+        vtype_str = "VDIR";
+    }
+
+    uint64_t file_size = 0;
+    struct xzsfs_node *node = (struct xzsfs_node *)vnode_fsnode(vp);
+    if (node != NULL) {
+        file_size = node->core.data_length;
+    }
+
+    int ubc_present = UBCINFOEXISTS(vp);
+    off_t ubc_sz = 0;
+    memory_object_control_t control = MEMORY_OBJECT_CONTROL_NULL;
+    if (ubc_present) {
+        ubc_sz = ubc_getsize(vp);
+        control = ubc_getobject(vp, UBC_FLAGS_NONE);
+    }
+
+    int size_match = (ubc_present && ((uint64_t)ubc_sz == file_size));
+    int control_not_null = (control != MEMORY_OBJECT_CONTROL_NULL);
+
+    snprintf(line, sizeof(line), "PATH=%s\n", kpath);
+    xzs_ubc_emit(line);
+    snprintf(line, sizeof(line), "VNODE=%p\n", (void *)vp);
+    xzs_ubc_emit(line);
+    snprintf(line, sizeof(line), "VTYPE=%s\n", vtype_str);
+    xzs_ubc_emit(line);
+    snprintf(line, sizeof(line), "FILE_SIZE=%llu\n", (unsigned long long)file_size);
+    xzs_ubc_emit(line);
+    snprintf(line, sizeof(line), "UBC_INFO_PRESENT=%s\n", ubc_present ? "yes" : "no");
+    xzs_ubc_emit(line);
+    snprintf(line, sizeof(line), "UBC_SIZE=%lld\n", (long long)ubc_sz);
+    xzs_ubc_emit(line);
+    snprintf(line, sizeof(line), "SIZE_MATCH=%s\n", size_match ? "yes" : "no");
+    xzs_ubc_emit(line);
+    snprintf(line, sizeof(line), "MEMORY_OBJECT_CONTROL=%p\n", (void *)control);
+    xzs_ubc_emit(line);
+    snprintf(line, sizeof(line), "CONTROL_IS_NULL=%s\n", control_not_null ? "no" : "yes");
+    xzs_ubc_emit(line);
+    snprintf(line, sizeof(line), "RESULT=%s\n", (vtype == VREG && ubc_present && size_match && control_not_null) ? "PASS" : "FAIL");
+    xzs_ubc_emit(line);
+
+    vnode_put(vp);
+}
