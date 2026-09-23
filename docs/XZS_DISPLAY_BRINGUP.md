@@ -139,3 +139,17 @@ On `0b0e429`, `mdss_ahb` accepted enable bit 0 and stayed halted (`0x80008001`).
 | `gcc_mmss_noc_cfg_ahb` | GCC `0x00309008` | not named in the branch | GCC branch, `CLK_IGNORE_UNUSED` |
 
 Those addresses are reference evidence from Linux `mmcc-msm8996.c`, `gcc-msm8996.c`, and `clk-rcg2.c`. A value printed by the shell is hardware evidence. GCC and MMCC sit in the existing device window, so these reads do not touch MDSS slaves.
+
+Read-only hardware on `94a2c37` (`artifacts/hw/d8m2-94a2c37/host.txt`), after a fresh boot, with MDSS collapsed again:
+
+```text
+ahb_cmd            0x00000000   root_off=0 root_en=0 update=0
+ahb_cfg            0x00000513   source field = GPLL0
+mdss_ahb           0x80008000   enable=0 halt=1
+mmss_mmagic_ahb    0x80000000   enable=0 halt=1
+mmss_mmagic_cfg_ahb 0x80008000  enable=0 halt=1
+mmagic_mdss_noc    0x80000000   enable=0 halt=1
+gcc_mmss_noc       0x20008001   enable=1 halt=0
+```
+
+No clock write was issued on that boot.
