@@ -27,6 +27,56 @@ static int host_block_read(void *ctx, uint64_t lba, uint32_t count, void *buf) {
     return XZSFS_ERR_OK;
 }
 
+#define PAGEIN_PAGE_SIZE 16384U
+#define PAGEIN_PAGE_MASK (PAGEIN_PAGE_SIZE - 1U)
+
+static int host_simulate_pagein(xzsfs_block_read_fn read_fn, void *ctx,
+                                const struct xzsfs_core_node *node,
+                                int64_t f_offset, size_t size,
+                                uint8_t *page_buf, size_t page_buf_cap,
+                                size_t *out_read, size_t *out_zero, size_t *out_commit)
+{
+    if (!node || !page_buf || size == 0) return XZSFS_ERR_INVAL;
+    if (node->type != XZSFS_TYPE_REG) return XZSFS_ERR_INVAL;
+
+    uint64_t filesize = node->data_length;
+
+    /* Validate range and alignment */
+    if (f_offset < 0 || (uint64_t)f_offset >= filesize ||
+        (f_offset & PAGEIN_PAGE_MASK) || (size & PAGEIN_PAGE_MASK)) {
+        return XZSFS_ERR_INVAL;
+    }
+    if ((uint64_t)f_offset + size < (uint64_t)f_offset) {
+        return XZSFS_ERR_INVAL;
+    }
+
+    uint64_t max_size = filesize - (uint64_t)f_offset;
+    size_t io_size = (size < max_size) ? size : (size_t)max_size;
+    size_t rounded_size = (io_size + PAGEIN_PAGE_MASK) & ~PAGEIN_PAGE_MASK;
+    if (rounded_size > size) {
+        rounded_size = size;
+    }
+
+    if (page_buf_cap < rounded_size) return XZSFS_ERR_INVAL;
+
+    size_t bytes_read = 0;
+    int err = xzsfs_core_read(read_fn, ctx, node, (uint64_t)f_offset, io_size, page_buf, &bytes_read);
+    if (err != XZSFS_ERR_OK || bytes_read != io_size) {
+        return err ? err : XZSFS_ERR_IO;
+    }
+
+    size_t zero_bytes = 0;
+    if (rounded_size > bytes_read) {
+        zero_bytes = rounded_size - bytes_read;
+        memset(page_buf + bytes_read, 0, zero_bytes);
+    }
+
+    if (out_read) *out_read = bytes_read;
+    if (out_zero) *out_zero = zero_bytes;
+    if (out_commit) *out_commit = rounded_size;
+    return XZSFS_ERR_OK;
+}
+
 int main(int argc, char **argv) {
     const char *img_path = (argc > 1) ? argv[1] : "artifacts/builds/xzs-rootfs.img";
     FILE *fp = fopen(img_path, "rb");
@@ -336,11 +386,109 @@ int main(int argc, char **argv) {
         printf("[PASS] Negative 13: Duplicate child name in directory rejected\n");
     }
 
+    printf("\n--- EXECUTING T2N-3 PAGEIN RANGE AND ZEROING TESTS ---\n");
+    int pagein_test_count = 0;
+    {
+        uint8_t page_buf[32768];
+        size_t read_bytes = 0, zero_bytes = 0, commit_bytes = 0;
+
+        /* Test 1: offset 0 / full page range */
+        memset(page_buf, 0xAA, sizeof(page_buf));
+        err = host_simulate_pagein(host_block_read, &bctx, launchd_node, 0, 16384,
+                                   page_buf, sizeof(page_buf), &read_bytes, &zero_bytes, &commit_bytes);
+        assert(err == XZSFS_ERR_OK);
+        assert(read_bytes == 16384);
+        assert(zero_bytes == 0);
+        assert(commit_bytes == 16384);
+        assert(page_buf[0] == 0xcf); /* Mach-O 64 magic first byte */
+        pagein_test_count++;
+        printf("[PASS] Pagein 1: Offset 0 / full page range (16384 bytes)\n");
+
+        /* Test 2: non-zero file offset & partial final page (launchd: 16472 bytes) */
+        memset(page_buf, 0xBB, sizeof(page_buf));
+        err = host_simulate_pagein(host_block_read, &bctx, launchd_node, 16384, 16384,
+                                   page_buf, sizeof(page_buf), &read_bytes, &zero_bytes, &commit_bytes);
+        assert(err == XZSFS_ERR_OK);
+        assert(read_bytes == 88); /* 16472 - 16384 = 88 bytes */
+        assert(zero_bytes == 16296); /* 16384 - 88 = 16296 bytes */
+        assert(commit_bytes == 16384);
+        /* Check zeroing beyond valid bytes */
+        for (size_t z = 88; z < 16384; z++) {
+            assert(page_buf[z] == 0);
+        }
+        pagein_test_count++;
+        printf("[PASS] Pagein 2: Non-zero file offset & partial final page (88 read, 16296 zeroed)\n");
+
+        /* Test 3: request ending exactly at EOF */
+        struct xzsfs_core_node exact_node = *launchd_node;
+        exact_node.data_length = 16384;
+        memset(page_buf, 0xCC, sizeof(page_buf));
+        err = host_simulate_pagein(host_block_read, &bctx, &exact_node, 0, 16384,
+                                   page_buf, sizeof(page_buf), &read_bytes, &zero_bytes, &commit_bytes);
+        assert(err == XZSFS_ERR_OK);
+        assert(read_bytes == 16384);
+        assert(zero_bytes == 0);
+        assert(commit_bytes == 16384);
+        pagein_test_count++;
+        printf("[PASS] Pagein 3: Request ending exactly at EOF\n");
+
+        /* Test 4: request crossing EOF (launchd 16472 bytes, requested 32768) */
+        memset(page_buf, 0xDD, sizeof(page_buf));
+        err = host_simulate_pagein(host_block_read, &bctx, launchd_node, 0, 32768,
+                                   page_buf, sizeof(page_buf), &read_bytes, &zero_bytes, &commit_bytes);
+        assert(err == XZSFS_ERR_OK);
+        assert(read_bytes == 16472);
+        assert(zero_bytes == 16296);
+        assert(commit_bytes == 32768);
+        for (size_t z = 16472; z < 32768; z++) {
+            assert(page_buf[z] == 0);
+        }
+        pagein_test_count++;
+        printf("[PASS] Pagein 4: Request crossing EOF (16472 read, 16296 zeroed, 32768 committed)\n");
+
+        /* Test 5: request starting beyond EOF (launchd 16472 bytes, offset 32768) */
+        err = host_simulate_pagein(host_block_read, &bctx, launchd_node, 32768, 16384,
+                                   page_buf, sizeof(page_buf), &read_bytes, &zero_bytes, &commit_bytes);
+        assert(err == XZSFS_ERR_INVAL);
+        pagein_test_count++;
+        printf("[PASS] Pagein 5: Request starting beyond EOF rejected\n");
+
+        /* Test 6: request starting exactly at EOF (launchd 16472 bytes, exact_node 16384 bytes, offset 16384) */
+        err = host_simulate_pagein(host_block_read, &bctx, &exact_node, 16384, 16384,
+                                   page_buf, sizeof(page_buf), &read_bytes, &zero_bytes, &commit_bytes);
+        assert(err == XZSFS_ERR_INVAL);
+        pagein_test_count++;
+        printf("[PASS] Pagein 6: Request starting exactly at EOF rejected\n");
+
+        /* Test 7: invalid range / unaligned / overflow */
+        /* Negative offset */
+        assert(host_simulate_pagein(host_block_read, &bctx, launchd_node, -16384, 16384,
+                                    page_buf, sizeof(page_buf), NULL, NULL, NULL) == XZSFS_ERR_INVAL);
+        /* Unaligned offset */
+        assert(host_simulate_pagein(host_block_read, &bctx, launchd_node, 512, 16384,
+                                    page_buf, sizeof(page_buf), NULL, NULL, NULL) == XZSFS_ERR_INVAL);
+        /* Unaligned size */
+        assert(host_simulate_pagein(host_block_read, &bctx, launchd_node, 0, 512,
+                                    page_buf, sizeof(page_buf), NULL, NULL, NULL) == XZSFS_ERR_INVAL);
+        /* Overflow */
+        assert(host_simulate_pagein(host_block_read, &bctx, launchd_node, 0xFFFFFFFFFFFFC000ULL, 16384,
+                                    page_buf, sizeof(page_buf), NULL, NULL, NULL) == XZSFS_ERR_INVAL);
+        /* Non-REG node */
+        const struct xzsfs_core_node *dir_node = NULL;
+        assert(xzsfs_core_lookup(&fs, 1, "bin", 3, &dir_node) == XZSFS_ERR_OK);
+        assert(host_simulate_pagein(host_block_read, &bctx, dir_node, 0, 16384,
+                                    page_buf, sizeof(page_buf), NULL, NULL, NULL) == XZSFS_ERR_INVAL);
+        pagein_test_count++;
+        printf("[PASS] Pagein 7: Invalid arguments (negative, unaligned, overflow, non-REG) rejected\n");
+    }
+
     printf("\n=======================================================\n");
+    printf("XZSFS_PAGEIN_TEST_COUNT=%d\n", pagein_test_count);
     printf("XZSFS_KERNEL_PARSER_NEGATIVE_TEST_COUNT=%d\n", neg_test_count);
     printf("XZSFS_KERNEL_PARSER_ALL_NEGATIVE_TESTS_REJECTED=yes\n");
     printf("KERNEL_PARSER_HOST_POSITIVE_TESTS_PASS=yes\n");
     printf("KERNEL_PARSER_HOST_NEGATIVE_TESTS_PASS=yes\n");
+    printf("XZSFS_PAGEIN_HOST_TESTS_PASS=yes\n");
     printf("=======================================================\n");
 
     free(launchd_buf);

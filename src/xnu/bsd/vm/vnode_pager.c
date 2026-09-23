@@ -671,13 +671,13 @@ vnode_pagein(
 			g_xzs_vnop_pagein_called = 1;
 			{
 				char pibuf[128];
-				int pilen = snprintf(pibuf, sizeof(pibuf), "[XZS-T2N2] VNOP_PAGEIN_CALLED: vp=%p upl_offset=0x%x f_offset=0x%llx size=%u\n", (void *)vp, upl_offset, (unsigned long long)f_offset, size);
+				int pilen = snprintf(pibuf, sizeof(pibuf), "[XZS-T2N3] VNOP_PAGEIN_CALLED: vp=%p upl_offset=0x%x f_offset=0x%llx size=%u\n", (void *)vp, upl_offset, (unsigned long long)f_offset, size);
 				xzs_bringup_console_write(pibuf, pilen);
 			}
 			if ((error = VNOP_PAGEIN(vp, NULL, upl_offset, (off_t)f_offset,
 			    size, flags, vfs_context_current()))) {
 				char pibuf[64];
-				int pilen = snprintf(pibuf, sizeof(pibuf), "[XZS-T2N2] VNOP_PAGEIN_RETURN: error=%d\n", error);
+				int pilen = snprintf(pibuf, sizeof(pibuf), "[XZS-T2N3] VNOP_PAGEIN_RETURN: error=%d\n", error);
 				xzs_bringup_console_write(pibuf, pilen);
 				set_thread_pagein_error(current_thread(), error);
 				ktriage_record(thread_tid(current_thread()), KDBG_TRIAGE_EVENTID(KDBG_TRIAGE_SUBSYS_VM, KDBG_TRIAGE_RESERVED, KDBG_TRIAGE_VM_VNODEPAGEIN_FSPAGEIN_FAIL),
@@ -809,15 +809,18 @@ vnode_pagein(
 			g_xzs_vnop_pagein_called = 1;
 			{
 				char pibuf[128];
-				int pilen = snprintf(pibuf, sizeof(pibuf), "[XZS-T2N2] VNOP_PAGEIN_CALLED: vp=%p upl=%p xoff=%d f_offset=0x%llx size=%d\n", (void *)vp, (void *)upl, xoff, (unsigned long long)f_offset + xoff, xsize);
+				int pilen = snprintf(pibuf, sizeof(pibuf), "[XZS-T2N3] VNOP_PAGEIN_CALLED: vp=%p upl=%p xoff=%d f_offset=0x%llx size=%d\n", (void *)vp, (void *)upl, xoff, (unsigned long long)f_offset + xoff, xsize);
 				xzs_bringup_console_write(pibuf, pilen);
 			}
-			if ((error = VNOP_PAGEIN(vp, upl, (upl_offset_t) xoff,
+			error = VNOP_PAGEIN(vp, upl, (upl_offset_t) xoff,
 			    (off_t)f_offset + xoff,
-			    xsize, flags, vfs_context_current()))) {
+			    xsize, flags, vfs_context_current());
+			{
 				char pibuf[64];
-				int pilen = snprintf(pibuf, sizeof(pibuf), "[XZS-T2N2] VNOP_PAGEIN_RETURN: error=%d\n", error);
+				int pilen = snprintf(pibuf, sizeof(pibuf), "[XZS-T2N3] VNOP_PAGEIN_RETURN: error=%d\n", error);
 				xzs_bringup_console_write(pibuf, pilen);
+			}
+			if (error) {
 				/*
 				 * Usually this UPL will be aborted/committed by the lower cluster layer.
 				 *

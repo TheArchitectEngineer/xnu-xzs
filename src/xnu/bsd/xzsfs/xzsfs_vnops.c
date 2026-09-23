@@ -10,6 +10,9 @@
 #include <sys/ubc.h>
 #include <sys/ubc_internal.h>
 #include <libkern/libkern.h>
+#include <mach/vm_param.h>
+
+extern void xzs_bringup_console_write(const void *buf, int len);
 
 #define VOPFUNC int (*)(void *)
 
@@ -221,12 +224,179 @@ xzsfs_reclaim(struct vnop_reclaim_args *ap)
     return 0;
 }
 
+static int
+xzsfs_vnop_pagein(struct vnop_pagein_args *ap)
+{
+    vnode_t vp = ap->a_vp;
+    upl_t upl = ap->a_pl;
+    upl_offset_t pl_offset = ap->a_pl_offset;
+    off_t f_offset = ap->a_f_offset;
+    size_t size = ap->a_size;
+    int flags = ap->a_flags;
+    static uint32_t s_pagein_seq = 0;
+    uint32_t seq = ++s_pagein_seq;
+    char logbuf[256];
+    int len;
+
+    if (!vp || !upl || size == 0) {
+        return EINVAL;
+    }
+
+    if (vnode_vtype(vp) != VREG) {
+        if ((flags & UPL_NOCOMMIT) == 0) {
+            ubc_upl_abort_range(upl, pl_offset, (upl_size_t)size, UPL_ABORT_FREE_ON_EMPTY | UPL_ABORT_ERROR);
+        }
+        return EINVAL;
+    }
+
+    struct xzsfs_node *node = (struct xzsfs_node *)vnode_fsnode(vp);
+    if (!node || !node->xmp || !node->xmp->devvp) {
+        if ((flags & UPL_NOCOMMIT) == 0) {
+            ubc_upl_abort_range(upl, pl_offset, (upl_size_t)size, UPL_ABORT_FREE_ON_EMPTY | UPL_ABORT_ERROR);
+        }
+        return EINVAL;
+    }
+
+    uint64_t filesize = node->core.data_length;
+
+    /* Section 25: [XZS-PAGEIN] PRE */
+    len = snprintf(logbuf, sizeof(logbuf),
+        "[XZS-PAGEIN] PRE SEQ=%u VP=%p FILE_SIZE=%llu UPL=%p PL_OFFSET=%u FILE_OFFSET=%lld SIZE=%zu FLAGS=0x%x UPL_NOCOMMIT=%s\n",
+        seq, (void *)vp, (unsigned long long)filesize, (void *)upl, (unsigned int)pl_offset,
+        (long long)f_offset, size, flags, (flags & UPL_NOCOMMIT) ? "yes" : "no");
+    xzs_bringup_console_write(logbuf, len);
+
+    /*
+     * Range and alignment validation:
+     * File offset, size, and UPL offset must be page aligned.
+     * Offset must be non-negative and strictly within file size.
+     */
+    if (f_offset < 0 || (uint64_t)f_offset >= filesize ||
+        (f_offset & PAGE_MASK_64) || (size & PAGE_MASK) || (pl_offset & PAGE_MASK)) {
+        if ((flags & UPL_NOCOMMIT) == 0) {
+            ubc_upl_abort_range(upl, pl_offset, (upl_size_t)size, UPL_ABORT_FREE_ON_EMPTY | UPL_ABORT_ERROR);
+        }
+        len = snprintf(logbuf, sizeof(logbuf),
+            "[XZS-PAGEIN] POST UPL_MAP_RESULT=NOT_ATTEMPTED COMMIT_ACTION=NONE COMMIT_RESULT=NOT_APPLICABLE ABORT_ACTION=%s RESULT=EINVAL\n",
+            (flags & UPL_NOCOMMIT) ? "NONE" : "ABORT_ALL");
+        xzs_bringup_console_write(logbuf, len);
+        return EINVAL;
+    }
+
+    /* Overflow check */
+    if ((uint64_t)f_offset + (uint64_t)size < (uint64_t)f_offset) {
+        if ((flags & UPL_NOCOMMIT) == 0) {
+            ubc_upl_abort_range(upl, pl_offset, (upl_size_t)size, UPL_ABORT_FREE_ON_EMPTY | UPL_ABORT_ERROR);
+        }
+        len = snprintf(logbuf, sizeof(logbuf),
+            "[XZS-PAGEIN] POST UPL_MAP_RESULT=NOT_ATTEMPTED COMMIT_ACTION=NONE COMMIT_RESULT=NOT_APPLICABLE ABORT_ACTION=%s RESULT=EINVAL\n",
+            (flags & UPL_NOCOMMIT) ? "NONE" : "ABORT_ALL");
+        xzs_bringup_console_write(logbuf, len);
+        return EINVAL;
+    }
+
+    /* Determine valid file bytes in this requested range */
+    uint64_t max_size = filesize - (uint64_t)f_offset;
+    size_t io_size = (size < max_size) ? size : (size_t)max_size;
+    size_t rounded_size = (size_t)round_page_64(io_size);
+    if (rounded_size > size) {
+        rounded_size = size;
+    }
+    size_t zero_bytes = (rounded_size > io_size) ? (rounded_size - io_size) : 0;
+
+    /* Section 25: [XZS-PAGEIN] RANGE */
+    len = snprintf(logbuf, sizeof(logbuf),
+        "[XZS-PAGEIN] RANGE VALID_FILE_BYTES=%zu ROUNDED_VALID_BYTES=%zu ZERO_BYTES=%zu\n",
+        io_size, rounded_size, zero_bytes);
+    xzs_bringup_console_write(logbuf, len);
+
+    /* Map the UPL into kernel address space */
+    vm_offset_t ioaddr = 0;
+    kern_return_t kr = ubc_upl_map(upl, &ioaddr);
+    if (kr != KERN_SUCCESS) {
+        if ((flags & UPL_NOCOMMIT) == 0) {
+            ubc_upl_abort_range(upl, pl_offset, (upl_size_t)size, UPL_ABORT_FREE_ON_EMPTY | UPL_ABORT_ERROR);
+        }
+        len = snprintf(logbuf, sizeof(logbuf),
+            "[XZS-PAGEIN] POST UPL_MAP_RESULT=FAILED COMMIT_ACTION=NONE COMMIT_RESULT=NOT_APPLICABLE ABORT_ACTION=%s RESULT=EIO\n",
+            (flags & UPL_NOCOMMIT) ? "NONE" : "ABORT_ALL");
+        xzs_bringup_console_write(logbuf, len);
+        return EIO;
+    }
+
+    uint8_t *dst = (uint8_t *)ioaddr + pl_offset;
+    size_t bytes_read = 0;
+    int error = xzsfs_core_read(xzsfs_kernel_block_read, node->xmp->devvp,
+                                &node->core, (uint64_t)f_offset, io_size,
+                                dst, &bytes_read);
+    if (error != 0 || bytes_read != io_size) {
+        ubc_upl_unmap(upl);
+        if ((flags & UPL_NOCOMMIT) == 0) {
+            ubc_upl_abort_range(upl, pl_offset, (upl_size_t)size, UPL_ABORT_FREE_ON_EMPTY | UPL_ABORT_ERROR);
+        }
+        len = snprintf(logbuf, sizeof(logbuf),
+            "[XZS-PAGEIN] POST UPL_MAP_RESULT=SUCCESS COMMIT_ACTION=NONE COMMIT_RESULT=NOT_APPLICABLE ABORT_ACTION=%s RESULT=%d\n",
+            (flags & UPL_NOCOMMIT) ? "NONE" : "ABORT_ALL", error ? error : EIO);
+        xzs_bringup_console_write(logbuf, len);
+        return error ? error : EIO;
+    }
+
+    /* Zero any tail bytes within the last populated page beyond EOF */
+    if (zero_bytes > 0) {
+        bzero(dst + bytes_read, zero_bytes);
+    }
+
+    /* Calculate lightweight CRC32 checksum over the read bytes while still mapped */
+    uint32_t csum = xzsfs_crc32(0, dst, bytes_read);
+
+    /* Section 25: [XZS-PAGEIN] DATA */
+    len = snprintf(logbuf, sizeof(logbuf),
+        "[XZS-PAGEIN] DATA READ_BYTES=%zu SOURCE_CHECKSUM=0x%08x\n",
+        bytes_read, csum);
+    xzs_bringup_console_write(logbuf, len);
+
+    /* Unmap UPL before committing */
+    kr = ubc_upl_unmap(upl);
+    if (kr != KERN_SUCCESS) {
+        if ((flags & UPL_NOCOMMIT) == 0) {
+            ubc_upl_abort_range(upl, pl_offset, (upl_size_t)size, UPL_ABORT_FREE_ON_EMPTY | UPL_ABORT_ERROR);
+        }
+        return EIO;
+    }
+
+    /* Handle UPL commit / abort semantics */
+    const char *commit_action = "NONE";
+    const char *commit_result = "NOT_APPLICABLE";
+    const char *abort_action = "NONE";
+    if ((flags & UPL_NOCOMMIT) == 0) {
+        int ckr = ubc_upl_commit_range(upl, pl_offset, (upl_size_t)rounded_size,
+                                       UPL_COMMIT_FREE_ON_EMPTY | UPL_COMMIT_CLEAR_DIRTY);
+        commit_action = "UPL_COMMIT_RANGE";
+        commit_result = (ckr == KERN_SUCCESS) ? "SUCCESS" : "ERROR";
+        if (size > rounded_size) {
+            ubc_upl_abort_range(upl, pl_offset + (upl_offset_t)rounded_size,
+                                (upl_size_t)(size - rounded_size),
+                                UPL_ABORT_FREE_ON_EMPTY | UPL_ABORT_ERROR);
+            abort_action = "ABORT_REMAINDER";
+        }
+    }
+
+    /* Section 25: [XZS-PAGEIN] POST */
+    len = snprintf(logbuf, sizeof(logbuf),
+        "[XZS-PAGEIN] POST UPL_MAP_RESULT=SUCCESS COMMIT_ACTION=%s COMMIT_RESULT=%s ABORT_ACTION=%s RESULT=0\n",
+        commit_action, commit_result, abort_action);
+    xzs_bringup_console_write(logbuf, len);
+
+    return 0;
+}
+
 const struct vnodeopv_entry_desc xzsfs_vnodeop_entries[] = {
     { .opve_op = &vnop_default_desc, .opve_impl = (VOPFUNC)(void *)vn_default_error },
     { .opve_op = &vnop_lookup_desc,  .opve_impl = (VOPFUNC)xzsfs_lookup },
     { .opve_op = &vnop_open_desc,    .opve_impl = (VOPFUNC)xzsfs_open },
     { .opve_op = &vnop_close_desc,   .opve_impl = (VOPFUNC)xzsfs_close },
     { .opve_op = &vnop_read_desc,    .opve_impl = (VOPFUNC)xzsfs_read },
+    { .opve_op = &vnop_pagein_desc,  .opve_impl = (VOPFUNC)xzsfs_vnop_pagein },
     { .opve_op = &vnop_getattr_desc, .opve_impl = (VOPFUNC)xzsfs_getattr },
     { .opve_op = &vnop_readdir_desc, .opve_impl = (VOPFUNC)xzsfs_readdir },
     { .opve_op = &vnop_inactive_desc,.opve_impl = (VOPFUNC)nop_inactive },
