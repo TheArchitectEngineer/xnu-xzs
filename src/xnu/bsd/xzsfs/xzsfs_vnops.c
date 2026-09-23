@@ -11,6 +11,8 @@
 #include <sys/ubc_internal.h>
 #include <libkern/libkern.h>
 #include <mach/vm_param.h>
+#include <mach/vm_statistics.h>
+#include <kern/kalloc.h>
 
 extern void xzs_bringup_console_write(const void *buf, int len);
 
@@ -519,3 +521,150 @@ xzs_diag_xzsfs_ubc(uint64_t user_path)
 
     vnode_put(vp);
 }
+
+void
+xzs_diag_xzsfs_pagecheck(uint64_t user_path, uint64_t f_offset, uint64_t req_size)
+{
+    char kpath[256];
+    char line[160];
+    size_t len = 0;
+    int err;
+    vnode_t vp = NULL;
+
+    err = copyinstr((user_addr_t)user_path, kpath, sizeof(kpath), &len);
+    if (err != 0) {
+        snprintf(line, sizeof(line), "[XZS-PAGECHECK] copyinstr failed err=%d\n", err);
+        xzs_ubc_emit(line);
+        return;
+    }
+
+    err = vnode_lookup(kpath, 0, &vp, vfs_context_current());
+    if (err != 0 || vp == NULL) {
+        snprintf(line, sizeof(line), "[XZS-PAGECHECK] vnode_lookup failed path=%s err=%d\n", kpath, err);
+        xzs_ubc_emit(line);
+        return;
+    }
+
+    enum vtype vtype = vnode_vtype(vp);
+    const char *vtype_str = (vtype == VREG) ? "VREG" : ((vtype == VDIR) ? "VDIR" : "VOTHER");
+
+    uint64_t file_size = 0;
+    struct xzsfs_node *node = (struct xzsfs_node *)vnode_fsnode(vp);
+    if (node != NULL) {
+        file_size = node->core.data_length;
+    }
+
+    if (vtype != VREG || node == NULL || node->xmp == NULL || node->xmp->devvp == NULL) {
+        snprintf(line, sizeof(line), "[XZS-PAGECHECK] invalid vnode for pagecheck\n");
+        xzs_ubc_emit(line);
+        vnode_put(vp);
+        return;
+    }
+
+    /* Determine valid file bytes in this requested range */
+    uint64_t max_bytes = (file_size > f_offset) ? (file_size - f_offset) : 0;
+    size_t valid_file_bytes = (req_size < max_bytes) ? (size_t)req_size : (size_t)max_bytes;
+    size_t rounded_valid_bytes = (size_t)round_page_64(valid_file_bytes);
+    if (rounded_valid_bytes > req_size) {
+        rounded_valid_bytes = (size_t)req_size;
+    }
+    size_t zero_bytes = (rounded_valid_bytes > valid_file_bytes) ? (rounded_valid_bytes - valid_file_bytes) : 0;
+
+    /* 1. SOURCE PATH (Independent Observation) */
+    uint8_t *src_buf = (uint8_t *)kalloc_data(req_size, Z_WAITOK | Z_ZERO);
+    size_t src_read_bytes = 0;
+    int src_err = 0;
+    if (valid_file_bytes > 0) {
+        src_err = xzsfs_core_read(xzsfs_kernel_block_read, node->xmp->devvp,
+                                  &node->core, f_offset, valid_file_bytes,
+                                  src_buf, &src_read_bytes);
+    }
+    uint32_t src_csum = (src_err == 0 && src_read_bytes == valid_file_bytes) ?
+                        xzsfs_crc32(0, src_buf, src_read_bytes) : 0;
+
+    /* 2. PAGER PATH (Via UPL & XZSFS VNOP_PAGEIN) */
+    upl_t upl = NULL;
+    upl_page_info_t *pl = NULL;
+    kern_return_t kr = ubc_create_upl_kernel(vp, (off_t)f_offset, (int)req_size,
+                                             &upl, &pl, UPL_SET_LITE, VM_KERN_MEMORY_FILE);
+
+    int pagein_err = -1;
+    uint32_t pager_csum = 0;
+    int valid_bytes_match = 0;
+    size_t nonzero_tail_bytes = 0;
+    int zero_tail_valid = 0;
+
+    if (kr == KERN_SUCCESS && upl != NULL) {
+        struct vnop_pagein_args ap;
+        ap.a_desc = &vnop_pagein_desc;
+        ap.a_vp = vp;
+        ap.a_pl = upl;
+        ap.a_pl_offset = 0;
+        ap.a_f_offset = (off_t)f_offset;
+        ap.a_size = req_size;
+        ap.a_flags = UPL_NOCOMMIT;
+        ap.a_context = vfs_context_current();
+
+        pagein_err = xzsfs_vnop_pagein(&ap);
+        if (pagein_err == 0) {
+            vm_offset_t pager_addr = 0;
+            kr = ubc_upl_map(upl, &pager_addr);
+            if (kr == KERN_SUCCESS && pager_addr != 0) {
+                uint8_t *pager_ptr = (uint8_t *)pager_addr;
+                pager_csum = xzsfs_crc32(0, pager_ptr, valid_file_bytes);
+                if (src_err == 0 && src_read_bytes == valid_file_bytes &&
+                    src_csum == pager_csum &&
+                    bcmp(src_buf, pager_ptr, valid_file_bytes) == 0) {
+                    valid_bytes_match = 1;
+                }
+                for (size_t i = valid_file_bytes; i < rounded_valid_bytes; i++) {
+                    if (pager_ptr[i] != 0) {
+                        nonzero_tail_bytes++;
+                    }
+                }
+                zero_tail_valid = (nonzero_tail_bytes == 0);
+                ubc_upl_unmap(upl);
+            }
+            ubc_upl_commit_range(upl, 0, (upl_size_t)rounded_valid_bytes,
+                                 UPL_COMMIT_FREE_ON_EMPTY | UPL_COMMIT_CLEAR_DIRTY);
+            if (req_size > rounded_valid_bytes) {
+                ubc_upl_abort_range(upl, (upl_offset_t)rounded_valid_bytes,
+                                    (upl_size_t)(req_size - rounded_valid_bytes),
+                                    UPL_ABORT_FREE_ON_EMPTY | UPL_ABORT_ERROR);
+            }
+        } else {
+            ubc_upl_abort_range(upl, 0, (upl_size_t)req_size,
+                                UPL_ABORT_FREE_ON_EMPTY | UPL_ABORT_ERROR);
+        }
+    }
+
+    int overall_pass = (valid_bytes_match && zero_tail_valid && pagein_err == 0);
+
+    /* Diagnostic output */
+    snprintf(line, sizeof(line), "PATH=%s\n", kpath); xzs_ubc_emit(line);
+    snprintf(line, sizeof(line), "VNODE=%p\n", (void *)vp); xzs_ubc_emit(line);
+    snprintf(line, sizeof(line), "VTYPE=%s\n", vtype_str); xzs_ubc_emit(line);
+    snprintf(line, sizeof(line), "FILE_SIZE=%llu\n", (unsigned long long)file_size); xzs_ubc_emit(line);
+    snprintf(line, sizeof(line), "FILE_OFFSET=%llu\n", (unsigned long long)f_offset); xzs_ubc_emit(line);
+    snprintf(line, sizeof(line), "REQUEST_SIZE=%llu\n", (unsigned long long)req_size); xzs_ubc_emit(line);
+    snprintf(line, sizeof(line), "VALID_FILE_BYTES=%zu\n", valid_file_bytes); xzs_ubc_emit(line);
+    snprintf(line, sizeof(line), "ROUNDED_VALID_BYTES=%zu\n", rounded_valid_bytes); xzs_ubc_emit(line);
+    snprintf(line, sizeof(line), "ZERO_BYTES=%zu\n", zero_bytes); xzs_ubc_emit(line);
+    snprintf(line, sizeof(line), "SOURCE_CHECKSUM=0x%08x\n", src_csum); xzs_ubc_emit(line);
+    snprintf(line, sizeof(line), "PAGER_CHECKSUM=0x%08x\n", pager_csum); xzs_ubc_emit(line);
+    snprintf(line, sizeof(line), "VALID_BYTES_MATCH=%s\n", valid_bytes_match ? "yes" : "no"); xzs_ubc_emit(line);
+    if (zero_bytes > 0) {
+        snprintf(line, sizeof(line), "SOURCE_VALID_CHECKSUM=0x%08x\n", src_csum); xzs_ubc_emit(line);
+        snprintf(line, sizeof(line), "PAGER_VALID_CHECKSUM=0x%08x\n", pager_csum); xzs_ubc_emit(line);
+        snprintf(line, sizeof(line), "VALID_CHECKSUM_MATCH=%s\n", valid_bytes_match ? "yes" : "no"); xzs_ubc_emit(line);
+        snprintf(line, sizeof(line), "ZERO_TAIL_START=%zu\n", valid_file_bytes); xzs_ubc_emit(line);
+        snprintf(line, sizeof(line), "ZERO_TAIL_LENGTH=%zu\n", zero_bytes); xzs_ubc_emit(line);
+        snprintf(line, sizeof(line), "ZERO_TAIL_NONZERO_BYTES=%zu\n", nonzero_tail_bytes); xzs_ubc_emit(line);
+    }
+    snprintf(line, sizeof(line), "ZERO_TAIL_VALID=%s\n", zero_tail_valid ? "yes" : "no"); xzs_ubc_emit(line);
+    snprintf(line, sizeof(line), "RESULT=%s\n", overall_pass ? "PASS" : "FAIL"); xzs_ubc_emit(line);
+
+    kfree_data(src_buf, req_size);
+    vnode_put(vp);
+}
+

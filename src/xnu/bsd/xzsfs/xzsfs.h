@@ -99,5 +99,8 @@ int xzsfs_d5m6_probe(void);
 /* D7-T2N-1 UBC Diagnostic Probe */
 void xzs_diag_xzsfs_ubc(uint64_t user_path);
 
+/* D7-T2N-4 Pager Data Integrity Diagnostic Probe */
+void xzs_diag_xzsfs_pagecheck(uint64_t user_path, uint64_t f_offset, uint64_t req_size);
+
 #endif /* _XZSFS_H_ */
 

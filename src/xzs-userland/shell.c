@@ -448,6 +448,17 @@ run_external(int argc, char **argv)
 	(void)xzs_svc(SYS_WAIT4, pid, (long)&status, 0, 0);
 }
 
+static long
+parse_long(const char *s)
+{
+	long val = 0;
+	while (*s >= '0' && *s <= '9') {
+		val = val * 10 + (*s - '0');
+		s++;
+	}
+	return val;
+}
+
 void
 xzs_d7t2_shell(void)
 {
@@ -520,8 +531,19 @@ xzs_d7t2_shell(void)
 					}
 				}
 				(void)xzs_svc(SYS_XZS_DIAG, 20, (long)p, 0, 0);
+			} else if (argc >= 5 && seq(argv[1], "pagecheck")) {
+				char full_path[CWD_MAX];
+				const char *p = argv[2];
+				if (p[0] != '/') {
+					if (join2(full_path, CWD_MAX, cwd, p) == 0) {
+						p = full_path;
+					}
+				}
+				long off = parse_long(argv[3]);
+				long sz = parse_long(argv[4]);
+				(void)xzs_svc(SYS_XZS_DIAG, 21, (long)p, off, sz);
 			} else {
-				werr("usage: xzsfs ubc <path>\n");
+				werr("usage: xzsfs ubc <path> | xzsfs pagecheck <path> <offset> <size>\n");
 			}
 		} else if (seq(argv[0], "exit")) {
 			(void)xzs_svc(SYS_EXIT, 0, 0, 0, 0);

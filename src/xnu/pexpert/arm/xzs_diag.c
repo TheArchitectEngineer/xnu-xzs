@@ -26,7 +26,7 @@ static void xzs_clock_dump_state(void);
 static void xzs_irq_dump_state(void);
 static void xzs_fb_dump_state(void);
 static void xzs_memory_dump_state(void);
-void xzs_diag_dispatch(uint64_t which, uint64_t arg1);
+void xzs_diag_dispatch(uint64_t which, uint64_t arg1, uint64_t arg2, uint64_t arg3);
 
 static void
 xzs_diag_emit(const char *s)
@@ -775,7 +775,7 @@ xzs_d8m2_critical_on(const char *action, uint32_t offset, int parent)
 }
 
 void
-xzs_diag_dispatch(uint64_t which, uint64_t arg1)
+xzs_diag_dispatch(uint64_t which, uint64_t arg1, uint64_t arg2, uint64_t arg3)
 {
 	switch (which) {
 	case 1:
@@ -838,6 +838,11 @@ xzs_diag_dispatch(uint64_t which, uint64_t arg1)
 	case 20: {
 		extern void xzs_diag_xzsfs_ubc(uint64_t user_path);
 		xzs_diag_xzsfs_ubc(arg1);
+		break;
+	}
+	case 21: {
+		extern void xzs_diag_xzsfs_pagecheck(uint64_t user_path, uint64_t offset, uint64_t size);
+		xzs_diag_xzsfs_pagecheck(arg1, arg2, arg3);
 		break;
 	}
 	default:
