@@ -718,6 +718,62 @@ xzs_d8m2_critical_status(void)
 	xzs_d8m2_finish("PASS");
 }
 
+/*
+ * These branches live in MMCC, not behind MDSS_GDSC. Linux enables
+ * them from CLK_IS_CRITICAL during MMCC registration, before MDSS
+ * powers on. The parent root must already be running. Only bit 0 is
+ * written. Halt polling is the same 2000 us branch2 check.
+ */
+static void
+xzs_d8m2_critical_on(const char *action, uint32_t offset, int parent)
+{
+	uint32_t gate;
+	uint32_t old;
+	uint32_t wrote;
+	uint32_t readback;
+	int ready;
+
+	xzs_d8m2_line("ACTION=");
+	xzs_diag_emit(action);
+	xzs_diag_emit("\n");
+	xzs_d8m2_line("PRE\n");
+	if (parent == 1) {
+		gate = xzs_phys_read32(XZS_GCC_BASE + XZS_GCC_MMSS_NOC_CFG_AHB);
+		ready = (gate & 1u) != 0 && (gate & 0x80000000u) == 0;
+	} else if (parent == 2) {
+		gate = xzs_mmcc_read32(XZS_MMCC_AXI_CMD);
+		ready = (gate & 0x80000000u) == 0;
+	} else {
+		gate = xzs_mmcc_read32(XZS_MMCC_AHB_CMD);
+		ready = (gate & 0x80000000u) == 0;
+	}
+	old = xzs_mmcc_read32(offset);
+	xzs_d8m2_u32("[D8-M2] parent=", gate);
+	xzs_d8m2_u32("[D8-M2] old=", old);
+	xzs_d8m2_line("APPLY\n");
+	if (!ready) {
+		xzs_d8m2_line("write=none\n");
+		xzs_d8m2_finish("PARENT_OFF");
+		return;
+	}
+	if (xzs_branch_running(old)) {
+		xzs_d8m2_line("write=none\n");
+		xzs_d8m2_u32("[D8-M2] new=", old);
+		xzs_d8m2_finish("ALREADY_ON");
+		return;
+	}
+	wrote = xzs_mmcc_rmw(offset, XZS_CBCR_ENABLE, XZS_CBCR_ENABLE);
+	xzs_d8m2_u32("[D8-M2] wrote=", wrote);
+	if (!xzs_poll_bit31(offset, 0, &readback)) {
+		xzs_d8m2_u32("[D8-M2] readback=", readback);
+		xzs_d8m2_finish("TIMEOUT");
+		return;
+	}
+	xzs_d8m2_u32("[D8-M2] new=", readback);
+	xzs_d8m2_u32("[D8-M2] readback=", readback);
+	xzs_d8m2_finish("PASS");
+}
+
 void
 xzs_diag_dispatch(uint64_t which)
 {
@@ -766,6 +822,18 @@ xzs_diag_dispatch(uint64_t which)
 		break;
 	case 15:
 		xzs_d8m2_critical_status();
+		break;
+	case 16:
+		xzs_d8m2_critical_on("CLK-MMAGIC-AHB-001", XZS_MMCC_MMAGIC_AHB, 0);
+		break;
+	case 17:
+		xzs_d8m2_critical_on("CLK-MMAGIC-CFG-001", XZS_MMCC_CFG_AHB, 0);
+		break;
+	case 18:
+		xzs_d8m2_critical_on("CLK-MMAGIC-NOC-001", XZS_MMCC_MMAGIC_MDSS_NOC, 1);
+		break;
+	case 19:
+		xzs_d8m2_critical_on("CLK-MMAGIC-AXI-001", XZS_MMCC_MMAGIC_MDSS_AXI, 2);
 		break;
 	default:
 		xzs_diag_emit("[XZS-D8M1] unknown diag\n");

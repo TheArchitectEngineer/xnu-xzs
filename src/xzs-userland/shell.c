@@ -175,6 +175,18 @@ clocks_which(int argc, char **argv)
 	if (argc == 2 && seq(argv[1], "mdss-critical-status")) {
 		return 15;
 	}
+	if (argc == 2 && seq(argv[1], "mmagic-ahb-on")) {
+		return 16;
+	}
+	if (argc == 2 && seq(argv[1], "mmagic-cfg-ahb-on")) {
+		return 17;
+	}
+	if (argc == 2 && seq(argv[1], "mmagic-mdss-noc-on")) {
+		return 18;
+	}
+	if (argc == 2 && seq(argv[1], "mmagic-mdss-axi-on")) {
+		return 19;
+	}
 	if (argc == 2 && seq(argv[1], "mdss-ahb-on")) {
 		return 10;
 	}

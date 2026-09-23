@@ -202,3 +202,17 @@ Hardware on `a5f47b5` (`artifacts/hw/d8m2-a5f47b5/host.txt`): all four BCR reads
 | `mdss_ahb` | MMCC `0x2308` | `ahb_clk_src` | no | left for the MDSS driver |
 
 `axi_clk_src` CMD is MMCC `0x5040` and CFG is `0x5044`. Its source map is XO=0, MMPLL0=1, MMPLL1=2, GPLL0=5, GPLL0_DIV=6. Root-off is CMD bit 31. These MMCC branches can be read before MDSS_GDSC is on. `clocks mdss-critical-status` only reads them.
+
+On `059d58a` (`artifacts/hw/d8m2-059d58a/host.txt`), with MDSS still collapsed:
+
+```text
+mmss_mmagic_ahb         0x80000000  enable=0 halt=1
+mmss_mmagic_cfg_ahb     0x80008000  enable=0 halt=1
+mmagic_mdss_noc_cfg_ahb 0x80000000  enable=0 halt=1
+mmagic_mdss_axi         0x80000000  enable=0 halt=1
+ahb_clk_src             cmd 0x00000000 cfg 0x00000513 root_off=0 source=GPLL0
+axi_clk_src             cmd 0x00000000 cfg 0x00000000 root_off=0 source=XO
+gcc_mmss_noc_cfg_ahb    0x20008001
+```
+
+That differs from the Linux registration baseline. It does not by itself prove the difference causes the `mdss_ahb` halt. The four branch enables are separate commands and each one refuses to write if its own parent root is off. They do not require MDSS_GDSC.
