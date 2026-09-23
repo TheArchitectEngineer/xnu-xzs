@@ -520,6 +520,10 @@ xzs_diag_xzsfs_ubc(uint64_t user_path)
     xzs_ubc_emit(line);
 
     vnode_put(vp);
+
+    /* D7-T2N-4: Automatically perform Page 0 and EOF Pagecheck validations */
+    xzs_diag_xzsfs_pagecheck(user_path, 0, 16384);
+    xzs_diag_xzsfs_pagecheck(user_path, 16384, 16384);
 }
 
 void

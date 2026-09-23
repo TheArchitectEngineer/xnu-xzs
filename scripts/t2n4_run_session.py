@@ -77,7 +77,7 @@ def main():
     skip_boot = "--no-boot" in sys.argv
     if not skip_boot:
         print("=== STEP 0: BOOT CANDIDATE VIA FASTBOOT ===", flush=True)
-        boot_res = subprocess.run(["fastboot", "boot", str(boot_img)], capture_output=True, text=True)
+        boot_res = subprocess.run(["fastboot", "-s", "BH905SX976", "boot", str(boot_img)], capture_output=True, text=True)
         print(boot_res.stdout, flush=True)
         print(boot_res.stderr, flush=True)
         if boot_res.returncode != 0:
@@ -116,7 +116,7 @@ def main():
     run_step("STEP 1: SHELL HEALTH PWD", "pwd\n", 1.0)
 
     # Step 2: Baseline UBC diagnostic for /bin/hello (Section 24)
-    run_step("STEP 2: BASELINE UBC /bin/hello", "xzsfs ubc /bin/hello\n", 2.0)
+    run_step("STEP 2: BASELINE UBC /bin/hello", "xzsfs ubc /bin/hello\n", 4.0)
 
     # Step 3: Hardware validation — page 0 (Section 25)
     run_step("STEP 3: PAGE 0 VALIDATION (offset=0, size=16384)", "xzsfs pagecheck /bin/hello 0 16384\n", 3.0)
