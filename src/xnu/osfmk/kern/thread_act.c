@@ -1175,7 +1175,41 @@ thread_suspended(__unused void *parameter, wait_result_t result)
 void
 thread_apc_ast(thread_t thread)
 {
+#if CONFIG_XZS_BRINGUP
+	extern void xzs_bringup_console_write(const void *buf, int len);
+	char cpb[160];
+	int cpl;
+
+	cpl = snprintf(cpb, sizeof(cpb),
+	    "[XZS-T4F] APC-10 ENTER thread=%p\n", (void *)thread);
+	xzs_bringup_console_write(cpb, cpl);
+
+	task_t task = get_threadtask(thread);
+
+	cpl = snprintf(cpb, sizeof(cpb),
+	    "[XZS-T4F] APC-20 THREAD_STATE thread=%p act=%d strt=%d spk=%d scnt=%d ast=0x%x tid=%llu\n",
+	    (void *)thread, (int)thread->active, (int)thread->started,
+	    (int)thread->suspend_parked, (int)thread->suspend_count,
+	    (unsigned int)thread->ast, (unsigned long long)thread_tid(thread));
+	xzs_bringup_console_write(cpb, cpl);
+
+	if (task != TASK_NULL) {
+		cpl = snprintf(cpb, sizeof(cpb),
+		    "[XZS-T4F] APC-30 TASK_STATE task=%p act=%d thcnt=%d map=%p\n",
+		    (void *)task, (int)task->active, (int)task->thread_count, (void *)task->map);
+		xzs_bringup_console_write(cpb, cpl);
+	}
+
+	cpl = snprintf(cpb, sizeof(cpb), "[XZS-T4F] APC-40 BEFORE_LOCK_1 thread=%p\n", (void *)thread);
+	xzs_bringup_console_write(cpb, cpl);
+#endif
+
 	thread_mtx_lock(thread);
+
+#if CONFIG_XZS_BRINGUP
+	cpl = snprintf(cpb, sizeof(cpb), "[XZS-T4F] APC-41 AFTER_LOCK_1 spk=%d\n", (int)thread->suspend_parked);
+	xzs_bringup_console_write(cpb, cpl);
+#endif
 
 	assert(thread->suspend_parked == FALSE);
 
@@ -1189,15 +1223,19 @@ thread_apc_ast(thread_t thread)
 	thread_unlock(thread);
 	splx(s);
 
+#if CONFIG_XZS_BRINGUP
+	cpl = snprintf(cpb, sizeof(cpb), "[XZS-T4F] APC-50 BEFORE_TERMINATE act=%d scnt=%d\n",
+	    (int)thread->active, (int)thread->suspend_count);
+	xzs_bringup_console_write(cpb, cpl);
+#endif
+
 	if (!thread->active) {
 		/* Thread is ready to terminate, time to tear it down */
 		thread_mtx_unlock(thread);
 
 #if CONFIG_XZS_BRINGUP
-		extern void xzs_bringup_console_write(const void *buf, int len);
-		char apcmsg[80];
-		int apclen = snprintf(apcmsg, sizeof(apcmsg), "[XZS-APC] calling thread_terminate_self for %p\n", (void *)thread);
-		xzs_bringup_console_write(apcmsg, apclen);
+		cpl = snprintf(cpb, sizeof(cpb), "[XZS-T4F] APC-70 BEFORE_THREAD_TERMINATE_SELF thread=%p\n", (void *)thread);
+		xzs_bringup_console_write(cpb, cpl);
 #endif
 
 		thread_terminate_self();
@@ -1206,6 +1244,11 @@ thread_apc_ast(thread_t thread)
 
 	/* If we're suspended, go to sleep and wait for someone to wake us up. */
 	if (thread->suspend_count > 0) {
+#if CONFIG_XZS_BRINGUP
+		cpl = snprintf(cpb, sizeof(cpb), "[XZS-T4F] APC-80 BEFORE_BLOCK thread=%p scnt=%d\n",
+		    (void *)thread, (int)thread->suspend_count);
+		xzs_bringup_console_write(cpb, cpl);
+#endif
 		thread->suspend_parked = TRUE;
 		assert_wait(&thread->suspend_count,
 		    THREAD_ABORTSAFE | THREAD_WAIT_NOREPORT_USER);
@@ -1216,6 +1259,11 @@ thread_apc_ast(thread_t thread)
 	}
 
 	thread_mtx_unlock(thread);
+
+#if CONFIG_XZS_BRINGUP
+	cpl = snprintf(cpb, sizeof(cpb), "[XZS-T4F] APC-90 UNEXPECTED_RETURN thread=%p\n", (void *)thread);
+	xzs_bringup_console_write(cpb, cpl);
+#endif
 }
 
 #if CONFIG_ROSETTA

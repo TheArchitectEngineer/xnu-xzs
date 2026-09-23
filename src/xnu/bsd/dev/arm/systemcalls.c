@@ -104,7 +104,15 @@ unix_syscall(
 
 #if CONFIG_XZS_BRINGUP
 	extern void xzs_bringup_console_write(const void *buf, int len);
-	if (code == 1 || code == 4 || code == 7) {
+	if (proc && proc_pid(proc) == 1) {
+		char scm[128];
+		int scl = snprintf(scm, sizeof(scm),
+		    "[XZS-T4F] SHELL_PROMPT_SYSCALL_ENTER pid=1 code=%d r0=0x%llx r1=0x%llx\n",
+		    code,
+		    (unsigned long long)saved_state64(state)->x[0],
+		    (unsigned long long)saved_state64(state)->x[1]);
+		xzs_bringup_console_write(scm, scl);
+	} else if (code == 1 || code == 4 || code == 7) {
 		char scm[96];
 		int scl = snprintf(scm, sizeof(scm), "[XZS-SC] pid=%d code=%d r0=0x%llx r1=0x%llx\n",
 		    proc_pid(proc), code,
@@ -373,6 +381,9 @@ unix_syscall_return(int error)
 		    s64 ? (unsigned long long)s64->pc : 0ULL,
 		    s64 ? (unsigned long long)s64->sp : 0ULL);
 		xzs_bringup_console_write(retm, retl);
+		if (proc && proc_pid(proc) == 1 && code == 7) {
+			xzs_bringup_console_write("[XZS-T4F] USER_PID1_RESUMED\n", 28);
+		}
 	}
 #endif
 
