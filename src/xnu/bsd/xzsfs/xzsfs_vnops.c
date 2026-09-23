@@ -450,6 +450,8 @@ xzs_ubc_emit(const char *s)
     xzs_bringup_console_write(s, n);
 }
 
+static void xzs_diag_xzsfs_pagecheck_kpath(const char *kpath, uint64_t f_offset, uint64_t req_size);
+
 void
 xzs_diag_xzsfs_ubc(uint64_t user_path)
 {
@@ -464,6 +466,13 @@ xzs_diag_xzsfs_ubc(uint64_t user_path)
         snprintf(line, sizeof(line), "[XZS-UBC] copyinstr failed err=%d\n", err);
         xzs_ubc_emit(line);
         return;
+    }
+
+    int do_pagecheck = 0;
+    char *pc_tag = strnstr(kpath, ":pagecheck", sizeof(kpath));
+    if (pc_tag != NULL) {
+        do_pagecheck = 1;
+        *pc_tag = '\0';
     }
 
     err = vnode_lookup(kpath, 0, &vp, vfs_context_current());
@@ -521,26 +530,18 @@ xzs_diag_xzsfs_ubc(uint64_t user_path)
 
     vnode_put(vp);
 
-    /* D7-T2N-4: Automatically perform Page 0 and EOF Pagecheck validations */
-    xzs_diag_xzsfs_pagecheck(user_path, 0, 16384);
-    xzs_diag_xzsfs_pagecheck(user_path, 16384, 16384);
+    if (do_pagecheck) {
+        xzs_diag_xzsfs_pagecheck_kpath(kpath, 0, 16384);
+        xzs_diag_xzsfs_pagecheck_kpath(kpath, 16384, 16384);
+    }
 }
 
-void
-xzs_diag_xzsfs_pagecheck(uint64_t user_path, uint64_t f_offset, uint64_t req_size)
+static void
+xzs_diag_xzsfs_pagecheck_kpath(const char *kpath, uint64_t f_offset, uint64_t req_size)
 {
-    char kpath[256];
     char line[160];
-    size_t len = 0;
     int err;
     vnode_t vp = NULL;
-
-    err = copyinstr((user_addr_t)user_path, kpath, sizeof(kpath), &len);
-    if (err != 0) {
-        snprintf(line, sizeof(line), "[XZS-PAGECHECK] copyinstr failed err=%d\n", err);
-        xzs_ubc_emit(line);
-        return;
-    }
 
     err = vnode_lookup(kpath, 0, &vp, vfs_context_current());
     if (err != 0 || vp == NULL) {
@@ -670,5 +671,20 @@ xzs_diag_xzsfs_pagecheck(uint64_t user_path, uint64_t f_offset, uint64_t req_siz
 
     kfree_data(src_buf, req_size);
     vnode_put(vp);
+}
+
+void
+xzs_diag_xzsfs_pagecheck(uint64_t user_path, uint64_t f_offset, uint64_t req_size)
+{
+    char kpath[256];
+    char line[160];
+    size_t len = 0;
+    int err = copyinstr((user_addr_t)user_path, kpath, sizeof(kpath), &len);
+    if (err != 0) {
+        snprintf(line, sizeof(line), "[XZS-PAGECHECK] copyinstr failed err=%d\n", err);
+        xzs_ubc_emit(line);
+        return;
+    }
+    xzs_diag_xzsfs_pagecheck_kpath(kpath, f_offset, req_size);
 }
 
