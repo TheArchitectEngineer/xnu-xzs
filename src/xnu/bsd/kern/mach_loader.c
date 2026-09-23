@@ -714,6 +714,36 @@ load_machfile(
 		return LOAD_BADMACHO;
 	}
 
+	{
+		char xline[128];
+		extern void xzs_bringup_console_write(const void *buf, int len);
+		#define XZS_LOADER_EMIT(s) do { int _l = 0; while ((s)[_l]) _l++; xzs_bringup_console_write((s), _l); } while(0)
+
+		enum vtype vt = vnode_vtype(vp);
+		const char *vt_str = (vt == VREG) ? "VREG" : ((vt == VDIR) ? "VDIR" : "VOTHER");
+		int ubc_present = UBCINFOEXISTS(vp);
+		off_t ubc_sz = ubc_present ? ubc_getsize(vp) : 0;
+		memory_object_control_t exec_ctrl = ubc_present ? ubc_getobject(vp, UBC_FLAGS_NONE) : MEMORY_OBJECT_CONTROL_NULL;
+
+		XZS_LOADER_EMIT("\n[XZS-T2N2] EXEC_VNODE_IDENT\n");
+		snprintf(xline, sizeof(xline), "EXEC_PATH=%s\n", (imgp->ip_startargv && imgp->ip_startargv[0]) ? imgp->ip_startargv : "/bin/hello");
+		XZS_LOADER_EMIT(xline);
+		snprintf(xline, sizeof(xline), "EXEC_VNODE=%p\n", (void *)vp);
+		XZS_LOADER_EMIT(xline);
+		snprintf(xline, sizeof(xline), "EXEC_VTYPE=%s\n", vt_str);
+		XZS_LOADER_EMIT(xline);
+		snprintf(xline, sizeof(xline), "EXEC_FILE_SIZE=%llu\n", (unsigned long long)file_size);
+		XZS_LOADER_EMIT(xline);
+		snprintf(xline, sizeof(xline), "EXEC_UBC_INFO_PRESENT=%s\n", ubc_present ? "yes" : "no");
+		XZS_LOADER_EMIT(xline);
+		snprintf(xline, sizeof(xline), "EXEC_UBC_SIZE=%lld\n", (long long)ubc_sz);
+		XZS_LOADER_EMIT(xline);
+		snprintf(xline, sizeof(xline), "EXEC_MEMORY_OBJECT_CONTROL=%p\n", (void *)exec_ctrl);
+		XZS_LOADER_EMIT(xline);
+		snprintf(xline, sizeof(xline), "EXEC_CONTROL_IS_NULL=%s\n", (exec_ctrl == MEMORY_OBJECT_CONTROL_NULL) ? "yes" : "no");
+		XZS_LOADER_EMIT(xline);
+	}
+
 	result->is_64bit_addr = ((imgp->ip_flags & IMGPF_IS_64BIT_ADDR) == IMGPF_IS_64BIT_ADDR);
 	result->is_64bit_data = ((imgp->ip_flags & IMGPF_IS_64BIT_DATA) == IMGPF_IS_64BIT_DATA);
 #if defined(HAS_APPLE_PAC)
@@ -1180,6 +1210,26 @@ parse_machfile(
 	 *	Get the pager for the file.
 	 */
 	control = ubc_getobject(vp, UBC_FLAGS_NONE);
+
+	{
+		char xline[128];
+		extern void xzs_bringup_console_write(const void *buf, int len);
+		#define XZS_LOADER_EMIT_C(s) do { int _l = 0; while ((s)[_l]) _l++; xzs_bringup_console_write((s), _l); } while(0)
+		int ubc_p = UBCINFOEXISTS(vp);
+		off_t ubc_s = ubc_p ? ubc_getsize(vp) : 0;
+
+		XZS_LOADER_EMIT_C("\n[XZS-T2N2] LOADER_UBC_CONTROL\n");
+		snprintf(xline, sizeof(xline), "LOADER_VNODE=%p\n", (void *)vp);
+		XZS_LOADER_EMIT_C(xline);
+		snprintf(xline, sizeof(xline), "LOADER_UBC_INFO_PRESENT=%s\n", ubc_p ? "yes" : "no");
+		XZS_LOADER_EMIT_C(xline);
+		snprintf(xline, sizeof(xline), "LOADER_UBC_SIZE=%lld\n", (long long)ubc_s);
+		XZS_LOADER_EMIT_C(xline);
+		snprintf(xline, sizeof(xline), "LOADER_CONTROL=%p\n", (void *)control);
+		XZS_LOADER_EMIT_C(xline);
+		snprintf(xline, sizeof(xline), "LOADER_CONTROL_IS_NULL=%s\n", (control == MEMORY_OBJECT_CONTROL_NULL) ? "yes" : "no");
+		XZS_LOADER_EMIT_C(xline);
+	}
 
 	/* ensure header + sizeofcmds falls within the file */
 	if (os_add_overflow(mach_header_sz, header->sizeofcmds, &cmds_size) ||
@@ -2162,7 +2212,14 @@ map_segment(
 		vmk_flags.vmkf_translated_allow_execute = TRUE;
 	}
 
+	const char *map_api = NULL;
+	extern int xzs_diag_map_nentries(vm_map_t map);
+	extern void xzs_diag_inspect_map_entry(vm_map_t map, mach_vm_offset_t addr);
+	int nentries_before = xzs_diag_map_nentries(map);
+	boolean_t is_text_map = (vm_start <= 0x1000002f0ULL && vm_end > 0x1000002f0ULL);
+
 	if (control != MEMORY_OBJECT_CONTROL_NULL) {
+		map_api = "vm_map_enter_mem_object_control";
 		/* no copy-on-read for mapped binaries */
 		vmk_flags.vmkf_no_copy_on_read = 1;
 		ret = vm_map_enter_mem_object_control(
@@ -2177,6 +2234,7 @@ map_segment(
 			initprot, maxprot,
 			VM_INHERIT_DEFAULT);
 	} else {
+		map_api = "mach_vm_map_kernel";
 		ret = mach_vm_map_kernel(
 			map,
 			&vm_start,
@@ -2188,6 +2246,41 @@ map_segment(
 			TRUE, /* copy */
 			initprot, maxprot,
 			VM_INHERIT_DEFAULT);
+	}
+
+	if (is_text_map) {
+		char xline[160];
+		extern void xzs_bringup_console_write(const void *buf, int len);
+		#define XZS_LOADER_EMIT_M(s) do { int _l = 0; while ((s)[_l]) _l++; xzs_bringup_console_write((s), _l); } while(0)
+
+		int nentries_after = xzs_diag_map_nentries(map);
+
+		XZS_LOADER_EMIT_M("\n[XZS-T2N2] MAPPING_OPERATION\n");
+		XZS_LOADER_EMIT_M("SEGMENT=__TEXT\n");
+		snprintf(xline, sizeof(xline), "MAP_API=%s\n", map_api);
+		XZS_LOADER_EMIT_M(xline);
+		snprintf(xline, sizeof(xline), "MAP_PTR=%p\n", (void *)map);
+		XZS_LOADER_EMIT_M(xline);
+		snprintf(xline, sizeof(xline), "NENTRIES_BEFORE=%d\n", nentries_before);
+		XZS_LOADER_EMIT_M(xline);
+		snprintf(xline, sizeof(xline), "CONTROL=%p\n", (void *)control);
+		XZS_LOADER_EMIT_M(xline);
+		snprintf(xline, sizeof(xline), "MAP_RETURN_CODE=%d\n", ret);
+		XZS_LOADER_EMIT_M(xline);
+		snprintf(xline, sizeof(xline), "NENTRIES_AFTER=%d\n", nentries_after);
+		XZS_LOADER_EMIT_M(xline);
+
+		/* Inspect resulting vm_map_entry covering 0x1000002f0 */
+		xzs_diag_inspect_map_entry(map, 0x1000002f0ULL);
+
+		XZS_LOADER_EMIT_M("\n[XZS-T2N2] MAPPING_CLASSIFICATION\n");
+		if (control != MEMORY_OBJECT_CONTROL_NULL && ret == KERN_SUCCESS) {
+			XZS_LOADER_EMIT_M("MAPPING_CLASSIFICATION=NATIVE_FILE_BACKED\n");
+		} else if (control == MEMORY_OBJECT_CONTROL_NULL && ret == KERN_SUCCESS) {
+			XZS_LOADER_EMIT_M("MAPPING_CLASSIFICATION=ANONYMOUS_FALLBACK\n");
+		} else {
+			XZS_LOADER_EMIT_M("MAPPING_CLASSIFICATION=INCONCLUSIVE\n");
+		}
 	}
 	if (ret != KERN_SUCCESS) {
 		return LOAD_NOSPACE;
@@ -2283,6 +2376,31 @@ load_segment(
 		    scp->initprot,
 		    scp->maxprot,
 		    scp->flags));
+	}
+
+	if (strncmp(scp->segname, "__TEXT", 6) == 0) {
+		char xline[128];
+		extern void xzs_bringup_console_write(const void *buf, int len);
+		#define XZS_LOADER_EMIT_S(s) do { int _l = 0; while ((s)[_l]) _l++; xzs_bringup_console_write((s), _l); } while(0)
+
+		XZS_LOADER_EMIT_S("\n[XZS-T2N2] SEGMENT_TEXT_INFO\n");
+		XZS_LOADER_EMIT_S("SEGMENT=__TEXT\n");
+		snprintf(xline, sizeof(xline), "VMADDR=0x%llx\n", (unsigned long long)(slide + scp->vmaddr));
+		XZS_LOADER_EMIT_S(xline);
+		snprintf(xline, sizeof(xline), "VMSIZE=0x%llx\n", (unsigned long long)scp->vmsize);
+		XZS_LOADER_EMIT_S(xline);
+		snprintf(xline, sizeof(xline), "FILEOFF=0x%llx\n", (unsigned long long)(pager_offset + scp->fileoff));
+		XZS_LOADER_EMIT_S(xline);
+		snprintf(xline, sizeof(xline), "FILESIZE=0x%llx\n", (unsigned long long)scp->filesize);
+		XZS_LOADER_EMIT_S(xline);
+		snprintf(xline, sizeof(xline), "INITPROT=0x%x\n", scp->initprot);
+		XZS_LOADER_EMIT_S(xline);
+		snprintf(xline, sizeof(xline), "MAXPROT=0x%x\n", scp->maxprot);
+		XZS_LOADER_EMIT_S(xline);
+		snprintf(xline, sizeof(xline), "MAP_PTR=%p\n", (void *)map);
+		XZS_LOADER_EMIT_S(xline);
+		snprintf(xline, sizeof(xline), "CONTROL=%p\n", (void *)control);
+		XZS_LOADER_EMIT_S(xline);
 	}
 
 	/*
