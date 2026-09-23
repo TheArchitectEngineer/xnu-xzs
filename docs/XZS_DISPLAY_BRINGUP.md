@@ -99,16 +99,30 @@ Host log `artifacts/hw/d8m1-93c511c/host.txt`. Nine MMCC loads each printed PRE 
 
 For a GDSC, bit 31 is power-on and bit 0 is software collapse. The parent domain reports power on. MDSS_GDSC reports collapsed. For a branch, bit 0 is enable and bit 31 set means halted. The display branches are halted.
 
-## D8-M2, not started
+## D8-M2 commands
 
-Each step is one shell transaction with a pre line, the action, and a readback. Nothing here is implemented as a write.
+The clean image `861032c` reproduced the table above (`artifacts/hw/d8m1-clean-861032c/host.txt`) and is tag `xzs-d8-m1-complete`. Later writes live on `xzs-d8-m2-power`.
+
+Shell commands, each one transaction:
 
 ```text
-1. Read MMAGIC_MDSS_GDSC and MDSS_GDSC.
-2. If PWR_ON is clear, enable MMAGIC_MDSS then MDSS_GDSC.
-3. Read both GDSCR values back.
-4. Enable mdss_ahb, then mdss_axi, then mdss_mdp.
-5. Read those branch registers back.
+display power status
+display power mmagic-on
+display power mdss-on
+clocks display status
+clocks mdss-ahb-on
+clocks mdss-axi-on
+clocks mdp-on
 ```
 
-No PLL, PHY, panel, backlight, or scanout in that first sequence.
+`mmagic-on` writes nothing when GDSCR bit 31 is set and bit 0 is clear. It reports `ALREADY_ON`.
+
+The write sequence is the Linux `gdsc_enable` path for these two domains, not a guess from bit names.
+
+MMAGIC_MDSS (`0x247c`, hw status `0x2480`, flags VOTABLE|ALWAYS_ON, pwrsts OFF_ON): clear `SW_COLLAPSE`, `delay(1)` because `gds_hw_ctrl` is set, poll `PWR_ON` on `0x2480` for at most 2000 µs, `delay(1)`, set `HW_CONTROL` (bit 1). No reset, clamp, or memory-retain registers.
+
+MDSS (`0x2304`, parent mmagic, cxcs `0x2310` and `0x231c`, pwrsts OFF_ON, no HW_CTRL, no SW_RESET, no CLAMP_IO): refuse if the parent is not already on. Clear `SW_COLLAPSE`, poll `PWR_ON` on `0x2304` for at most 2000 µs. On success set `RETAIN_MEM` (bit 14) and `RETAIN_PERIPH` (bit 13) on the two cxc registers, then `delay(1)`. Those bits are not the branch enable.
+
+Branch enable is `clk_branch2`: set CBCR bit 0 only, then poll until bit 31 (`CBCR_CLK_OFF`) clears or the NoC FSM field (bits 30:28) equals 2. Cap 2000 µs. A clock command writes nothing if MDSS_GDSC is not on.
+
+A timeout prints the readback and returns to the prompt. No MDSS, MDP, DSI, PHY, or PLL slave read is added by these commands.

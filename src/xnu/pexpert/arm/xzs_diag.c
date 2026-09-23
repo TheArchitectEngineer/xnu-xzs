@@ -90,8 +90,17 @@ xzs_diag_boot_args(void)
 #define XZS_MMCC_MDSS_BYTE0 0x233cu
 #define XZS_MMCC_MDSS_ESC0 0x2344u
 #define XZS_MMCC_CFG_AHB 0x5054u
+#define XZS_MMCC_MMAGIC_HW_CTRL 0x2480u
+
+#define XZS_GDSC_PWR_ON (1u << 31)
+#define XZS_GDSC_HW_CONTROL (1u << 1)
+#define XZS_GDSC_SW_COLLAPSE (1u << 0)
+#define XZS_CBCR_CLK_OFF (1u << 31)
+#define XZS_CBCR_ENABLE (1u << 0)
+#define XZS_CBCR_RETAIN ((1u << 14) | (1u << 13))
 
 extern uint64_t g_xzs_ttbr0;
+extern void delay(int usec);
 
 static uint32_t
 xzs_mmcc_read32(uint32_t offset)
@@ -220,6 +229,295 @@ xzs_memory_dump_state(void)
 	xzs_diag_emit("[XZS-D8M1] MEM_AUDIT_DONE\n");
 }
 
+static void
+xzs_d8m2_line(const char *s)
+{
+	xzs_diag_emit("[D8-M2] ");
+	xzs_diag_emit(s);
+}
+
+static void
+xzs_d8m2_u32(const char *label, uint32_t value)
+{
+	char line[64];
+	static const char hex[] = "0123456789abcdef";
+	int i = 0;
+	int h;
+
+	while (label[i] != '\0' && i < 40) {
+		line[i] = label[i];
+		i++;
+	}
+	line[i++] = '0';
+	line[i++] = 'x';
+	for (h = 7; h >= 0; h--) {
+		line[i++] = hex[(value >> (h * 4)) & 0xf];
+	}
+	line[i++] = '\n';
+	line[i] = '\0';
+	xzs_diag_emit(line);
+}
+
+static void
+xzs_mmcc_map_begin(uint64_t *saved)
+{
+	__asm__ volatile("mrs %0, TTBR0_EL1" : "=r"(*saved));
+	if (g_xzs_ttbr0 != 0) {
+		__asm__ volatile("msr TTBR0_EL1, %0; isb sy" :: "r"(g_xzs_ttbr0) : "memory");
+	}
+}
+
+static void
+xzs_mmcc_map_end(uint64_t saved)
+{
+	__asm__ volatile("dsb sy" ::: "memory");
+	if (g_xzs_ttbr0 != 0) {
+		__asm__ volatile("msr TTBR0_EL1, %0; isb sy" :: "r"(saved) : "memory");
+	}
+}
+
+static void
+xzs_mmcc_write32(uint32_t offset, uint32_t value)
+{
+	uint64_t saved = 0;
+
+	xzs_mmcc_map_begin(&saved);
+	*(volatile uint32_t *)(XZS_MMCC_BASE + offset) = value;
+	xzs_mmcc_map_end(saved);
+}
+
+static uint32_t
+xzs_mmcc_rmw(uint32_t offset, uint32_t mask, uint32_t value)
+{
+	uint32_t next = (xzs_mmcc_read32(offset) & ~mask) | (value & mask);
+
+	xzs_mmcc_write32(offset, next);
+	return next;
+}
+
+static int
+xzs_gdsc_already_on(uint32_t value)
+{
+	return (value & XZS_GDSC_PWR_ON) != 0 && (value & XZS_GDSC_SW_COLLAPSE) == 0;
+}
+
+static int
+xzs_branch_running(uint32_t value)
+{
+	uint32_t fsm = (value >> 28) & 7u;
+
+	return (value & XZS_CBCR_ENABLE) != 0 &&
+	    ((value & XZS_CBCR_CLK_OFF) == 0 || fsm == 2u);
+}
+
+/*
+ * Poll matches Linux gdsc_poll_status: STATUS_POLL_TIMEOUT_US is 2000.
+ * delay() is microseconds. The loop always returns.
+ */
+static int
+xzs_poll_bit31(uint32_t offset, int want_set, uint32_t *last)
+{
+	int i;
+
+	for (i = 0; i < 2000; i++) {
+		uint32_t value = xzs_mmcc_read32(offset);
+
+		*last = value;
+		if (want_set) {
+			if ((value & XZS_GDSC_PWR_ON) != 0) {
+				return 1;
+			}
+		} else if (xzs_branch_running(value)) {
+			return 1;
+		}
+		delay(1);
+	}
+	*last = xzs_mmcc_read32(offset);
+	if (want_set) {
+		return (*last & XZS_GDSC_PWR_ON) != 0;
+	}
+	return xzs_branch_running(*last);
+}
+
+static void
+xzs_d8m2_finish(const char *result)
+{
+	xzs_d8m2_line("RESULT=");
+	xzs_diag_emit(result);
+	xzs_diag_emit("\n[D8-M2] POST\n");
+}
+
+static void
+xzs_d8m2_power_status(void)
+{
+	uint32_t mmagic;
+	uint32_t hw;
+	uint32_t mdss;
+
+	xzs_d8m2_line("ACTION=PWR-STATUS-001\n");
+	xzs_d8m2_line("PRE\n");
+	mmagic = xzs_mmcc_read32(XZS_MMCC_MMAGIC_MDSS_GDSC);
+	hw = xzs_mmcc_read32(XZS_MMCC_MMAGIC_HW_CTRL);
+	mdss = xzs_mmcc_read32(XZS_MMCC_MDSS_GDSC);
+	xzs_d8m2_u32("[D8-M2] mmagic=", mmagic);
+	xzs_d8m2_u32("[D8-M2] mmagic_hw=", hw);
+	xzs_d8m2_u32("[D8-M2] mdss=", mdss);
+	xzs_d8m2_line("APPLY\n");
+	xzs_d8m2_line("write=none\n");
+	xzs_d8m2_finish("PASS");
+}
+
+static void
+xzs_d8m2_mmagic_on(void)
+{
+	uint32_t old;
+	uint32_t hw;
+	uint32_t wrote;
+	uint32_t readback;
+
+	xzs_d8m2_line("ACTION=PWR-MMAGIC-001\n");
+	xzs_d8m2_line("PRE\n");
+	old = xzs_mmcc_read32(XZS_MMCC_MMAGIC_MDSS_GDSC);
+	hw = xzs_mmcc_read32(XZS_MMCC_MMAGIC_HW_CTRL);
+	xzs_d8m2_u32("[D8-M2] old=", old);
+	xzs_d8m2_u32("[D8-M2] hw_old=", hw);
+	xzs_d8m2_line("APPLY\n");
+	if (xzs_gdsc_already_on(old)) {
+		xzs_d8m2_line("write=none\n");
+		xzs_d8m2_u32("[D8-M2] new=", old);
+		xzs_d8m2_finish("ALREADY_ON");
+		return;
+	}
+	/*
+	 * Linux gdsc_enable for mmagic_mdss: clear SW_COLLAPSE, udelay(1)
+	 * because gds_hw_ctrl is set, poll PWR_ON on 0x2480, udelay(1),
+	 * then set HW_CONTROL. No resets, clamps, or cxc retain bits.
+	 */
+	wrote = xzs_mmcc_rmw(XZS_MMCC_MMAGIC_MDSS_GDSC, XZS_GDSC_SW_COLLAPSE, 0);
+	xzs_d8m2_u32("[D8-M2] wrote=", wrote);
+	delay(1);
+	if (!xzs_poll_bit31(XZS_MMCC_MMAGIC_HW_CTRL, 1, &readback)) {
+		xzs_d8m2_u32("[D8-M2] readback=", readback);
+		xzs_d8m2_finish("TIMEOUT");
+		return;
+	}
+	delay(1);
+	wrote = xzs_mmcc_rmw(XZS_MMCC_MMAGIC_MDSS_GDSC, XZS_GDSC_HW_CONTROL, XZS_GDSC_HW_CONTROL);
+	delay(1);
+	readback = xzs_mmcc_read32(XZS_MMCC_MMAGIC_HW_CTRL);
+	xzs_d8m2_u32("[D8-M2] wrote=", wrote);
+	xzs_d8m2_u32("[D8-M2] new=", xzs_mmcc_read32(XZS_MMCC_MMAGIC_MDSS_GDSC));
+	xzs_d8m2_u32("[D8-M2] readback=", readback);
+	if ((readback & XZS_GDSC_PWR_ON) == 0) {
+		xzs_d8m2_finish("FAIL");
+		return;
+	}
+	xzs_d8m2_finish("PASS");
+}
+
+static void
+xzs_d8m2_mdss_on(void)
+{
+	uint32_t parent;
+	uint32_t old;
+	uint32_t wrote;
+	uint32_t readback;
+	uint32_t axi;
+	uint32_t mdp;
+
+	xzs_d8m2_line("ACTION=PWR-MDSS-001\n");
+	xzs_d8m2_line("PRE\n");
+	parent = xzs_mmcc_read32(XZS_MMCC_MMAGIC_MDSS_GDSC);
+	old = xzs_mmcc_read32(XZS_MMCC_MDSS_GDSC);
+	xzs_d8m2_u32("[D8-M2] parent=", parent);
+	xzs_d8m2_u32("[D8-M2] old=", old);
+	xzs_d8m2_line("APPLY\n");
+	if (!xzs_gdsc_already_on(parent)) {
+		xzs_d8m2_line("write=none\n");
+		xzs_d8m2_finish("PARENT_OFF");
+		return;
+	}
+	if (xzs_gdsc_already_on(old)) {
+		xzs_d8m2_line("write=none\n");
+		xzs_d8m2_u32("[D8-M2] new=", old);
+		xzs_d8m2_finish("ALREADY_ON");
+		return;
+	}
+	/*
+	 * Linux gdsc_enable for mdss: no SW_RESET, no CLAMP_IO, no HW_CTRL.
+	 * Clear SW_COLLAPSE and poll PWR_ON on the gdscr. pwrsts includes
+	 * OFF, so then set RETAIN_MEM|RETAIN_PERIPH on cxcs 0x2310 and
+	 * 0x231c. Those bits are not the branch enable. udelay(1) after.
+	 */
+	wrote = xzs_mmcc_rmw(XZS_MMCC_MDSS_GDSC, XZS_GDSC_SW_COLLAPSE, 0);
+	xzs_d8m2_u32("[D8-M2] wrote=", wrote);
+	if (!xzs_poll_bit31(XZS_MMCC_MDSS_GDSC, 1, &readback)) {
+		xzs_d8m2_u32("[D8-M2] readback=", readback);
+		xzs_d8m2_finish("TIMEOUT");
+		return;
+	}
+	(void)xzs_mmcc_rmw(XZS_MMCC_MDSS_AXI, XZS_CBCR_RETAIN, XZS_CBCR_RETAIN);
+	(void)xzs_mmcc_rmw(XZS_MMCC_MDSS_MDP, XZS_CBCR_RETAIN, XZS_CBCR_RETAIN);
+	delay(1);
+	axi = xzs_mmcc_read32(XZS_MMCC_MDSS_AXI);
+	mdp = xzs_mmcc_read32(XZS_MMCC_MDSS_MDP);
+	readback = xzs_mmcc_read32(XZS_MMCC_MDSS_GDSC);
+	xzs_d8m2_u32("[D8-M2] retain_axi=", axi);
+	xzs_d8m2_u32("[D8-M2] retain_mdp=", mdp);
+	xzs_d8m2_u32("[D8-M2] new=", readback);
+	xzs_d8m2_u32("[D8-M2] readback=", readback);
+	if (!xzs_gdsc_already_on(readback)) {
+		xzs_d8m2_finish("FAIL");
+		return;
+	}
+	xzs_d8m2_finish("PASS");
+}
+
+static void
+xzs_d8m2_branch_on(const char *action, uint32_t offset)
+{
+	uint32_t domain;
+	uint32_t old;
+	uint32_t wrote;
+	uint32_t readback;
+
+	xzs_d8m2_line("ACTION=");
+	xzs_diag_emit(action);
+	xzs_diag_emit("\n");
+	xzs_d8m2_line("PRE\n");
+	domain = xzs_mmcc_read32(XZS_MMCC_MDSS_GDSC);
+	old = xzs_mmcc_read32(offset);
+	xzs_d8m2_u32("[D8-M2] domain=", domain);
+	xzs_d8m2_u32("[D8-M2] old=", old);
+	xzs_d8m2_line("APPLY\n");
+	if (!xzs_gdsc_already_on(domain)) {
+		xzs_d8m2_line("write=none\n");
+		xzs_d8m2_finish("POWER_OFF");
+		return;
+	}
+	if (xzs_branch_running(old)) {
+		xzs_d8m2_line("write=none\n");
+		xzs_d8m2_u32("[D8-M2] new=", old);
+		xzs_d8m2_finish("ALREADY_ON");
+		return;
+	}
+	/*
+	 * clk_branch2 enable sets CBCR bit 0, then polls CBCR_CLK_OFF clear
+	 * or the NoC FSM ON state. Halt check is BRANCH_HALT. 200 x 1 us in
+	 * Linux; this poll uses the same 2000 us cap as the GDSC poll.
+	 */
+	wrote = xzs_mmcc_rmw(offset, XZS_CBCR_ENABLE, XZS_CBCR_ENABLE);
+	xzs_d8m2_u32("[D8-M2] wrote=", wrote);
+	if (!xzs_poll_bit31(offset, 0, &readback)) {
+		xzs_d8m2_u32("[D8-M2] readback=", readback);
+		xzs_d8m2_finish("TIMEOUT");
+		return;
+	}
+	xzs_d8m2_u32("[D8-M2] new=", readback);
+	xzs_d8m2_u32("[D8-M2] readback=", readback);
+	xzs_d8m2_finish("PASS");
+}
+
 void
 xzs_diag_dispatch(uint64_t which)
 {
@@ -241,6 +539,24 @@ xzs_diag_dispatch(uint64_t which)
 		break;
 	case 6:
 		xzs_memory_dump_state();
+		break;
+	case 7:
+		xzs_d8m2_power_status();
+		break;
+	case 8:
+		xzs_d8m2_mmagic_on();
+		break;
+	case 9:
+		xzs_d8m2_mdss_on();
+		break;
+	case 10:
+		xzs_d8m2_branch_on("CLK-AHB-001", XZS_MMCC_MDSS_AHB);
+		break;
+	case 11:
+		xzs_d8m2_branch_on("CLK-AXI-001", XZS_MMCC_MDSS_AXI);
+		break;
+	case 12:
+		xzs_d8m2_branch_on("CLK-MDP-001", XZS_MMCC_MDSS_MDP);
 		break;
 	default:
 		xzs_diag_emit("[XZS-D8M1] unknown diag\n");
