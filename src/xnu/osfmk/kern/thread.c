@@ -583,8 +583,10 @@ thread_terminate_self(void)
 	/*
 	 * If we are the last thread to terminate and the task is
 	 * associated with a BSD process, perform BSD process exit.
+	 * If the task transitioned via exec, the BSD process transferred
+	 * to the new task and did not exit.
 	 */
-	if (threadcnt == 0 && bsd_info != NULL) {
+	if (threadcnt == 0 && bsd_info != NULL && !task_did_exec(task)) {
 		mach_exception_data_type_t subcode = 0;
 		if (kdebug_enable) {
 			/* since we're the last thread in this process, trace out the command name too */

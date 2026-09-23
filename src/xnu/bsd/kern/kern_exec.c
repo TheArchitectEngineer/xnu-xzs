@@ -1484,9 +1484,8 @@ grade:
 	 * return an error code to the parent process.
 	 */
 
-	/*
-	 * Actually load the image file we previously decided to load.
-	 */
+	extern void xzs_bringup_console_write(const void *buf, int len);
+	xzs_bringup_console_write("[XZS-MACH] MACH-01 PRE_LOAD\n", 28);
 	lret = load_machfile(imgp, mach_header, thread, &map, &load_result);
 	if (lret != LOAD_SUCCESS) {
 #if CONFIG_XZS_BRINGUP
@@ -2437,7 +2436,9 @@ exec_activate_image(struct image_params *imgp)
 	    UIO_SYSSPACE, CAST_USER_ADDR_T(excpath), imgp->ip_vfs_context);
 
 again:
+	xzs_bringup_console_write("[XZS-ACT] ACT-01 PRE_NAMEI\n", 27);
 	error = namei(ndp);
+	xzs_bringup_console_write("[XZS-ACT] ACT-02 POST_NAMEI\n", 28);
 	if (error) {
 		if (error == ERESTART) {
 			error = EINTR;
@@ -2477,10 +2478,12 @@ again:
 		*imgp->ip_origvattr = *imgp->ip_vattr;
 	}
 
+	xzs_bringup_console_write("[XZS-ACT] ACT-03 PRE_VNRDWR\n", 28);
 	error = vn_rdwr(UIO_READ, imgp->ip_vp, imgp->ip_vdata, PAGE_SIZE, 0,
 	    UIO_SYSSPACE, IO_NODELOCKED,
 	    vfs_context_ucred(imgp->ip_vfs_context),
 	    &resid, vfs_context_proc(imgp->ip_vfs_context));
+	xzs_bringup_console_write("[XZS-ACT] ACT-04 POST_VNRDWR\n", 29);
 	if (error) {
 		goto bad;
 	}
@@ -2497,6 +2500,7 @@ encapsulated_binary:
 	}
 	error = -1;
 	for (i = 0; error == -1 && execsw[i].ex_imgact != NULL; i++) {
+		xzs_bringup_console_write("[XZS-ACT] ACT-05 PRE_IMGACT\n", 28);
 		error = (*execsw[i].ex_imgact)(imgp);
 
 		switch (error) {
@@ -5289,6 +5293,10 @@ proc_exec_switch_task(proc_t old_proc, proc_t new_proc, task_t old_task, task_t 
 		os_atomic_andnot(&new_proc->p_refcount, P_REF_SHADOW, relaxed);
 		os_atomic_or(&old_proc->p_refcount, P_REF_SHADOW, relaxed);
 
+		/* Disassociate old_proc from old_task to prevent stale teardown collisions */
+		set_bsdtask_info(old_task, NULL);
+		proc_set_task(old_proc, TASK_NULL);
+
 		/* Change init proc if launchd exec */
 		if (old_proc == initproc) {
 			/* Take the ref on new proc after proc_refwake_did_exec */
@@ -5405,6 +5413,7 @@ __mac_execve(proc_t p, struct __mac_execve_args *uap, int32_t *retval __unused)
 {
 	extern void xzs_bringup_console_write(const void *buf, int len);
 	xzs_bringup_console_write("[XZS-EXEC] __mac_execve ENTER\n", 30);
+	xzs_bringup_console_write("[XZS-EXEC] EXEC-01 PRE_ALLOC\n", 29);
 	struct image_params *imgp = NULL;
 	struct vnode_attr *vap = NULL;
 	struct vnode_attr *origvap = NULL;
@@ -5431,6 +5440,7 @@ __mac_execve(proc_t p, struct __mac_execve_args *uap, int32_t *retval __unused)
 		error = ENOMEM;
 		goto exit_with_error;
 	}
+	xzs_bringup_console_write("[XZS-EXEC] EXEC-02 POST_ALLOC\n", 30);
 	imgp = &__execve_data->imgp;
 	vap = &__execve_data->va;
 	origvap = &__execve_data->origva;
@@ -5471,7 +5481,9 @@ __mac_execve(proc_t p, struct __mac_execve_args *uap, int32_t *retval __unused)
 		 * the old proc in pid hash and other lists that make
 		 * the proc visible to the system.
 		 */
+		xzs_bringup_console_write("[XZS-EXEC] EXEC-03 PRE_CLONEPROC\n", 33);
 		imgp->ip_new_thread = cloneproc(old_task, NULL, p, CLONEPROC_EXEC);
+		xzs_bringup_console_write("[XZS-EXEC] EXEC-04 POST_CLONEPROC\n", 34);
 		/* task and thread ref returned by cloneproc */
 		if (imgp->ip_new_thread == NULL) {
 			(void)chgproccnt(kauth_getruid(), -1);
@@ -5498,7 +5510,9 @@ __mac_execve(proc_t p, struct __mac_execve_args *uap, int32_t *retval __unused)
 	 * Warning: If activation failed after point of no return, it returns error
 	 * as 0 and pretends the call succeeded.
 	 */
+	xzs_bringup_console_write("[XZS-EXEC] EXEC-05 PRE_ACTIVATE\n", 32);
 	error = exec_activate_image(imgp);
+	xzs_bringup_console_write("[XZS-EXEC] EXEC-06 POST_ACTIVATE\n", 33);
 	/* thread and task ref returned for vfexec case */
 
 	if (imgp->ip_new_thread != NULL) {
@@ -5736,6 +5750,17 @@ exit_with_error:
 
 	if (inherit != NULL) {
 		ipc_importance_release(inherit);
+	}
+
+	if (task_did_exec(old_task)) {
+		/*
+		 * Exec succeeded and switched to new task/thread.
+		 * The old thread has no address space or userspace to return to.
+		 * Terminate the old thread immediately to prevent any race with the
+		 * new process lifecycle.
+		 */
+		thread_terminate_self();
+		/* NOTREACHED */
 	}
 
 	return error;

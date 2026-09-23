@@ -65,6 +65,8 @@ def main():
     mode = "run_a"
     if "--mode=run_b" in sys.argv or "--run_b" in sys.argv:
         mode = "run_b"
+    elif "--mode=run_2" in sys.argv or "--run_2" in sys.argv:
+        mode = "run_2"
     elif "--mode=run_a" in sys.argv or "--run_a" in sys.argv:
         mode = "run_a"
 
@@ -122,7 +124,7 @@ def main():
     run_step("STEP 1: SHELL HEALTH PWD", "pwd\n", 1.0)
 
     # Step 2: Baseline UBC diagnostic for /bin/hello
-    if mode == "run_a":
+    if mode in ("run_a", "run_2"):
         # Pure UBC check, exactly reproducing T2N-3
         run_step("STEP 2: BASELINE UBC /bin/hello (CONTROL - NO PAGECHECK)", "xzsfs ubc /bin/hello\n", 2.0)
     else:

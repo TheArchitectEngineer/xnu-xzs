@@ -1195,8 +1195,8 @@ thread_apc_ast(thread_t thread)
 
 	if (task != TASK_NULL) {
 		cpl = snprintf(cpb, sizeof(cpb),
-		    "[XZS-T4F] APC-30 TASK_STATE task=%p act=%d thcnt=%d map=%p\n",
-		    (void *)task, (int)task->active, (int)task->thread_count, (void *)task->map);
+		    "[XZS-T4F] APC-30 TASK_STATE task=%p act=%d thcnt=%d\n",
+		    (void *)task, (int)task->active, (int)task->thread_count);
 		xzs_bringup_console_write(cpb, cpl);
 	}
 
