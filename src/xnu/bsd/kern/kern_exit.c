@@ -2655,8 +2655,6 @@ proc_exit(proc_t p)
 
 		psignal(pp, SIGCHLD);
 
-		/* and now wakeup the parent */
-		proc_list_lock();
 #if CONFIG_XZS_BRINGUP
 		{
 			extern void xzs_bringup_console_write(const void *buf, int len);
@@ -2666,6 +2664,8 @@ proc_exit(proc_t p)
 			xzs_bringup_console_write(wmsg, wlen);
 		}
 #endif
+		/* and now wakeup the parent */
+		proc_list_lock();
 		wakeup((caddr_t)pp);
 		proc_list_unlock();
 	} else {

@@ -467,13 +467,9 @@ thread_terminate_self(void)
 
 #if CONFIG_XZS_BRINGUP
 	extern void xzs_bringup_console_write(const void *buf, int len);
-	extern struct proc *current_proc(void);
-	extern int proc_pid(struct proc *);
-	struct proc *cp = current_proc();
-	int cpid = cp ? proc_pid(cp) : -1;
 	char thmsg[128];
-	int thlen = snprintf(thmsg, sizeof(thmsg), "[XZS-T4R] CP=T4R-50 ROLE=%s PID=%d THREAD_TERMINATE_SELF_ENTER thread=%p task=%p\n",
-	    cpid == 2 ? "CHILD" : (cpid == 1 ? "PARENT" : "OTHER"), cpid, (void *)thread, (void *)task);
+	int thlen = snprintf(thmsg, sizeof(thmsg), "[XZS-T4R] CP=T4R-50 THREAD_TERMINATE_SELF_ENTER thread=%p task=%p\n",
+	    (void *)thread, (void *)task);
 	xzs_bringup_console_write(thmsg, thlen);
 #endif
 
@@ -762,13 +758,9 @@ thread_terminate_self(void)
 #if CONFIG_XZS_BRINGUP
 	{
 		extern void xzs_bringup_console_write(const void *buf, int len);
-		extern struct proc *current_proc(void);
-		extern int proc_pid(struct proc *);
-		struct proc *b_cp = current_proc();
-		int b_cpid = b_cp ? proc_pid(b_cp) : -1;
-		char bmsg[128];
-		int blen = snprintf(bmsg, sizeof(bmsg), "[XZS-T4R] CP=T4R-60 ROLE=%s PID=%d THREAD_TERMINATE_SELF_PRE_BLOCK thread=%p\n",
-		    b_cpid == 2 ? "CHILD" : (b_cpid == 1 ? "PARENT" : "OTHER"), b_cpid, (void *)thread);
+		char bmsg[96];
+		int blen = snprintf(bmsg, sizeof(bmsg), "[XZS-T4R] CP=T4R-60 THREAD_TERMINATE_SELF_PRE_BLOCK thread=%p\n",
+		    (void *)thread);
 		xzs_bringup_console_write(bmsg, blen);
 	}
 #endif

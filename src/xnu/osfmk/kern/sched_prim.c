@@ -3192,24 +3192,6 @@ need_stack:
 
 	assert(continuation == NULL && self->continuation == NULL);
 
-#if CONFIG_XZS_BRINGUP
-	{
-		extern void xzs_bringup_console_write(const void *buf, int len);
-		extern struct proc *current_proc(void);
-		extern int proc_pid(struct proc *);
-		struct proc *sp = current_proc();
-		if (sp && proc_pid(sp) == 1) {
-			static bool s_t4r_a0_logged = false;
-			if (!s_t4r_a0_logged) {
-				s_t4r_a0_logged = true;
-				char smsg[96];
-				int slen = snprintf(smsg, sizeof(smsg), "[XZS-T4R] CP=T4R-A0 ROLE=PARENT PID=1 PARENT_SCHEDULED thread=%p\n", (void *)self);
-				xzs_bringup_console_write(smsg, slen);
-			}
-		}
-	}
-#endif
-
 	DTRACE_SCHED(on__cpu);
 
 #if KPERF

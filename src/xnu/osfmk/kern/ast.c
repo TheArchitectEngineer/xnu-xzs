@@ -259,13 +259,8 @@ ast_taken_user(void)
 #if CONFIG_XZS_BRINGUP
 		{
 			extern void xzs_bringup_console_write(const void *buf, int len);
-			extern struct proc *current_proc(void);
-			extern int proc_pid(struct proc *);
-			struct proc *cp = current_proc();
-			int cpid = cp ? proc_pid(cp) : -1;
-			char amsg2[112];
-			int alen2 = snprintf(amsg2, sizeof(amsg2), "[XZS-T4R] CP=T4R-40 ROLE=%s PID=%d AST_APC_TAKEN thread=%p\n",
-			    cpid == 2 ? "CHILD" : (cpid == 1 ? "PARENT" : "OTHER"), cpid, (void *)thread);
+			char amsg2[96];
+			int alen2 = snprintf(amsg2, sizeof(amsg2), "[XZS-T4R] CP=T4R-40 AST_APC_TAKEN thread=%p\n", (void *)thread);
 			xzs_bringup_console_write(amsg2, alen2);
 		}
 #endif
