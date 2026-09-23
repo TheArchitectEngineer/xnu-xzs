@@ -2904,6 +2904,15 @@ wait1continue(int result)
 	struct wait4_nocancel_args *uap;
 	int *retval;
 
+#if CONFIG_XZS_BRINGUP
+	{
+		extern void xzs_bringup_console_write(const void *buf, int len);
+		char cmsg[96];
+		int clen = snprintf(cmsg, sizeof(cmsg), "[XZS-T4R] CP=WAIT1CONT_ENTER result=%d\n", result);
+		xzs_bringup_console_write(cmsg, clen);
+	}
+#endif
+
 	if (result) {
 		return result;
 	}
@@ -2915,7 +2924,18 @@ wait1continue(int result)
 	wait4_data = &uth->uu_save.uus_wait4_data;
 	uap = wait4_data->args;
 	retval = wait4_data->retval;
-	return wait4_nocancel(p, uap, retval);
+	int ret = wait4_nocancel(p, uap, retval);
+
+#if CONFIG_XZS_BRINGUP
+	{
+		extern void xzs_bringup_console_write(const void *buf, int len);
+		char cmsg[96];
+		int clen = snprintf(cmsg, sizeof(cmsg), "[XZS-T4R] CP=WAIT1CONT_RETURN ret=%d\n", ret);
+		xzs_bringup_console_write(cmsg, clen);
+	}
+#endif
+
+	return ret;
 }
 
 int
@@ -3086,9 +3106,9 @@ loop1:
 #if CONFIG_XZS_BRINGUP
 			{
 				extern void xzs_bringup_console_write(const void *buf, int len);
-				char wretmsg[96];
-				int wretlen = snprintf(wretmsg, sizeof(wretmsg), "[XZS-T4R] CP=T4R-90 ROLE=PARENT PID=%d PARENT_WAIT4_RETURN child_pid=%d\n",
-				    proc_pid(q), retval[0]);
+				char wretmsg[128];
+				int wretlen = snprintf(wretmsg, sizeof(wretmsg), "[XZS-T4R] CP=T4R-90 ROLE=PARENT PID=%d PARENT_WAIT4_RETURN child_pid=%d thread=%p\n",
+				    proc_pid(q), retval[0], (void *)current_thread());
 				xzs_bringup_console_write(wretmsg, wretlen);
 			}
 #endif

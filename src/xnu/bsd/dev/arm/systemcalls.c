@@ -361,6 +361,21 @@ unix_syscall_return(int error)
 		    error, uthread->uu_rval[0], uthread->uu_rval[1], proc_getpid(proc));
 	}
 
+#if CONFIG_XZS_BRINGUP
+	{
+		extern void xzs_bringup_console_write(const void *buf, int len);
+		arm_saved_state64_t *s64 = (regs && is_saved_state64(regs)) ? saved_state64(regs) : NULL;
+		char retm[128];
+		int retl = snprintf(retm, sizeof(retm),
+		    "[XZS-T4R] CP=UNIX_SC_RET pid=%d code=%d err=%d r0=0x%llx pc=0x%llx sp=0x%llx\n",
+		    proc ? proc_pid(proc) : -1, (int)code, error,
+		    (unsigned long long)uthread->uu_rval[0],
+		    s64 ? (unsigned long long)s64->pc : 0ULL,
+		    s64 ? (unsigned long long)s64->sp : 0ULL);
+		xzs_bringup_console_write(retm, retl);
+	}
+#endif
+
 	thread_exception_return();
 	/* NOTREACHED */
 }

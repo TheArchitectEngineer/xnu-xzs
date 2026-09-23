@@ -46,6 +46,8 @@ def send_cmd(dev, cmd_str, wait_sec=5.0, wait_for_prompt=True):
         chunk, kind = xzs_console.bulk_read(dev, timeout_ms=200)
         if chunk:
             buf += chunk
+            sys.stdout.write(chunk.decode("utf-8", errors="replace"))
+            sys.stdout.flush()
             quiet = 0
             if wait_for_prompt and b"xzs# " in buf[len(payload):]:
                 # Found shell prompt after command echo, command is complete
@@ -56,7 +58,6 @@ def send_cmd(dev, cmd_str, wait_sec=5.0, wait_for_prompt=True):
                 break
             time.sleep(0.05)
     resp_text = buf.decode("utf-8", errors="replace")
-    print(resp_text, end="", flush=True)
     return resp_text
 
 
