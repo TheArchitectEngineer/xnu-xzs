@@ -1,6 +1,26 @@
 # Sony Xperia XZs (MSM8996) — Port Status
 
-This summary provides an executive overview of the project's technical status. It can be read in under 3 minutes.
+Current milestone is D8-M2, tag `xzs-d8-m2-complete` (`545398f30d8fda592d4ca67ee867a016c2f37092`). Display power domains and core MDSS clocks (AHB, AXI, MDP) are hardware-verified.
+
+```text
+D8-M1 = PASS
+D8-M2 = PASS
+D8-M3 = NOT STARTED
+```
+
+D8-M2 hardware verification on candidate `545398f`:
+
+```text
+MMAGIC_MDSS_GDSC    ON     0xa0222000
+MDSS_GDSC           ON     0xa0222000
+critical MMAGIC     ON     mmss_mmagic_ahb, mmss_mmagic_cfg_ahb, mmagic_mdss_noc_cfg_ahb, mmagic_mdss_axi
+mdss_ahb            ON     0x20008001 (enable=1, halt=0)
+mdss_axi            ON     0x00006221 (enable=1, halt=0)
+mdss_mdp            ON     0x00006221 (enable=1, halt=0)
+DSI/PHY/PLL         NOT STARTED (out of scope for D8-M2)
+```
+
+Read [`README.md`](../README.md), [`docs/XZS_DISPLAY_BRINGUP.md`](XZS_DISPLAY_BRINGUP.md), and [`docs/XZS_BLOCKERS_AND_DEFERRED.md`](XZS_BLOCKERS_AND_DEFERRED.md). The sections below keep the older sealed-phase record.
 
 ---
 

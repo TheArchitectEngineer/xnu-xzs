@@ -96,14 +96,15 @@ Status values: `ACTIVE_BLOCKER`, `DEFERRED`, `BYPASSED`, `RESOLVED`, `OBSOLETE`.
 | ID | ACTIVE-D8-001 |
 | AREA | display clocks |
 | TITLE | `mdss_ahb` branch remains HALT after enable |
-| STATUS | ACTIVE_BLOCKER |
+| STATUS | RESOLVED |
 | FIRST_SEEN | D8-M2 run `d8m2-0b0e429` |
 | LAST_KNOWN_COMMIT | `0b0e4293b44285e866b1de26038548adb62330e2` |
-| EVIDENCE | On `0b0e429`: before `0x80008000`, write `0x80008001`, after `0x80008001`. Enable bit accepted. Halt bit remains set. Poll timeout 2000 µs. Read-only `94a2c37`: AHB CMD `0x00000000` (`root_off=0`), CFG `0x00000513` (GPLL0), GCC NOC `0x20008001` running. Read-only `a5f47b5`, log `artifacts/hw/d8m2-a5f47b5/host.txt`: MDSS_BCR, MMAGIC_MDSS_BCR, MMAGICAHB_BCR, and MMAGIC_CFG_BCR all `0x00000000` (assert-control bit 0 clear). GPLL0 mode `0xc0118000` with `PLL_LOCK_DET` set. Vote `0x00000011`, enable bit set. AHB root still `root_off=0`. `mdss_ahb` on that fresh boot is `0x80008000` (enable clear). |
-| IMPACT | Blocks AXI and MDP clock bring-up, completion of D8-M2, and D8-M3. |
-| CURRENT_BYPASS | Stop after the timeout. Do not repeat the same branch write. Do not enable AXI or MDP until AHB is running. |
-| WHY_DEFERRED | Not deferred. This is the active D8-M2 blocker. |
-| RESUME_CONDITION | A new candidate must inspect the AHB root and its parents before another branch write. |
-| NEXT_INVESTIGATION | HYPOTHESIS, not a cause: Linux prepares and enables the four `CLK_IS_CRITICAL` MMAGIC branches at registration. On `059d58a` those four branches were enable 0 and halt 1, while `ahb_clk_src` and `axi_clk_src` had `root_off=0` and `gcc_mmss_noc_cfg_ahb` was running. They are not the parent of `mdss_ahb`. Separate enable commands exist and have not been booted. |
+| EVIDENCE | On `0b0e429`: before `0x80008000`, write `0x80008001`, after `0x80008001`. Enable bit accepted. Halt bit remains set. Poll timeout 2000 µs. Read-only `94a2c37`: AHB CMD `0x00000000` (`root_off=0`), CFG `0x00000513` (GPLL0), GCC NOC `0x20008001` running. Read-only `a5f47b5`, log `artifacts/hw/d8m2-a5f47b5/host.txt`: MDSS_BCR, MMAGIC_MDSS_BCR, MMAGICAHB_BCR, and MMAGIC_CFG_BCR all `0x00000000` (assert-control bit 0 clear). GPLL0 mode `0xc0118000` with `PLL_LOCK_DET` set. Vote `0x00000011`, enable bit set. AHB root still `root_off=0`. `mdss_ahb` on that fresh boot is `0x80008000` (enable clear). Read-only `059d58a`: 4 Linux critical MMAGIC branches were halted (`0x80000000` / `0x80008000`, `enable=0, halt=1`). Hardware test on candidate `545398f` (`artifacts/hw/d8m2-545398f/host.txt`) sequentially enabled all 4 critical MMAGIC branches, powered MDSS GDSC (`0x00222001` -> `0xa0222000`), and retried `mdss_ahb` enable. `mdss_ahb` transitioned from `0x80008000` -> `0x20008001` (`enable=1, halt=0`), clearing the halt condition immediately. MDSS AXI and MDP branches subsequently enabled with `enable=1, halt=0` (`0x00006221`). |
+| IMPACT | Resolved. Display clocks running without wedging or panic. |
+| CURRENT_BYPASS | None. Full hardware resolution achieved. |
+| WHY_DEFERRED | N/A (Resolved). |
+| RESUME_CONDITION | N/A (Resolved). |
+| ROOT_CAUSE | Missing Linux critical MMAGIC interconnect/bridge clock initialization (`mmss_mmagic_ahb`, `mmss_mmagic_cfg_ahb`, `mmagic_mdss_noc_cfg_ahb`, `mmagic_mdss_axi`). In Linux, these four branches are marked `CLK_IS_CRITICAL` and enabled at MMCC registration. Without them running, the MMAGIC interconnect/bridge between GCC/MMCC and MDSS remains gated, preventing `mdss_ahb` branch logic from clearing its halt bit. |
+| FIX_COMMIT | `545398f30d8fda592d4ca67ee867a016c2f37092` |
+| HARDWARE_PROOF | Candidate `545398f` booted via `fastboot boot artifacts/hw/d8m2-545398f/xzs-xnu-boot.img` (SHA256: `5a5185fe9b53da69895cc2a6c1b68e96b0f46409cac8e4ca9fb044f6d0712704`). Host transcript `artifacts/hw/d8m2-545398f/host.txt`: 1. `mmss_mmagic_ahb` enabled: `0x80000000` -> `0x00000001` (enable=1, halt=0). 2. `mmss_mmagic_cfg_ahb` enabled: `0x80008000` -> `0x20008001` (enable=1, halt=0). 3. `mmagic_mdss_noc_cfg_ahb` enabled: `0x80000000` -> `0x00000001` (enable=1, halt=0). 4. `mmagic_mdss_axi` enabled: `0x80000000` -> `0x00000001` (enable=1, halt=0). 5. MDSS GDSC powered on: `0x00222001` -> `0xa0222000`. 6. `mdss_ahb` retry: `old=0x80008000, wrote=0x80008001, new=0x20008001, readback=0x20008001` (enable=1, halt=0). 7. `mdss_axi` enabled: `0x80006220` -> `0x00006221` (enable=1, halt=0). 8. `mdss_mdp` enabled: `0x80006220` -> `0x00006221` (enable=1, halt=0). Final `pwd` responsive (`/`), zero panics, zero resets. |
 
-HYPOTHESIS, not established: an upstream clock was stopped. The `94a2c37` read does not support "AHB RCG root is off" or "GCC MMSS NOC config clock is off" on that boot. The earlier halt-with-enable result is still unexplained.

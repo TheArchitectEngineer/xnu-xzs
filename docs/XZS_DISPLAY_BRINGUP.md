@@ -216,3 +216,40 @@ gcc_mmss_noc_cfg_ahb    0x20008001
 ```
 
 That differs from the Linux registration baseline. It does not by itself prove the difference causes the `mdss_ahb` halt. The four branch enables are separate commands and each one refuses to write if its own parent root is off. They do not require MDSS_GDSC.
+
+## Hardware proof on candidate 545398f (D8-M2 PASS)
+
+Hardware execution session `artifacts/hw/d8m2-545398f/host.txt` on candidate `545398f` (tag `xzs-d8-m2-complete`, SHA256: `5a5185fe9b53da69895cc2a6c1b68e96b0f46409cac8e4ca9fb044f6d0712704`).
+
+1. Baseline capture:
+   - `MMAGIC_MDSS_GDSC` = `0xa0222000` (ON)
+   - `MDSS_GDSC` = `0x00222001` (collapsed)
+   - All 4 critical MMAGIC branches: `enable=0, halt=1`
+   - Both roots running: `ahb_root_off=0` (GPLL0), `axi_root_off=0` (XO)
+   - GCC MMSS NOC: `0x20008001` (running)
+
+2. Critical MMAGIC clock enables:
+   - `mmss_mmagic_ahb` (MMCC 0x5024): `old=0x80000000, wrote=0x80000001, new=0x00000001` -> PASS (`enable=1, halt=0`)
+   - `mmss_mmagic_cfg_ahb` (MMCC 0x5054): `old=0x80008000, wrote=0x80008001, new=0x20008001` -> PASS (`enable=1, halt=0`)
+   - `mmagic_mdss_noc_cfg_ahb` (MMCC 0x2478): `old=0x80000000, wrote=0x80000001, new=0x00000001` -> PASS (`enable=1, halt=0`)
+   - `mmagic_mdss_axi` (MMCC 0x2474): `old=0x80000000, wrote=0x80000001, new=0x00000001` -> PASS (`enable=1, halt=0`)
+
+3. MDSS GDSC power on:
+   - `MDSS_GDSC` (MMCC 0x2304): `old=0x00222001, wrote=0x00222000, new=0xa0222000` -> PASS (`PWR_ON=1, SW_COLLAPSE=0`)
+
+4. Decisive retry: `mdss_ahb`:
+   - `mdss_ahb` (MMCC 0x2308): `old=0x80008000, wrote=0x80008001, new=0x20008001, readback=0x20008001` -> **PASS** (`enable=1, halt=0, FSM_ON=1`)
+   - Halt cleared immediately within 2000 µs.
+
+5. MDSS AXI & MDP clock bring-up:
+   - `mdss_axi` (MMCC 0x2310): `old=0x80006220, wrote=0x80006221, new=0x00006221, readback=0x00006221` -> PASS (`enable=1, halt=0`)
+   - `mdss_mdp` (MMCC 0x231c): `old=0x80006220, wrote=0x80006221, new=0x00006221, readback=0x00006221` -> PASS (`enable=1, halt=0`)
+
+6. Shell health:
+   - `pwd` returned `/`, shell responsive, zero panics, zero resets.
+
+Conclusion:
+D8-M2 acceptance criteria fully satisfied on physical silicon.
+Tag `xzs-d8-m2-complete` sealed at `545398f30d8fda592d4ca67ee867a016c2f37092`.
+D8-M3 is NOT STARTED.
+

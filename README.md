@@ -72,21 +72,32 @@ EL0/PID1                 PASS
 interactive shell        PASS
 USB transport            PASS
 display audit            PASS       D8-M1
-display power bring-up   PARTIAL    D8-M2
+display power bring-up   PASS       D8-M2
+display controller / DSI NOT STARTED D8-M3
 ```
 
-Tags that name durable milestones: `xzs-d7t1-complete`, `xzs-d7t2-deferred`, `xzs-d7t2-lite-complete`, `xzs-d8-m1-complete`. `xzs-d8-m2-complete` is added only after D8-M2 passes on hardware.
+Tags that name durable milestones: `xzs-d7t1-complete`, `xzs-d7t2-deferred`, `xzs-d7t2-lite-complete`, `xzs-d8-m1-complete`, `xzs-d8-m2-complete`.
 
 ## Display
 
 ```text
 D8-M1 = PASS
-D8-M2 = PARTIAL
+D8-M2 = PASS
+D8-M3 = NOT STARTED
 ```
 
 D8-M1, tag `xzs-d8-m1-complete` at `861032cb7b137096edeb1aa5caa04aef6737533a`, read the clock controller only. MMAGIC_MDSS_GDSC was `0xa0222000` (on). MDSS_GDSC was `0x00222001` (collapsed).
 
-D8-M2 is not on `main`. On branch `xzs-d8-m2-power` the phone proved MMAGIC stayed on and MDSS reached `0xa0222000`. The `mdss_ahb` enable bit was accepted (`0x80008001`) and the halt bit stayed set. AXI and MDP clock enables were not attempted. DSI, PHY, PLL, the panel, and the backlight are untouched.
+D8-M2, tag `xzs-d8-m2-complete` at `545398f30d8fda592d4ca67ee867a016c2f37092`, completed display power domain and clock bring-up on physical silicon:
+- MMAGIC GDSC: `0xa0222000` (ON)
+- MDSS GDSC: `0xa0222000` (ON)
+- Linux critical MMAGIC interconnect/bridge branches: `mmss_mmagic_ahb`, `mmss_mmagic_cfg_ahb`, `mmagic_mdss_noc_cfg_ahb`, `mmagic_mdss_axi` enabled (`enable=1, halt=0`)
+- `mdss_ahb`: enabled and running (`enable=1, halt=0`, readback `0x20008001`)
+- `mdss_axi`: enabled and running (`enable=1, halt=0`, readback `0x00006221`)
+- `mdss_mdp`: enabled and running (`enable=1, halt=0`, readback `0x00006221`)
+- USB console shell remained fully responsive; zero panics, zero resets.
+
+D8-M3 (DSI host, PHY, PLL, panel, backlight, framebuffer scanout) is NOT STARTED.
 
 Details: [`docs/XZS_DISPLAY_BRINGUP.md`](docs/XZS_DISPLAY_BRINGUP.md). Bypassed work: [`docs/XZS_BLOCKERS_AND_DEFERRED.md`](docs/XZS_BLOCKERS_AND_DEFERRED.md). Status: [`docs/XZS_PORT_STATUS.md`](docs/XZS_PORT_STATUS.md).
 
