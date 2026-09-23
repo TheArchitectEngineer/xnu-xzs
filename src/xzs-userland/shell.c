@@ -172,6 +172,9 @@ clocks_which(int argc, char **argv)
 	if (argc == 2 && seq(argv[1], "mdss-ahb-debug")) {
 		return 14;
 	}
+	if (argc == 2 && seq(argv[1], "mdss-critical-status")) {
+		return 15;
+	}
 	if (argc == 2 && seq(argv[1], "mdss-ahb-on")) {
 		return 10;
 	}

@@ -188,3 +188,17 @@ Source: Linux `mmcc-msm8996.c` reset map and `drivers/clk/qcom/reset.c`. `qcom_r
 `clocks mdss-ahb-debug` reads those BCRs, the AHB chain, GPLL0 mode at GCC `0x000000` (`PLL_LOCK_DET` is bit 31), and the GPLL0 vote at GCC `0x052000` bit 0. It writes nothing.
 
 Hardware on `a5f47b5` (`artifacts/hw/d8m2-a5f47b5/host.txt`): all four BCR reads were `0x00000000`. GPLL0 mode was `0xc0118000` with lock set, and the vote enable bit was set. No reset write was issued.
+
+## Linux critical baseline
+
+`CLK_IS_CRITICAL` is handled in `__clk_core_init`. Linux calls `clk_core_prepare` and `clk_core_enable` for that clock. Later unprepare/disable refuse to drop the last count, so the clock stays enabled. Enable also enables the parent. This is a reference fact about the clock core, not proof that a missing critical branch is why `mdss_ahb` stayed halted.
+
+| Clock | Register | Parent | Critical | Linux at MMCC registration |
+|---|---|---|---|---|
+| `mmss_mmagic_ahb` | MMCC `0x5024` | `ahb_clk_src` | yes | prepared and enabled |
+| `mmss_mmagic_cfg_ahb` | MMCC `0x5054` | `ahb_clk_src` | yes | prepared and enabled |
+| `mmagic_mdss_noc_cfg_ahb` | MMCC `0x2478` | `gcc_mmss_noc_cfg_ahb` | yes | prepared and enabled |
+| `mmagic_mdss_axi` | MMCC `0x2474` | `axi_clk_src` | yes | prepared and enabled |
+| `mdss_ahb` | MMCC `0x2308` | `ahb_clk_src` | no | left for the MDSS driver |
+
+`axi_clk_src` CMD is MMCC `0x5040` and CFG is `0x5044`. Its source map is XO=0, MMPLL0=1, MMPLL1=2, GPLL0=5, GPLL0_DIV=6. Root-off is CMD bit 31. These MMCC branches can be read before MDSS_GDSC is on. `clocks mdss-critical-status` only reads them.

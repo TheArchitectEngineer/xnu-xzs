@@ -94,6 +94,9 @@ xzs_diag_boot_args(void)
 #define XZS_MMCC_MMAGIC_MDSS_NOC 0x2478u
 #define XZS_MMCC_AHB_CMD 0x5000u
 #define XZS_MMCC_AHB_CFG 0x5004u
+#define XZS_MMCC_AXI_CMD 0x5040u
+#define XZS_MMCC_AXI_CFG 0x5044u
+#define XZS_MMCC_MMAGIC_MDSS_AXI 0x2474u
 #define XZS_MMCC_MMAGIC_HW_CTRL 0x2480u
 #define XZS_GCC_BASE 0x00300000u
 #define XZS_GCC_MMSS_NOC_CFG_AHB 0x9008u
@@ -561,6 +564,8 @@ xzs_ahb_src_name(uint32_t cfg)
 		return "MMPLL0";
 	case 5:
 		return "GPLL0";
+	case 2:
+		return "MMPLL1";
 	case 6:
 		return "GPLL0_DIV";
 	default:
@@ -664,6 +669,55 @@ xzs_d8m2_ahb_debug(void)
 	xzs_d8m2_finish("PASS");
 }
 
+static void
+xzs_d8m2_branch_line(const char *name, uint32_t value)
+{
+	xzs_d8m2_u32(name, value);
+	xzs_d8m2_line("enable=");
+	xzs_diag_emit((value & 1u) ? "1" : "0");
+	xzs_diag_emit(" halt=");
+	xzs_diag_emit((value & 0x80000000u) ? "1" : "0");
+	xzs_diag_emit(" source=mmio\n");
+}
+
+static void
+xzs_d8m2_critical_status(void)
+{
+	uint32_t ahb_cmd;
+	uint32_t ahb_cfg;
+	uint32_t axi_cmd;
+	uint32_t axi_cfg;
+
+	xzs_d8m2_line("ACTION=CLK-CRIT-STATUS-001\n");
+	xzs_d8m2_line("PRE\n");
+	xzs_d8m2_u32("[D8-M2] mmagic=", xzs_mmcc_read32(XZS_MMCC_MMAGIC_MDSS_GDSC));
+	xzs_d8m2_branch_line("[D8-M2] mmagic_ahb=", xzs_mmcc_read32(XZS_MMCC_MMAGIC_AHB));
+	xzs_d8m2_branch_line("[D8-M2] mmagic_cfg_ahb=", xzs_mmcc_read32(XZS_MMCC_CFG_AHB));
+	xzs_d8m2_branch_line("[D8-M2] mmagic_mdss_noc=", xzs_mmcc_read32(XZS_MMCC_MMAGIC_MDSS_NOC));
+	xzs_d8m2_branch_line("[D8-M2] mmagic_mdss_axi=", xzs_mmcc_read32(XZS_MMCC_MMAGIC_MDSS_AXI));
+	ahb_cmd = xzs_mmcc_read32(XZS_MMCC_AHB_CMD);
+	ahb_cfg = xzs_mmcc_read32(XZS_MMCC_AHB_CFG);
+	axi_cmd = xzs_mmcc_read32(XZS_MMCC_AXI_CMD);
+	axi_cfg = xzs_mmcc_read32(XZS_MMCC_AXI_CFG);
+	xzs_d8m2_u32("[D8-M2] ahb_cmd=", ahb_cmd);
+	xzs_d8m2_u32("[D8-M2] ahb_cfg=", ahb_cfg);
+	xzs_d8m2_line("ahb_src=");
+	xzs_diag_emit(xzs_ahb_src_name(ahb_cfg));
+	xzs_diag_emit(" source=mmio\n");
+	xzs_d8m2_bit("ahb_root_off=", (ahb_cmd & 0x80000000u) != 0);
+	xzs_d8m2_u32("[D8-M2] axi_cmd=", axi_cmd);
+	xzs_d8m2_u32("[D8-M2] axi_cfg=", axi_cfg);
+	xzs_d8m2_line("axi_src=");
+	xzs_diag_emit(xzs_ahb_src_name(axi_cfg));
+	xzs_diag_emit(" source=mmio map=XO0,MMPLL0_1,MMPLL1_2,GPLL0_5,GPLL0_DIV_6 source=reference\n");
+	xzs_d8m2_bit("axi_root_off=", (axi_cmd & 0x80000000u) != 0);
+	xzs_d8m2_u32("[D8-M2] gcc_mmss_noc=",
+	    xzs_phys_read32(XZS_GCC_BASE + XZS_GCC_MMSS_NOC_CFG_AHB));
+	xzs_d8m2_line("APPLY\n");
+	xzs_d8m2_line("write=none\n");
+	xzs_d8m2_finish("PASS");
+}
+
 void
 xzs_diag_dispatch(uint64_t which)
 {
@@ -709,6 +763,9 @@ xzs_diag_dispatch(uint64_t which)
 		break;
 	case 14:
 		xzs_d8m2_ahb_debug();
+		break;
+	case 15:
+		xzs_d8m2_critical_status();
 		break;
 	default:
 		xzs_diag_emit("[XZS-D8M1] unknown diag\n");
