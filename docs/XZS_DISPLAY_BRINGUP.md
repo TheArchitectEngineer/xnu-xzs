@@ -83,6 +83,20 @@ mdss_ahb/axi/mdp/byte0/pclk0/esc0 = 0
 
 That is the recovery kernel's clock-consumer count, not the Sony bootloader state and not an XNU MMIO read.
 
+## XNU read on 93c511c
+
+Host log `artifacts/hw/d8m1-93c511c/host.txt`. Nine MMCC loads each printed PRE and POST. `pwd` then returned `/`. No MDSS, DSI, PHY, or PLL register was read.
+
+| Register | Value | bit0 | bit31 |
+|---|---|---|---|
+| MMAGIC_MDSS_GDSC | `0xa0222000` | 0 | 1 |
+| MDSS_GDSC | `0x00222001` | 1 | 0 |
+| mdss_byte0 / pclk0 / esc0 | `0x80000000` | 0 | 1 |
+| mmagic_cfg_ahb / mdss_ahb | `0x80008000` | 0 | 1 |
+| mdss_axi / mdss_mdp | `0x80004220` | 0 | 1 |
+
+For a GDSC, bit 31 is power-on and bit 0 is software collapse. The parent domain reports power on. MDSS_GDSC reports collapsed. For a branch, bit 0 is enable and bit 31 set means halted. The display branches are halted.
+
 ## D8-M2, not started
 
 Each step is one shell transaction with a pre line, the action, and a readback. Nothing here is implemented as a write.
