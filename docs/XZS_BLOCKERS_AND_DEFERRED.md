@@ -99,11 +99,11 @@ Status values: `ACTIVE_BLOCKER`, `DEFERRED`, `BYPASSED`, `RESOLVED`, `OBSOLETE`.
 | STATUS | ACTIVE_BLOCKER |
 | FIRST_SEEN | D8-M2 run `d8m2-0b0e429` |
 | LAST_KNOWN_COMMIT | `0b0e4293b44285e866b1de26038548adb62330e2` |
-| EVIDENCE | On `0b0e429`: before `0x80008000`, write `0x80008001`, after `0x80008001`. Enable bit accepted. Halt bit remains set. Poll timeout 2000 µs. Shell stayed up. Host log `artifacts/hw/d8m2-0b0e429/host.txt`. Read-only follow-up `94a2c37`, run `d8m2-94a2c37`, log `artifacts/hw/d8m2-94a2c37/host.txt`: AHB CMD `0x00000000` (`root_off=0`, `root_en=0`, update clear), CFG `0x00000513` (source field GPLL0), `mdss_ahb` back to `0x80008000` after the fresh boot, `mmss_mmagic_ahb` `0x80000000`, `mmss_mmagic_cfg_ahb` `0x80008000`, `mmagic_mdss_noc_cfg_ahb` `0x80000000`, `gcc_mmss_noc_cfg_ahb` `0x20008001` (enable set, halt clear). MDSS_GDSC on that boot was collapsed again (`0x00222001`). |
+| EVIDENCE | On `0b0e429`: before `0x80008000`, write `0x80008001`, after `0x80008001`. Enable bit accepted. Halt bit remains set. Poll timeout 2000 µs. Read-only `94a2c37`: AHB CMD `0x00000000` (`root_off=0`), CFG `0x00000513` (GPLL0), GCC NOC `0x20008001` running. Read-only `a5f47b5`, log `artifacts/hw/d8m2-a5f47b5/host.txt`: MDSS_BCR, MMAGIC_MDSS_BCR, MMAGICAHB_BCR, and MMAGIC_CFG_BCR all `0x00000000` (assert-control bit 0 clear). GPLL0 mode `0xc0118000` with `PLL_LOCK_DET` set. Vote `0x00000011`, enable bit set. AHB root still `root_off=0`. `mdss_ahb` on that fresh boot is `0x80008000` (enable clear). |
 | IMPACT | Blocks AXI and MDP clock bring-up, completion of D8-M2, and D8-M3. |
 | CURRENT_BYPASS | Stop after the timeout. Do not repeat the same branch write. Do not enable AXI or MDP until AHB is running. |
 | WHY_DEFERRED | Not deferred. This is the active D8-M2 blocker. |
 | RESUME_CONDITION | A new candidate must inspect the AHB root and its parents before another branch write. |
-| NEXT_INVESTIGATION | The fresh-boot read does not show a stopped AHB RCG or a stopped GCC MMSS NOC config clock. Do not repeat `mdss-ahb-on` until a candidate can read this same chain immediately before and after one new, different action. GPLL0 lock was not read. |
+| NEXT_INVESTIGATION | Reset bit 0 is clear on the four audited BCRs, so a deassert write is not supported. GPLL0 lock is set. The unexplained fact is still the `0b0e429` readback `0x80008001`. The next candidate must observe the branch and the RCG in one boot, immediately before and after a single new action that is not a repeat of that enable. |
 
 HYPOTHESIS, not established: an upstream clock was stopped. The `94a2c37` read does not support "AHB RCG root is off" or "GCC MMSS NOC config clock is off" on that boot. The earlier halt-with-enable result is still unexplained.

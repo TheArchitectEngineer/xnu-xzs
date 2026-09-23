@@ -186,3 +186,5 @@ mdss_mdp / mdp_clk_src
 Source: Linux `mmcc-msm8996.c` reset map and `drivers/clk/qcom/reset.c`. `qcom_reset()` asserts, waits 1 µs when the map delay is zero, then deasserts. The read inside assert is discarded. A zero bit matches the deassert write. It is not a separate status bit.
 
 `clocks mdss-ahb-debug` reads those BCRs, the AHB chain, GPLL0 mode at GCC `0x000000` (`PLL_LOCK_DET` is bit 31), and the GPLL0 vote at GCC `0x052000` bit 0. It writes nothing.
+
+Hardware on `a5f47b5` (`artifacts/hw/d8m2-a5f47b5/host.txt`): all four BCR reads were `0x00000000`. GPLL0 mode was `0xc0118000` with lock set, and the vote enable bit was set. No reset write was issued.
