@@ -55,6 +55,40 @@ Status values: `ACTIVE_BLOCKER`, `DEFERRED`, `BYPASSED`, `RESOLVED`, `OBSOLETE`.
 | RESUME_CONDITION | When a software-controlled reboot is operationally useful. |
 | NEXT_INVESTIGATION | Separate gadget teardown from the shell thread and the CPU0 watchdog pet. |
 
+## DEBT-004
+
+| Field | Value |
+|---|---|
+| ID | DEBT-004 |
+| AREA | reboot |
+| TITLE | `xzs# reboot` should boot reliably into TWRP |
+| STATUS | DEFERRED |
+| FIRST_SEEN | D7 shell bring-up |
+| LAST_KNOWN_COMMIT | shell `reboot` builtin still calls `SYS_REBOOT` |
+| EVIDENCE | A shell reboot does not produce a usable recovery session. |
+| IMPACT | There is no software path from the XNU shell into TWRP. |
+| CURRENT_BYPASS | Sony manual force shutdown, then fastboot, then boot TWRP with `fastboot boot` when a pull is needed. |
+| WHY_DEFERRED | Display bring-up uses the USB shell. Recovery pulls are not the current debugger. |
+| RESUME_CONDITION | When a software reboot into TWRP is required for a failed boot that the host log cannot explain. |
+| NEXT_INVESTIGATION | Define a reboot target that hands the phone to the recovery image without killing the shell first. |
+
+## DEBT-005
+
+| Field | Value |
+|---|---|
+| ID | DEBT-005 |
+| AREA | recovery |
+| TITLE | TWRP to fastboot transition |
+| STATUS | DEFERRED |
+| FIRST_SEEN | D7-T3 pstore pulls |
+| LAST_KNOWN_COMMIT | not implemented in the XNU shell |
+| EVIDENCE | Returning from TWRP to fastboot is a manual host step (`adb reboot bootloader` has been used). It is not a sealed XNU workflow. |
+| IMPACT | A recovery pull is not yet a closed loop back to the next `fastboot boot`. |
+| CURRENT_BYPASS | The host asks for fastboot explicitly. No flash. |
+| WHY_DEFERRED | D8 does not need an automated recovery loop while each step returns to `xzs#`. |
+| RESUME_CONDITION | When post-mortem pulls become part of the normal hardware loop. |
+| NEXT_INVESTIGATION | Record one reliable TWRP-to-fastboot sequence and its failure signs. Do not implement it during D8-M2. |
+
 ## ACTIVE-D8-001
 
 | Field | Value |

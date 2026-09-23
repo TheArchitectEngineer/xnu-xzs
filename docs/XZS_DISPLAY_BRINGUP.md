@@ -153,3 +153,36 @@ gcc_mmss_noc       0x20008001   enable=1 halt=0
 ```
 
 No clock write was issued on that boot.
+
+## Reset and AHB dependency
+
+Reference order used by the Linux clock and reset drivers. This is not a claim that every stage is the one blocking `mdss_ahb`.
+
+```text
+MMAGIC_MDSS_GDSC
+        ↓
+MDSS_GDSC
+        ↓
+BCR level (bit 0 held, not a status latch)
+        ↓
+ahb_clk_src
+        ↓
+mdss_ahb branch
+        ↓
+mdss_axi / axi_clk_src
+        ↓
+mdss_mdp / mdp_clk_src
+```
+
+`mdss_ahb` is `clk_branch2`. Enable and halt are both MMCC `0x2308`. Enable is bit 0. Halt check is `BRANCH_HALT` because `halt_check` is unset. That mode polls `CBCR_CLK_OFF` (bit 31) clear, or NoC FSM bits 30:28 equal to 2. It is not `BRANCH_HALT_DELAY`, `BRANCH_HALT_SKIP`, or `BRANCH_VOTED`. The parent is `ahb_clk_src` only. The branch is not a voted clock. Other MMSS branches share that RCG, but they do not vote `mdss_ahb` itself.
+
+| Item | Register | Bit | Assert | Deassert | Safe to read | Safe to write |
+|---|---|---|---|---|---|---|
+| MDSS_BCR | MMCC `0x2300` | 0 | write 1 | write 0 | yes, MMCC | only after a read shows bit 0 set |
+| MMAGIC_MDSS_BCR | MMCC `0x2470` | 0 | write 1 | write 0 | yes, MMCC | same rule |
+| MMAGICAHB_BCR | MMCC `0x5020` | 0 | write 1 | write 0 | yes, MMCC | same rule |
+| MMAGIC_CFG_BCR | MMCC `0x5050` | 0 | write 1 | write 0 | yes, MMCC | same rule |
+
+Source: Linux `mmcc-msm8996.c` reset map and `drivers/clk/qcom/reset.c`. `qcom_reset()` asserts, waits 1 µs when the map delay is zero, then deasserts. The read inside assert is discarded. A zero bit matches the deassert write. It is not a separate status bit.
+
+`clocks mdss-ahb-debug` reads those BCRs, the AHB chain, GPLL0 mode at GCC `0x000000` (`PLL_LOCK_DET` is bit 31), and the GPLL0 vote at GCC `0x052000` bit 0. It writes nothing.

@@ -97,6 +97,12 @@ xzs_diag_boot_args(void)
 #define XZS_MMCC_MMAGIC_HW_CTRL 0x2480u
 #define XZS_GCC_BASE 0x00300000u
 #define XZS_GCC_MMSS_NOC_CFG_AHB 0x9008u
+#define XZS_GCC_GPLL0_MODE 0x00000u
+#define XZS_GCC_GPLL0_VOTE 0x52000u
+#define XZS_MMCC_MDSS_BCR 0x2300u
+#define XZS_MMCC_MMAGIC_MDSS_BCR 0x2470u
+#define XZS_MMCC_MMAGIC_AHB_BCR 0x5020u
+#define XZS_MMCC_MMAGIC_CFG_BCR 0x5050u
 
 #define XZS_GDSC_PWR_ON (1u << 31)
 #define XZS_GDSC_HW_CONTROL (1u << 1)
@@ -617,6 +623,47 @@ xzs_d8m2_ahb_status(void)
 	xzs_d8m2_finish("PASS");
 }
 
+/*
+ * BCR bit 0 is the assert control from qcom_reset_set_assert:
+ * writing 1 asserts and writing 0 deasserts. There is no status
+ * callback. reset() pulses that bit. A read is the retained level.
+ */
+static void
+xzs_d8m2_bcr(const char *name, uint32_t offset)
+{
+	uint32_t value = xzs_mmcc_read32(offset);
+
+	xzs_d8m2_u32(name, value);
+	xzs_d8m2_line("bcr_bit0=");
+	xzs_diag_emit((value & 1u) ? "1" : "0");
+	xzs_diag_emit(" source=mmio assert_control=reference\n");
+}
+
+static void
+xzs_d8m2_ahb_debug(void)
+{
+	uint32_t mode;
+	uint32_t vote;
+
+	xzs_d8m2_ahb_status();
+	xzs_d8m2_line("ACTION=CLK-AHB-DEBUG-001\n");
+	xzs_d8m2_line("PRE\n");
+	xzs_d8m2_bcr("[D8-M2] mdss_bcr=", XZS_MMCC_MDSS_BCR);
+	xzs_d8m2_bcr("[D8-M2] mmagic_mdss_bcr=", XZS_MMCC_MMAGIC_MDSS_BCR);
+	xzs_d8m2_bcr("[D8-M2] mmagic_ahb_bcr=", XZS_MMCC_MMAGIC_AHB_BCR);
+	xzs_d8m2_bcr("[D8-M2] mmagic_cfg_bcr=", XZS_MMCC_MMAGIC_CFG_BCR);
+	mode = xzs_phys_read32(XZS_GCC_BASE + XZS_GCC_GPLL0_MODE);
+	vote = xzs_phys_read32(XZS_GCC_BASE + XZS_GCC_GPLL0_VOTE);
+	xzs_d8m2_u32("[D8-M2] gpll0_mode=", mode);
+	xzs_d8m2_bit("gpll0_lock=", (mode & 0x80000000u) != 0);
+	xzs_diag_emit("[D8-M2] gpll0_lock_bit=PLL_LOCK_DET source=reference\n");
+	xzs_d8m2_u32("[D8-M2] gpll0_vote=", vote);
+	xzs_d8m2_bit("gpll0_vote_en=", (vote & 1u) != 0);
+	xzs_d8m2_line("APPLY\n");
+	xzs_d8m2_line("write=none\n");
+	xzs_d8m2_finish("PASS");
+}
+
 void
 xzs_diag_dispatch(uint64_t which)
 {
@@ -659,6 +706,9 @@ xzs_diag_dispatch(uint64_t which)
 		break;
 	case 13:
 		xzs_d8m2_ahb_status();
+		break;
+	case 14:
+		xzs_d8m2_ahb_debug();
 		break;
 	default:
 		xzs_diag_emit("[XZS-D8M1] unknown diag\n");
