@@ -103,6 +103,15 @@ unix_syscall(
 	code = arm_get_syscall_number(state);
 
 #if CONFIG_XZS_BRINGUP
+	extern void xzs_bringup_console_write(const void *buf, int len);
+	if (code == 1 || code == 4 || code == 7) {
+		char scm[96];
+		int scl = snprintf(scm, sizeof(scm), "[XZS-SC] pid=%d code=%d r0=0x%llx r1=0x%llx\n",
+		    proc_pid(proc), code,
+		    (unsigned long long)saved_state64(state)->x[0],
+		    (unsigned long long)saved_state64(state)->x[1]);
+		xzs_bringup_console_write(scm, scl);
+	}
 	extern volatile boolean_t xzs_d6m4_probe_armed;
 	extern thread_t xzs_d6m4_target_thread;
 	extern struct xzs_d6m4_r650_telemetry xzs_d6m4_r650_telemetry;
@@ -283,6 +292,15 @@ skip_syscall:
 	}
 
 	uthread_assert_zero_proc_refcount(uthread);
+
+#if CONFIG_XZS_BRINGUP
+	if (code == 1 || code == 4 || code == 7) {
+		char scrm[96];
+		int scrl = snprintf(scrm, sizeof(scrm), "[XZS-SC-RET] pid=%d code=%d err=%d r0=0x%llx\n",
+		    proc_pid(proc), code, error, (unsigned long long)uthread->uu_rval[0]);
+		xzs_bringup_console_write(scrm, scrl);
+	}
+#endif
 }
 
 void
@@ -337,6 +355,7 @@ unix_syscall_return(int error)
 		 */
 		throttle_lowpri_io(1);
 	}
+
 	if (kdebug_enable && !code_is_kdebug_trace(code)) {
 		KDBG_RELEASE(BSDDBG_CODE(DBG_BSD_EXCP_SC, code) | DBG_FUNC_END,
 		    error, uthread->uu_rval[0], uthread->uu_rval[1], proc_getpid(proc));

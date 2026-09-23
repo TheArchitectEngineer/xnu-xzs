@@ -1007,6 +1007,13 @@ task_wait_to_return(void)
 	task_t task = current_task();
 	thread_t thread = current_thread();
 	uint8_t returnwaitflags;
+
+#if CONFIG_XZS_BRINGUP
+	extern void xzs_bringup_console_write(const void *buf, int len);
+	char twmsg[96];
+	int twlen = snprintf(twmsg, sizeof(twmsg), "[XZS-TWTR] task_wait_to_return ENTER task=%p thread=%p\n", (void *)task, (void *)thread);
+	xzs_bringup_console_write(twmsg, twlen);
+#endif
 #if CONFIG_XZS_BRINGUP
 	extern volatile boolean_t xzs_d6m4_probe_armed;
 	extern thread_t xzs_d6m4_target_thread;
@@ -1093,6 +1100,7 @@ task_wait_to_return(void)
 		xzs_d6m4_r650_telemetry.before_bootstrap_ret = 1;
 		__asm__ volatile("dmb ish" ::: "memory");
 	}
+	xzs_bringup_console_write("[XZS-TWTR] calling thread_bootstrap_return\n", 43);
 #endif
 
 	thread_bootstrap_return();

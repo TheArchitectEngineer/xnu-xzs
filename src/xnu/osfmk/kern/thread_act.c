@@ -1193,6 +1193,13 @@ thread_apc_ast(thread_t thread)
 		/* Thread is ready to terminate, time to tear it down */
 		thread_mtx_unlock(thread);
 
+#if CONFIG_XZS_BRINGUP
+		extern void xzs_bringup_console_write(const void *buf, int len);
+		char apcmsg[80];
+		int apclen = snprintf(apcmsg, sizeof(apcmsg), "[XZS-APC] calling thread_terminate_self for %p\n", (void *)thread);
+		xzs_bringup_console_write(apcmsg, apclen);
+#endif
+
 		thread_terminate_self();
 		/*NOTREACHED*/
 	}

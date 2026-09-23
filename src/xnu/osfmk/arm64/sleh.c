@@ -44,6 +44,7 @@
 #include <kern/socd_client.h>
 #include <kern/task.h>
 #include <kern/thread.h>
+#include <kern/sched_prim.h>
 #include <kern/cpu_number.h>
 #include <kern/zalloc_internal.h>
 #include <mach/exception.h>
@@ -2240,11 +2241,26 @@ handle_user_abort(arm_saved_state_t *state, uint64_t esr, vm_offset_t fault_addr
 		thread_reset_pcs_done_faulting(thread);
 	}
 
-	char xabort_line[96];
 	extern void xzs_bringup_console_write(const void *buf, int len);
 	#define XZS_ABORT_EMIT(s) do { int _l = 0; while ((s)[_l]) _l++; xzs_bringup_console_write((s), _l); } while(0)
-	snprintf(xabort_line, sizeof(xabort_line), "[XZS-ABORT] PC=0x%llx FAR=0x%llx ESR=0x%llx\n",
-	    (unsigned long long)get_saved_state_pc(state), (unsigned long long)fault_addr, (unsigned long long)esr);
+
+	extern struct proc *current_proc(void);
+	extern int proc_pid(struct proc *);
+	extern void proc_name(int, char *, int);
+	struct proc *cur_p = current_proc();
+	int cur_pid = cur_p ? proc_pid(cur_p) : -1;
+	char cur_pname[20];
+	if (cur_pid >= 0) {
+		proc_name(cur_pid, cur_pname, sizeof(cur_pname));
+	} else {
+		cur_pname[0] = '?'; cur_pname[1] = '\0';
+	}
+
+	char xabort_line[160];
+	snprintf(xabort_line, sizeof(xabort_line), "[XZS-ABORT] pid=%d(%s) PC=0x%llx FAR=0x%llx ESR=0x%llx map=%p entries=%d\n",
+	    cur_pid, cur_pname,
+	    (unsigned long long)get_saved_state_pc(state), (unsigned long long)fault_addr, (unsigned long long)esr,
+	    (void *)thread->map, thread->map ? thread->map->hdr.nentries : 0);
 	XZS_ABORT_EMIT(xabort_line);
 
 	boolean_t is_hello_entry = (fault_addr == 0x1000002f0ULL || get_saved_state_pc(state) == 0x1000002f0ULL);
@@ -2286,13 +2302,11 @@ handle_user_abort(arm_saved_state_t *state, uint64_t esr, vm_offset_t fault_addr
 			    fault_type, (fault_code == FSC_ACCESS_FLAG_FAULT_L3), TRUE);
 		}
 		if (result != KERN_SUCCESS) {
-
-			{
-				/* We have to fault the page in */
-				result = vm_fault(map, vm_fault_addr, fault_type,
-				    /* change_wiring */ FALSE, VM_KERN_MEMORY_NONE, THREAD_ABORTSAFE,
-				    /* caller_pmap */ NULL, /* caller_pmap_addr */ 0);
-			}
+			XZS_ABORT_EMIT("[XZS-ABORT] calling vm_fault\n");
+			result = vm_fault(map, vm_fault_addr, fault_type,
+			    /* change_wiring */ FALSE, VM_KERN_MEMORY_NONE, THREAD_ABORTSAFE,
+			    /* caller_pmap */ NULL, /* caller_pmap_addr */ 0);
+			XZS_ABORT_EMIT("[XZS-ABORT] vm_fault returned\n");
 		}
 		snprintf(xabort_line, sizeof(xabort_line), "[XZS-ABORT-RESULT] res=%d\n", result);
 		XZS_ABORT_EMIT(xabort_line);
@@ -2303,6 +2317,22 @@ handle_user_abort(arm_saved_state_t *state, uint64_t esr, vm_offset_t fault_addr
 			XZS_ABORT_EMIT(line);
 			snprintf(line, sizeof(line), "VNOP_PAGEIN_REACHED=%s\n", g_xzs_vnop_pagein_called ? "yes" : "no");
 			XZS_ABORT_EMIT(line);
+		}
+		if (result != KERN_SUCCESS) {
+			static uint64_t s_last_fail_pc = 0;
+			static int s_fail_repeat_count = 0;
+			if (get_saved_state_pc(state) == s_last_fail_pc) {
+				s_fail_repeat_count++;
+			} else {
+				s_last_fail_pc = get_saved_state_pc(state);
+				s_fail_repeat_count = 1;
+			}
+			if (s_fail_repeat_count >= 5) {
+				if (s_fail_repeat_count == 5) {
+					XZS_ABORT_EMIT("[XZS-ABORT] MAX UNRESOLVED FAULTS REACHED, HALTING THREAD\n");
+				}
+				thread_block(THREAD_CONTINUE_NULL);
+			}
 		}
 		if (thread->t_rr_state.trr_fault_state != TRR_FAULT_NONE) {
 			thread_reset_pcs_done_faulting(thread);

@@ -1854,23 +1854,6 @@ grade:
 	}
 
 #if CONFIG_XZS_BRINGUP
-	/*
-	 * This port's user text is mapped UXN until the same promotion used
-	 * for launchd and /bin/sh. hello and args live in that one page.
-	 */
-	if (load_result.entry_point >= 0x100000000ULL &&
-	    load_result.entry_point < 0x100004000ULL) {
-		extern kern_return_t xzs_promote_launchd_text_exec(pmap_t,
-		    vm_map_address_t, vm_map_size_t);
-		extern void xzs_early_puts(const char *s);
-		kern_return_t pkr = xzs_promote_launchd_text_exec(
-		    get_task_pmap(task), 0x100000000ULL, 0x4000ULL);
-		xzs_early_puts(pkr == KERN_SUCCESS ?
-		    "[XZS-PROC] E09 UXN clear ok\n" :
-		    "[XZS-PROC] E09 UXN clear failed\n");
-	} else {
-		xzs_exec_mark("E09 entry outside hello page");
-	}
 	xzs_exec_mark("E12 EL0 entry prepared");
 #endif
 
@@ -2158,6 +2141,21 @@ cleanup_rosetta_fp:
 
 	/* Avoid immediate VM faults back into kernel */
 	exec_prefault_data(p, imgp, &load_result);
+
+#if CONFIG_XZS_BRINGUP
+	if (load_result.entry_point >= 0x100000000ULL &&
+	    load_result.entry_point < 0x100004000ULL) {
+		extern kern_return_t xzs_promote_launchd_text_exec(pmap_t,
+		    vm_map_address_t, vm_map_size_t);
+		extern void xzs_bringup_console_write(const void *buf, int len);
+		kern_return_t pkr = xzs_promote_launchd_text_exec(
+		    get_task_pmap(task), 0x100000000ULL, 0x4000ULL);
+		char pmsg[80];
+		int plen = snprintf(pmsg, sizeof(pmsg), "[XZS-EXEC] E09 UXN clear %s (kr=%d)\n",
+		    pkr == KERN_SUCCESS ? "OK" : "FAILED", pkr);
+		xzs_bringup_console_write(pmsg, plen);
+	}
+#endif
 
 	vm_map_switch_back(switch_ctx);
 

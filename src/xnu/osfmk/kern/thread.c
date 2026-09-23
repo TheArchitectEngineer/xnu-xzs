@@ -465,6 +465,13 @@ thread_terminate_self(void)
 	void *bsd_info = get_bsdtask_info(task);
 	int threadcnt;
 
+#if CONFIG_XZS_BRINGUP
+	extern void xzs_bringup_console_write(const void *buf, int len);
+	char thmsg[96];
+	int thlen = snprintf(thmsg, sizeof(thmsg), "[XZS-THREAD] thread_terminate_self ENTER thread=%p task=%p\n", (void *)thread, (void *)task);
+	xzs_bringup_console_write(thmsg, thlen);
+#endif
+
 	pal_thread_terminate_self(thread);
 
 	DTRACE_PROC(lwp__exit);
@@ -746,6 +753,10 @@ thread_terminate_self(void)
 
 	thread_unlock(thread);
 	/* splsched */
+
+#if CONFIG_XZS_BRINGUP
+	xzs_bringup_console_write("[XZS-THREAD] thread_terminate_self BLOCKING to switch\n", 53);
+#endif
 
 	thread_block((thread_continue_t)thread_terminate_continue);
 	/*NOTREACHED*/

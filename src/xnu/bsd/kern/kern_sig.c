@@ -3357,7 +3357,11 @@ bsd_ast(thread_t thread)
 	proc_t p = current_proc();
 	struct uthread *ut = get_bsdthread_info(thread);
 	int     signum;
+#if CONFIG_XZS_BRINGUP
+	static int bsd_init_done = 1;
+#else
 	static int bsd_init_done = 0;
+#endif
 
 	if (p == NULL) {
 		return;
