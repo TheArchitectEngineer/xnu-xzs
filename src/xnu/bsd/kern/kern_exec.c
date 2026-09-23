@@ -5759,6 +5759,7 @@ exit_with_error:
 		 * Terminate the old thread immediately to prevent any race with the
 		 * new process lifecycle.
 		 */
+		extern void thread_terminate_self(void);
 		thread_terminate_self();
 		/* NOTREACHED */
 	}
