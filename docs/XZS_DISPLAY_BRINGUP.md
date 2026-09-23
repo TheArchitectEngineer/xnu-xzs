@@ -1,5 +1,7 @@
 # D8 display bring-up
 
+`main` carries the clean D8-M1 runtime from tag `xzs-d8-m1-complete` (`861032cb7b137096edeb1aa5caa04aef6737533a`). That tree matches the hardware-proven read-only image. D8-M2 writes are not in this file's tree. The measured collapsed-domain values below are the D8-M1 result. A later boot on `xzs-d8-m2-power` turned MDSS on and left `mdss_ahb` halted. See [`docs/XZS_BLOCKERS_AND_DEFERRED.md`](XZS_BLOCKERS_AND_DEFERRED.md).
+
 First pixels, later, are CPU framebuffer to MDP5 to DSI to the panel. No GPU. D8-M1 does not turn anything on.
 
 ## Path

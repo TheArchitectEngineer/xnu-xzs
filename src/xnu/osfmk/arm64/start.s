@@ -658,12 +658,8 @@ Lkernelcache_base_found:
 	MOV64	x7, (ARM_TTE_TYPE_BLOCK | ARM_TTE_VALID | ARM_TTE_BLOCK_AF | ARM_TTE_BLOCK_ATTRINDX(CACHE_ATTRINDX_DISABLE) | ARM_TTE_BLOCK_NX | ARM_TTE_BLOCK_PNX | 0x00000000)
 	str		x7, [x6, #(0 * 8)]
 
-	/* Map 0xa6000000 - 0xa7ffffff (entry 83) as Normal non-cacheable.
-	 * A write-back mapping kept the ramoops record in the cache. After
-	 * reset TWRP still saw the previous full Linux buffer. Write-combine
-	 * plus the existing dsb sy reaches DRAM without a new cache op.
-	 */
-	MOV64	x7, (ARM_TTE_TYPE_BLOCK | ARM_TTE_VALID | ARM_TTE_BLOCK_SH(SH_OUTER_MEMORY) | ARM_TTE_BLOCK_ATTRINDX(CACHE_ATTRINDX_WRITECOMB) | ARM_TTE_BLOCK_AF | ARM_TTE_BLOCK_NX | ARM_TTE_BLOCK_PNX | 0xa6000000)
+	/* Map 0xa6000000 - 0xa7ffffff (entry 83: 0xa6000000 >> 25 = 83) covering pstore ramoops 0xa7f00000 & console 0xa7fbe000 as Normal Writeback RAM */
+	MOV64	x7, (ARM_TTE_BOOT_BLOCK_LOWER | ARM_TTE_BOOT_BLOCK_UPPER | 0xa6000000)
 	str		x7, [x6, #(83 * 8)]
 
 	/* Ensure TTEs are visible */
@@ -1799,7 +1795,6 @@ xzs_raw_tx:
 	add		x5, x5, w4, uxtw
 	strb	w0, [x5]
 	strb	wzr, [x5, #1]
-	dsb		sy
 	dc		cvac, x5
 	dc		cvac, x3
 7:
@@ -1826,7 +1821,6 @@ xzs_raw_tx:
 	strb	w0, [x5]
 	add		w4, w4, #1
 	str		w4, [x2, #8]
-	dsb		sy
 	dc		cvac, x5
 	dc		cvac, x2
 8:
@@ -1855,7 +1849,6 @@ xzs_raw_tx:
 	strb	w0, [x5]
 	add		w4, w4, #1
 	str		w4, [x2, #8]
-	dsb		sy
 	dc		cvac, x5
 	dc		cvac, x2
 9:

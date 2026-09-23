@@ -1,6 +1,25 @@
 # Sony Xperia XZs (MSM8996) — Port Status
 
-This summary provides an executive overview of the project's technical status. It can be read in under 3 minutes.
+Current milestone on `main` is clean D8-M1, tag `xzs-d8-m1-complete` (`861032cb7b137096edeb1aa5caa04aef6737533a`). D8-M2 power/clock work stays on `xzs-d8-m2-power` and is PARTIAL. It is not merged.
+
+```text
+D8-M1 = PASS
+D8-M2 = PARTIAL
+```
+
+D8-M2 frontier, hardware on `0b0e429`, not part of this tree:
+
+```text
+MMAGIC_MDSS_GDSC    ON     0xa0222000
+MDSS_GDSC           ON     0xa0222000
+mdss_ahb enable     written
+mdss_ahb halt       still set  0x80008001
+AXI clock enable    not attempted
+MDP clock enable    not attempted
+DSI/PHY/PLL         untouched
+```
+
+Read [`README.md`](../README.md), [`docs/XZS_DISPLAY_BRINGUP.md`](XZS_DISPLAY_BRINGUP.md), and [`docs/XZS_BLOCKERS_AND_DEFERRED.md`](XZS_BLOCKERS_AND_DEFERRED.md). The sections below keep the older sealed-phase record.
 
 ---
 
@@ -80,7 +99,7 @@ The kernel confirms that Mach SMP, BSD initialization, IOKit autoconfiguration, 
 - [x] **xzs-bootshim**: Qualcomm DTB parsing, Apple Device Tree (ADT) creation at `0x81810000`, `boot_args` population at `0x81800000`.
 - [x] **Low-Level ARM64 MMU**: TCR/MAIR configuration, 16KB granule, transition to High KVA (`0xfffffe0000000000`).
 - [x] **Qualcomm BLSP2 UARTDM**: Serial logging at 115200 8N1 at `0x075b0000`.
-- [ ] **Persistent RAM / Pstore Ramoops**: Not a trusted post-mortem path. See `docs/XZS_PERSISTENT_TELEMETRY.md`. D8 uses the USB shell as the primary log. Display writes stay off until D8-M1's clock-controller reads are proven and D8-M2 is started explicitly. See `docs/XZS_DISPLAY_BRINGUP.md`.
+- [ ] **Persistent RAM / Pstore Ramoops**: DEBT-002. Not a trusted post-mortem path. The clean D8-M1 tree does not run the cacheability experiment. See `docs/XZS_BLOCKERS_AND_DEFERRED.md`.
 - [x] **ARM GICv3**: Distributor (`0x09bc0000`) and per-core Redistributors (`0x09c00000` array) in native system register mode.
 - [x] **ARM Generic Timers**: PPI 27 (Virtual) & PPI 30 (Physical) firing reliably across all cores at 19.2 MHz.
 - [x] **ARM PSCI v1.0 Multi-Core**: SMC `CPU_ON` (`0xC4000003`) bringing all 4 Kryo cores online.
