@@ -90,7 +90,13 @@ xzs_diag_boot_args(void)
 #define XZS_MMCC_MDSS_BYTE0 0x233cu
 #define XZS_MMCC_MDSS_ESC0 0x2344u
 #define XZS_MMCC_CFG_AHB 0x5054u
+#define XZS_MMCC_MMAGIC_AHB 0x5024u
+#define XZS_MMCC_MMAGIC_MDSS_NOC 0x2478u
+#define XZS_MMCC_AHB_CMD 0x5000u
+#define XZS_MMCC_AHB_CFG 0x5004u
 #define XZS_MMCC_MMAGIC_HW_CTRL 0x2480u
+#define XZS_GCC_BASE 0x00300000u
+#define XZS_GCC_MMSS_NOC_CFG_AHB 0x9008u
 
 #define XZS_GDSC_PWR_ON (1u << 31)
 #define XZS_GDSC_HW_CONTROL (1u << 1)
@@ -113,6 +119,27 @@ xzs_mmcc_read32(uint32_t offset)
 		__asm__ volatile("msr TTBR0_EL1, %0; isb sy" :: "r"(g_xzs_ttbr0) : "memory");
 	}
 	value = *(volatile uint32_t *)(XZS_MMCC_BASE + offset);
+	__asm__ volatile("dsb sy" ::: "memory");
+	if (g_xzs_ttbr0 != 0) {
+		__asm__ volatile("msr TTBR0_EL1, %0; isb sy" :: "r"(saved) : "memory");
+	}
+	return value;
+}
+
+static uint32_t
+xzs_phys_read32(uint32_t phys)
+{
+	uint64_t saved = 0;
+	uint32_t value;
+
+	if (phys >= 0x02000000u || (phys & 3u) != 0) {
+		return 0xffffffffu;
+	}
+	__asm__ volatile("mrs %0, TTBR0_EL1" : "=r"(saved));
+	if (g_xzs_ttbr0 != 0) {
+		__asm__ volatile("msr TTBR0_EL1, %0; isb sy" :: "r"(g_xzs_ttbr0) : "memory");
+	}
+	value = *(volatile uint32_t *)(uintptr_t)phys;
 	__asm__ volatile("dsb sy" ::: "memory");
 	if (g_xzs_ttbr0 != 0) {
 		__asm__ volatile("msr TTBR0_EL1, %0; isb sy" :: "r"(saved) : "memory");
@@ -518,6 +545,78 @@ xzs_d8m2_branch_on(const char *action, uint32_t offset)
 	xzs_d8m2_finish("PASS");
 }
 
+static const char *
+xzs_ahb_src_name(uint32_t cfg)
+{
+	switch ((cfg >> 8) & 7u) {
+	case 0:
+		return "XO";
+	case 1:
+		return "MMPLL0";
+	case 5:
+		return "GPLL0";
+	case 6:
+		return "GPLL0_DIV";
+	default:
+		return "unknown";
+	}
+}
+
+static void
+xzs_d8m2_bit(const char *label, int set)
+{
+	xzs_d8m2_line(label);
+	xzs_diag_emit(set ? "1\n" : "0\n");
+}
+
+/*
+ * Read-only view of mdss_ahb and its audited parents.
+ * ahb_clk_src is MMCC CMD 0x5000 / CFG 0x5004. Parent map is
+ * XO=0, MMPLL0=1, GPLL0=5, GPLL0_DIV=6. Linux treats the RCG as
+ * enabled when CMD bit 31 (ROOT_OFF) is clear. The branch parent
+ * is that RCG. mmss_mmagic_ahb (0x5024) and mmss_mmagic_cfg_ahb
+ * (0x5054) share it. mmagic_mdss_noc_cfg_ahb (0x2478) is parented
+ * by gcc_mmss_noc_cfg_ahb at GCC 0x00300000 + 0x9008.
+ */
+static void
+xzs_d8m2_ahb_status(void)
+{
+	uint32_t branch;
+	uint32_t cmd;
+	uint32_t cfg;
+	uint32_t mmagic_ahb;
+	uint32_t cfg_ahb;
+	uint32_t noc;
+	uint32_t gcc;
+
+	xzs_d8m2_line("ACTION=CLK-AHB-STATUS-001\n");
+	xzs_d8m2_line("PRE\n");
+	branch = xzs_mmcc_read32(XZS_MMCC_MDSS_AHB);
+	cmd = xzs_mmcc_read32(XZS_MMCC_AHB_CMD);
+	cfg = xzs_mmcc_read32(XZS_MMCC_AHB_CFG);
+	mmagic_ahb = xzs_mmcc_read32(XZS_MMCC_MMAGIC_AHB);
+	cfg_ahb = xzs_mmcc_read32(XZS_MMCC_CFG_AHB);
+	noc = xzs_mmcc_read32(XZS_MMCC_MMAGIC_MDSS_NOC);
+	gcc = xzs_phys_read32(XZS_GCC_BASE + XZS_GCC_MMSS_NOC_CFG_AHB);
+	xzs_d8m2_u32("[D8-M2] ahb_cbcr=", branch);
+	xzs_d8m2_u32("[D8-M2] ahb_cmd=", cmd);
+	xzs_d8m2_u32("[D8-M2] ahb_cfg=", cfg);
+	xzs_d8m2_line("src=");
+	xzs_diag_emit(xzs_ahb_src_name(cfg));
+	xzs_diag_emit("\n");
+	xzs_d8m2_bit("root_off=", (cmd & XZS_CBCR_CLK_OFF) != 0);
+	xzs_d8m2_bit("root_en=", (cmd & XZS_GDSC_HW_CONTROL) != 0);
+	xzs_d8m2_bit("cmd_update=", (cmd & XZS_CBCR_ENABLE) != 0);
+	xzs_d8m2_u32("[D8-M2] mmagic_ahb=", mmagic_ahb);
+	xzs_d8m2_u32("[D8-M2] mmagic_cfg_ahb=", cfg_ahb);
+	xzs_d8m2_u32("[D8-M2] mmagic_mdss_noc=", noc);
+	xzs_d8m2_u32("[D8-M2] gcc_mmss_noc=", gcc);
+	xzs_d8m2_u32("[D8-M2] mdss=", xzs_mmcc_read32(XZS_MMCC_MDSS_GDSC));
+	xzs_d8m2_line("APPLY\n");
+	xzs_d8m2_line("write=none\n");
+	xzs_d8m2_finish("PASS");
+}
+
 void
 xzs_diag_dispatch(uint64_t which)
 {
@@ -557,6 +656,9 @@ xzs_diag_dispatch(uint64_t which)
 		break;
 	case 12:
 		xzs_d8m2_branch_on("CLK-MDP-001", XZS_MMCC_MDSS_MDP);
+		break;
+	case 13:
+		xzs_d8m2_ahb_status();
 		break;
 	default:
 		xzs_diag_emit("[XZS-D8M1] unknown diag\n");

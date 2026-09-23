@@ -45,22 +45,50 @@ Its long-term research goal is to determine how far an older authentic **Apple i
 
 ---
 
-## Current Hardware-Verified Status
+## Safety constraints
 
 ```text
-Native XNU boot        VERIFIED
-4-core SMP             VERIFIED
-VFS/rootfs             VERIFIED
-PID1                   VERIFIED
-EL0 execution          VERIFIED
-Darwin syscall path    VERIFIED
-/dev/console stdout    VERIFIED
-stable PID1 runtime    VERIFIED
-
-physical UART RX       NOT IMPLEMENTED
-interactive shell      NEXT PHASE
-native display         FUTURE D8
+NO FLASH
+fastboot boot only
+manual Sony force shutdown for recovery
+do not use xzs# reboot
+no invasive hardware modification
 ```
+
+Recovery is power-off by holding the Sony keys, then fastboot, then `fastboot boot`. The shell command `xzs# reboot` is not a recovery path.
+
+## Current milestones
+
+```text
+native XNU boot          PASS
+MMU/cache                PASS
+interrupts/timer         PASS
+SMP                      PASS
+BSD/VFS                  PASS
+storage                  PASS
+XZSFS                    PASS
+EL0/PID1                 PASS
+/bin/sh                  PASS
+interactive shell        PASS
+USB transport            PASS
+display audit            PASS       D8-M1
+display power bring-up   PARTIAL    D8-M2
+```
+
+Tags that name durable milestones: `xzs-d7t1-complete`, `xzs-d7t2-deferred`, `xzs-d7t2-lite-complete`, `xzs-d8-m1-complete`. `xzs-d8-m2-complete` is added only after D8-M2 passes on hardware.
+
+## Display
+
+```text
+D8-M1 = PASS
+D8-M2 = PARTIAL
+```
+
+D8-M1, tag `xzs-d8-m1-complete` at `861032cb7b137096edeb1aa5caa04aef6737533a`, read the clock controller only. MMAGIC_MDSS_GDSC was `0xa0222000` (on). MDSS_GDSC was `0x00222001` (collapsed).
+
+D8-M2 is not on `main`. On branch `xzs-d8-m2-power` the phone proved MMAGIC stayed on and MDSS reached `0xa0222000`. The `mdss_ahb` enable bit was accepted (`0x80008001`) and the halt bit stayed set. AXI and MDP clock enables were not attempted. DSI, PHY, PLL, the panel, and the backlight are untouched.
+
+Details: [`docs/XZS_DISPLAY_BRINGUP.md`](docs/XZS_DISPLAY_BRINGUP.md). Bypassed work: [`docs/XZS_BLOCKERS_AND_DEFERRED.md`](docs/XZS_BLOCKERS_AND_DEFERRED.md). Status: [`docs/XZS_PORT_STATUS.md`](docs/XZS_PORT_STATUS.md).
 
 ### Verified Milestone Capabilities
 
@@ -115,8 +143,8 @@ native display         FUTURE D8
 
 ## Current Development Phase
 
-* **Current Milestone**: **Phase D6 COMPLETE / SEALED** (Full regression verified across all milestones D6-M1 through D6-M7 on physical silicon; tag `xzs-d6-userspace-complete`).
-* **Next Immediate Action**: **Phase D7 (Interactive EL0 Shell)** — Headless serial shell bring-up (`/bin/sh` REPL) and Qualcomm MSM8996 UARTDM RX driver.
+* **Integrated on `main`**: clean D8-M1 display audit, tag `xzs-d8-m1-complete`.
+* **Active bring-up**: D8-M2 display power and clocks on `xzs-d8-m2-power`. That branch is PARTIAL and is not merged.
 
 ---
 
@@ -133,8 +161,8 @@ native display         FUTURE D8
 | **Phase D4** | Block-storage driver integration (`bdevsw` / `disk0`) | **COMPLETE** |
 | **Phase D5** | Real root filesystem mount (RAMDisk XZSFS v1) | **COMPLETE / SEALED** |
 | **Phase D6** | PID 1 / First EL0 userspace (`initproc` / launchd) | **COMPLETE / SEALED** |
-| **Phase D7** | Interactive serial shell (`/bin/sh` headless REPL) | **NEXT PHASE** |
-| **Phase D8** | Native display / framebuffer / touch / recovery console | **PLANNED** |
+| **Phase D7** | Interactive USB shell (`/bin/sh`) | **PASS** (external exec DEFERRED) |
+| **Phase D8** | Display audit and power/clock bring-up | **D8-M1 PASS / D8-M2 PARTIAL** |
 | **Phase D9** | XZSPlatform hardware/platform compatibility layer | **PLANNED** |
 | **Phase D10**| Core native device drivers | **PLANNED** |
 | **Phase D11**| System hardware integration | **PLANNED** |
@@ -187,20 +215,17 @@ The modular `XZSPlatform` design ensures that board support and native drivers c
 
 ## Debug / Recovery Workflow
 
-* **Boot Mechanism**: Automated testing boots through Sony S1 Fastboot (`fastboot boot boot.img`).
-* **Diagnostic Telemetry**: Multi-tier persistent logging:
-  - IMEM SRAM breadcrumbs (`0x066bf660`): Hardware checkpoint IDs and error codes.
-  - DRAM scratch ring buffer (`0x80060000`): Lockless early character buffer.
-  - Persistent RAM ramoops (`0xa7f00000` dmesg, `0xa7fbe000` console): Extracted post-mortem via TWRP.
-* **Automated Recovery**: On panic or test completion, the kernel writes `0x77665500` to IMEM and triggers a warm reset directly back to Fastboot mode.
-* **Automated Acceptance Verification**: Independent Python verifiers in `scripts/verify_*.py` audit checkpoint sequences and telemetry keys.
+* **Boot Mechanism**: Sony S1 Fastboot, `fastboot boot` only. Do not flash.
+* **Primary debugger**: USB shell and the host transcript. Each hardware-changing display step is one PRE / APPLY / readback / POST transaction.
+* **Recovery**: manual Sony force shutdown, then fastboot. Do not use `xzs# reboot`.
+* **Ramoops**: the reserved region is mapped, but a TWRP pull is not XNU evidence unless the file contains an XNU marker. That path is deferred. See [`docs/XZS_BLOCKERS_AND_DEFERRED.md`](docs/XZS_BLOCKERS_AND_DEFERRED.md).
 
 ---
 
 ## Known Limitations
 
-1. **UARTDM RX Not Implemented**: Qualcomm MSM8996 UARTDM RX driver is currently stubbed (`PHYSICAL_CONSOLE_RX_AVAILABLE=no`). Serial console input is not yet available; interactive input will be brought up in Phase D7.
-2. **Display & GPU Uninitialized**: Physical screen and GPU acceleration are uninitialized; on-device console rendering is planned for Phase D8.
+1. **Generic external exec is deferred**: `/bin/sh` builtins work. Running a separate Mach-O such as `/bin/hello` still loses its VM mappings. See DEBT-001.
+2. **Display is not scanning**: D8-M1 audit passed. D8-M2 has powered MDSS and has not got `mdss_ahb` out of halt. No panel image.
 3. **devfs Pointer-Hardening Bypass**: Commit `3e417bb` bypasses `vm_kernel_addrhash` in `devfs_getattr` to prevent a SHA-256 address hashing hang during early devfs open. Classified as `XZS PLATFORM WORKAROUND` to be re-audited under Phase D9.
 4. **Deferred Subsystems**: Advanced networking (Skywalk, lo0) and DTrace FBT are temporarily deferred until required drivers are active.
 
@@ -214,6 +239,9 @@ The modular `XZSPlatform` design ensures that board support and native drivers c
 * [Workarounds & Compatibility Matrix](docs/XZS_WORKAROUNDS.md) — Active shims, workarounds, and classification taxonomy.
 * [Technical Debt & Backlog](docs/XZS_TECHNICAL_DEBT.md) — Architectural debt inventory, risks, and remediation plans.
 * [Current Session Handoff](docs/CURRENT_HANDOFF.md) — Concise current state, commits, and next actions for AI sessions.
+* [Port Status](docs/XZS_PORT_STATUS.md) — Hardware-verified checklist and the current milestone.
+* [Display Bring-up](docs/XZS_DISPLAY_BRINGUP.md) — D8 topology, measured registers, and the power/clock sequence.
+* [Blockers and Deferred Work](docs/XZS_BLOCKERS_AND_DEFERRED.md) — Issues that were bypassed on purpose, and the condition that resumes each one.
 
 ### Hardware & Bring-up Reference
 * [Hardware Map](docs/HARDWARE_MAP.md) — Audited MMIO register bases, IRQs, and clock domains.

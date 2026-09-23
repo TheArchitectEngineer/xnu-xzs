@@ -1,5 +1,9 @@
 # XNU-XZS Current Session Handoff
 
+Current accepted milestone is D8-M1, tag `xzs-d8-m1-complete`. D8-M2 is PARTIAL on `xzs-d8-m2-power` and is not merged. Do not reopen DEBT-001, DEBT-002, or DEBT-003 while chasing the display clocks. The live blocker is ACTIVE-D8-001 in [`docs/XZS_BLOCKERS_AND_DEFERRED.md`](XZS_BLOCKERS_AND_DEFERRED.md). Entry point: [`README.md`](../README.md). Display notes: [`docs/XZS_DISPLAY_BRINGUP.md`](XZS_DISPLAY_BRINGUP.md).
+
+The record below is the older D6/D7 handoff and is kept as history.
+
 ```text
 FINAL_D6_MAIN_COMMIT=cc297b0e721ea0c002e008a4a330ac1aa3c9a3b3
 

@@ -126,3 +126,16 @@ MDSS (`0x2304`, parent mmagic, cxcs `0x2310` and `0x231c`, pwrsts OFF_ON, no HW_
 Branch enable is `clk_branch2`: set CBCR bit 0 only, then poll until bit 31 (`CBCR_CLK_OFF`) clears or the NoC FSM field (bits 30:28) equals 2. Cap 2000 µs. A clock command writes nothing if MDSS_GDSC is not on.
 
 A timeout prints the readback and returns to the prompt. No MDSS, MDP, DSI, PHY, or PLL slave read is added by these commands.
+
+On `0b0e429`, `mdss_ahb` accepted enable bit 0 and stayed halted (`0x80008001`). Repeating that write is not the next step. `clocks mdss-ahb-status` only reads the audited chain:
+
+| Node | Register | Parent | Class |
+|---|---|---|---|
+| `mdss_ahb` | MMCC `0x2308` | `ahb_clk_src` | branch, bit 0 enable, bit 31 halt |
+| `ahb_clk_src` | MMCC CMD `0x5000`, CFG `0x5004` | XO=0, MMPLL0=1, GPLL0=5, GPLL0_DIV=6 | RCG. Root is on when CMD bit 31 is clear. Bit 1 is ROOT_EN. CFG bits 10:8 are the source. |
+| `mmss_mmagic_ahb` | MMCC `0x5024` | same RCG | critical branch |
+| `mmss_mmagic_cfg_ahb` | MMCC `0x5054` | same RCG | critical branch |
+| `mmagic_mdss_noc_cfg_ahb` | MMCC `0x2478` | `gcc_mmss_noc_cfg_ahb` | critical branch |
+| `gcc_mmss_noc_cfg_ahb` | GCC `0x00309008` | not named in the branch | GCC branch, `CLK_IGNORE_UNUSED` |
+
+Those addresses are reference evidence from Linux `mmcc-msm8996.c`, `gcc-msm8996.c`, and `clk-rcg2.c`. A value printed by the shell is hardware evidence. GCC and MMCC sit in the existing device window, so these reads do not touch MDSS slaves.
