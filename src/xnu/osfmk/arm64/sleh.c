@@ -2240,13 +2240,17 @@ handle_user_abort(arm_saved_state_t *state, uint64_t esr, vm_offset_t fault_addr
 		thread_reset_pcs_done_faulting(thread);
 	}
 
+	char xabort_line[96];
+	extern void xzs_bringup_console_write(const void *buf, int len);
+	#define XZS_ABORT_EMIT(s) do { int _l = 0; while ((s)[_l]) _l++; xzs_bringup_console_write((s), _l); } while(0)
+	snprintf(xabort_line, sizeof(xabort_line), "[XZS-ABORT] PC=0x%llx FAR=0x%llx ESR=0x%llx\n",
+	    (unsigned long long)get_saved_state_pc(state), (unsigned long long)fault_addr, (unsigned long long)esr);
+	XZS_ABORT_EMIT(xabort_line);
+
 	boolean_t is_hello_entry = (fault_addr == 0x1000002f0ULL || get_saved_state_pc(state) == 0x1000002f0ULL);
 
 	if (is_hello_entry) {
 		char line[128];
-		extern void xzs_bringup_console_write(const void *buf, int len);
-		#define XZS_ABORT_EMIT(s) do { int _l = 0; while ((s)[_l]) _l++; xzs_bringup_console_write((s), _l); } while(0)
-
 		XZS_ABORT_EMIT("\n[XZS-T2N3] HELLO_ENTRY_FAULT\n");
 		snprintf(line, sizeof(line), "ELR_EL1=0x%llx\n", (unsigned long long)get_saved_state_pc(state));
 		XZS_ABORT_EMIT(line);
@@ -2290,15 +2294,15 @@ handle_user_abort(arm_saved_state_t *state, uint64_t esr, vm_offset_t fault_addr
 				    /* caller_pmap */ NULL, /* caller_pmap_addr */ 0);
 			}
 		}
+		snprintf(xabort_line, sizeof(xabort_line), "[XZS-ABORT-RESULT] res=%d\n", result);
+		XZS_ABORT_EMIT(xabort_line);
 		if (is_hello_entry) {
 			char line[128];
 			extern volatile uint32_t g_xzs_vnop_pagein_called;
-			extern void xzs_bringup_console_write(const void *buf, int len);
-			#define XZS_ABORT_EMIT2(s) do { int _l = 0; while ((s)[_l]) _l++; xzs_bringup_console_write((s), _l); } while(0)
 			snprintf(line, sizeof(line), "VM_FAULT_RESULT=%d\n", result);
-			XZS_ABORT_EMIT2(line);
+			XZS_ABORT_EMIT(line);
 			snprintf(line, sizeof(line), "VNOP_PAGEIN_REACHED=%s\n", g_xzs_vnop_pagein_called ? "yes" : "no");
-			XZS_ABORT_EMIT2(line);
+			XZS_ABORT_EMIT(line);
 		}
 		if (thread->t_rr_state.trr_fault_state != TRR_FAULT_NONE) {
 			thread_reset_pcs_done_faulting(thread);

@@ -25645,14 +25645,14 @@ xzs_diag_inspect_map_entry(vm_map_t map, mach_vm_offset_t addr)
 	vm_map_entry_t entry = NULL;
 	boolean_t found = FALSE;
 	if (map == VM_MAP_NULL) {
-		XZS_MAP_EMIT("\n[XZS-T2N2] VM_ENTRY_BACKING\nENTRY_FOR_0x1000002f0=no\nENTRY_FOUND=no\nENTRY_START=NOT_OBSERVED\nENTRY_END=NOT_OBSERVED\nVM_OBJECT=NOT_OBSERVED\nOBJECT_INTERNAL=NOT_OBSERVED\nOBJECT_EXTERNAL=NOT_OBSERVED\nPAGER=NOT_OBSERVED\nENTRY_CONTROL=NOT_OBSERVED\n");
+		XZS_MAP_EMIT("\n[XZS-T2N3] VM_ENTRY_BACKING\nENTRY_FOR_0x1000002f0=no\nENTRY_FOUND=no\nENTRY_START=NOT_OBSERVED\nENTRY_END=NOT_OBSERVED\nVM_OBJECT=NOT_OBSERVED\nOBJECT_INTERNAL=NOT_OBSERVED\nOBJECT_EXTERNAL=NOT_OBSERVED\nPAGER=NOT_OBSERVED\nENTRY_CONTROL=NOT_OBSERVED\n");
 		return;
 	}
 
 	vm_map_lock_read(map);
 	found = vm_map_lookup_entry(map, addr, &entry);
 
-	XZS_MAP_EMIT("\n[XZS-T2N2] VM_ENTRY_BACKING\n");
+	XZS_MAP_EMIT("\n[XZS-T2N3] VM_ENTRY_BACKING\n");
 	snprintf(xline, sizeof(xline), "ENTRY_FOR_0x1000002f0=%s\n", found ? "yes" : "no");
 	XZS_MAP_EMIT(xline);
 	snprintf(xline, sizeof(xline), "ENTRY_FOUND=%s\n", found ? "yes" : "no");

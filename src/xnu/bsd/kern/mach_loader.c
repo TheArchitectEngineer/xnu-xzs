@@ -725,7 +725,7 @@ load_machfile(
 		off_t ubc_sz = ubc_present ? ubc_getsize(vp) : 0;
 		memory_object_control_t exec_ctrl = ubc_present ? ubc_getobject(vp, UBC_FLAGS_NONE) : MEMORY_OBJECT_CONTROL_NULL;
 
-		XZS_LOADER_EMIT("\n[XZS-T2N2] EXEC_VNODE_IDENT\n");
+		XZS_LOADER_EMIT("\n[XZS-T2N3] EXEC_VNODE_IDENT\n");
 		snprintf(xline, sizeof(xline), "EXEC_PATH=%s\n", (imgp->ip_startargv && imgp->ip_startargv[0]) ? imgp->ip_startargv : "/bin/hello");
 		XZS_LOADER_EMIT(xline);
 		snprintf(xline, sizeof(xline), "EXEC_VNODE=%p\n", (void *)vp);
@@ -1218,7 +1218,7 @@ parse_machfile(
 		int ubc_p = UBCINFOEXISTS(vp);
 		off_t ubc_s = ubc_p ? ubc_getsize(vp) : 0;
 
-		XZS_LOADER_EMIT_C("\n[XZS-T2N2] LOADER_UBC_CONTROL\n");
+		XZS_LOADER_EMIT_C("\n[XZS-T2N3] LOADER_UBC_CONTROL\n");
 		snprintf(xline, sizeof(xline), "LOADER_VNODE=%p\n", (void *)vp);
 		XZS_LOADER_EMIT_C(xline);
 		snprintf(xline, sizeof(xline), "LOADER_UBC_INFO_PRESENT=%s\n", ubc_p ? "yes" : "no");
@@ -2255,7 +2255,7 @@ map_segment(
 
 		int nentries_after = xzs_diag_map_nentries(map);
 
-		XZS_LOADER_EMIT_M("\n[XZS-T2N2] MAPPING_OPERATION\n");
+		XZS_LOADER_EMIT_M("\n[XZS-T2N3] MAPPING_OPERATION\n");
 		XZS_LOADER_EMIT_M("SEGMENT=__TEXT\n");
 		snprintf(xline, sizeof(xline), "MAP_API=%s\n", map_api);
 		XZS_LOADER_EMIT_M(xline);
@@ -2273,7 +2273,7 @@ map_segment(
 		/* Inspect resulting vm_map_entry covering 0x1000002f0 */
 		xzs_diag_inspect_map_entry(map, 0x1000002f0ULL);
 
-		XZS_LOADER_EMIT_M("\n[XZS-T2N2] MAPPING_CLASSIFICATION\n");
+		XZS_LOADER_EMIT_M("\n[XZS-T2N3] MAPPING_CLASSIFICATION\n");
 		if (control != MEMORY_OBJECT_CONTROL_NULL && ret == KERN_SUCCESS) {
 			XZS_LOADER_EMIT_M("MAPPING_CLASSIFICATION=NATIVE_FILE_BACKED\n");
 		} else if (control == MEMORY_OBJECT_CONTROL_NULL && ret == KERN_SUCCESS) {
@@ -2383,7 +2383,7 @@ load_segment(
 		extern void xzs_bringup_console_write(const void *buf, int len);
 		#define XZS_LOADER_EMIT_S(s) do { int _l = 0; while ((s)[_l]) _l++; xzs_bringup_console_write((s), _l); } while(0)
 
-		XZS_LOADER_EMIT_S("\n[XZS-T2N2] SEGMENT_TEXT_INFO\n");
+		XZS_LOADER_EMIT_S("\n[XZS-T2N3] SEGMENT_TEXT_INFO\n");
 		XZS_LOADER_EMIT_S("SEGMENT=__TEXT\n");
 		snprintf(xline, sizeof(xline), "VMADDR=0x%llx\n", (unsigned long long)(slide + scp->vmaddr));
 		XZS_LOADER_EMIT_S(xline);

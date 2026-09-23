@@ -227,6 +227,8 @@ xzsfs_reclaim(struct vnop_reclaim_args *ap)
 static int
 xzsfs_vnop_pagein(struct vnop_pagein_args *ap)
 {
+    extern void xzs_bringup_console_write(const void *buf, int len);
+    xzs_bringup_console_write("[XZS-PAGEIN] ENTER\n", 19);
     vnode_t vp = ap->a_vp;
     upl_t upl = ap->a_pl;
     upl_offset_t pl_offset = ap->a_pl_offset;

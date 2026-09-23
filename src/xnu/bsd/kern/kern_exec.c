@@ -5405,6 +5405,8 @@ execve(proc_t p, struct execve_args *uap, int32_t *retval)
 int
 __mac_execve(proc_t p, struct __mac_execve_args *uap, int32_t *retval __unused)
 {
+	extern void xzs_bringup_console_write(const void *buf, int len);
+	xzs_bringup_console_write("[XZS-EXEC] __mac_execve ENTER\n", 30);
 	struct image_params *imgp = NULL;
 	struct vnode_attr *vap = NULL;
 	struct vnode_attr *origvap = NULL;
