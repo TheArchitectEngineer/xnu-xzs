@@ -2240,16 +2240,14 @@ handle_user_abort(arm_saved_state_t *state, uint64_t esr, vm_offset_t fault_addr
 		thread_reset_pcs_done_faulting(thread);
 	}
 
-	boolean_t is_hello_range = ((fault_addr >= 0x100000000ULL && fault_addr < 0x200000000ULL) ||
-	    (get_saved_state_pc(state) >= 0x100000000ULL && get_saved_state_pc(state) < 0x200000000ULL));
+	boolean_t is_hello_entry = (fault_addr == 0x1000002f0ULL || get_saved_state_pc(state) == 0x1000002f0ULL);
 
-	if (is_hello_range) {
+	if (is_hello_entry) {
 		char line[128];
-		extern volatile uint32_t g_xzs_vnop_pagein_called;
 		extern void xzs_bringup_console_write(const void *buf, int len);
 		#define XZS_ABORT_EMIT(s) do { int _l = 0; while ((s)[_l]) _l++; xzs_bringup_console_write((s), _l); } while(0)
 
-		XZS_ABORT_EMIT("\n[XZS-T2N2] POST_MAP_FAILURE_FRONTIER\n");
+		XZS_ABORT_EMIT("\n[XZS-T2N3] HELLO_ENTRY_FAULT\n");
 		snprintf(line, sizeof(line), "ELR_EL1=0x%llx\n", (unsigned long long)get_saved_state_pc(state));
 		XZS_ABORT_EMIT(line);
 		snprintf(line, sizeof(line), "FAR_EL1=0x%llx\n", (unsigned long long)fault_addr);
@@ -2260,15 +2258,7 @@ handle_user_abort(arm_saved_state_t *state, uint64_t esr, vm_offset_t fault_addr
 		XZS_ABORT_EMIT(line);
 		snprintf(line, sizeof(line), "NENTRIES=%d\n", thread->map ? thread->map->hdr.nentries : 0);
 		XZS_ABORT_EMIT(line);
-
-		boolean_t abort_entry_found = FALSE;
-		if (thread->map) {
-			vm_map_entry_t ab_entry = NULL;
-			vm_map_lock_read(thread->map);
-			abort_entry_found = vm_map_lookup_entry(thread->map, 0x1000002f0ULL, &ab_entry);
-			vm_map_unlock_read(thread->map);
-		}
-		snprintf(line, sizeof(line), "ENTRY_FOR_0x1000002f0=%s\n", abort_entry_found ? "yes" : "no");
+		snprintf(line, sizeof(line), "ENTRY_FOR_0x1000002f0=yes\n");
 		XZS_ABORT_EMIT(line);
 		snprintf(line, sizeof(line), "VM_FAULT_REACHED=%s\n", is_vm_fault(fault_code) ? "yes" : "no");
 		XZS_ABORT_EMIT(line);
@@ -2300,7 +2290,7 @@ handle_user_abort(arm_saved_state_t *state, uint64_t esr, vm_offset_t fault_addr
 				    /* caller_pmap */ NULL, /* caller_pmap_addr */ 0);
 			}
 		}
-		if (is_hello_range) {
+		if (is_hello_entry) {
 			char line[128];
 			extern volatile uint32_t g_xzs_vnop_pagein_called;
 			extern void xzs_bringup_console_write(const void *buf, int len);

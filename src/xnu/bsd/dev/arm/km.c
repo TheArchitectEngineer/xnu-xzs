@@ -368,6 +368,8 @@ extern void xzs_early_putc(char c);
 static inline void
 xzs_console_write(const unsigned char *buf, int len)
 {
+	uint64_t daif = 0;
+	__asm__ volatile("mrs %0, DAIF; msr DAIFSet, #2" : "=r"(daif));
 	uint64_t saved_ttbr0 = 0;
 	__asm__ volatile("mrs %0, TTBR0_EL1" : "=r"(saved_ttbr0));
 	if (g_xzs_ttbr0 != 0) {
@@ -383,6 +385,7 @@ xzs_console_write(const unsigned char *buf, int len)
 	if (g_xzs_ttbr0 != 0) {
 		__asm__ volatile("msr TTBR0_EL1, %0; isb sy" :: "r"(saved_ttbr0));
 	}
+	__asm__ volatile("msr DAIF, %0" :: "r"(daif));
 }
 
 void
