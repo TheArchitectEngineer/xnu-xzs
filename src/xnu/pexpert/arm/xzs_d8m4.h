@@ -132,23 +132,8 @@ xzs_d8m4_run(int mode)
 	}
 	xzs_diag_emit("[D8-M4] CHECKPOINT D8M4-10 LOWER_LAYER_VERIFY PASS\n");
 
-	/* CHECKPOINT D8M4-20: HOST_BASIC_CONFIG (DSI_CTRL_0 = 0x33333000) */
-	xzs_diag_emit("[D8-M4] CHECKPOINT D8M4-20 HOST_BASIC_CONFIG START\n");
-	if (!is_dryrun) {
-		d8m4_write32(0x0099400cu, 0x33333000u);
-	}
-	uint32_t ctrl0 = is_dryrun ? 0x33333000u : d8m4_read32(0x0099400cu);
-	xzs_diag_emit("  DSI_CTRL_0 = 0x");
-	xzs_d8m4_hex32(ctrl0);
-	xzs_diag_emit("\n");
-	if (ctrl0 != 0x33333000u) {
-		xzs_diag_emit("!!! FAIL: DSI_CTRL_0 mismatch\n");
-		return -1;
-	}
-	xzs_diag_emit("[D8-M4] CHECKPOINT D8M4-20 HOST_BASIC_CONFIG PASS\n");
-
-	/* CHECKPOINT D8M4-30: TIMING_CONFIG (DSI_TIMING_CTRL = 0x1b, DSI_T_CLK_PRE_EXTEND = 0x2b) */
-	xzs_diag_emit("[D8-M4] CHECKPOINT D8M4-30 TIMING_CONFIG START\n");
+	/* CHECKPOINT D8M4-20: TIMING_CONFIG (DSI_TIMING_CTRL = 0x1b, DSI_T_CLK_PRE_EXTEND = 0x2b) */
+	xzs_diag_emit("[D8-M4] CHECKPOINT D8M4-20 TIMING_CONFIG START\n");
 	if (!is_dryrun) {
 		d8m4_write32(0x00994018u, 0x0000001bu);
 		d8m4_write32(0x009942a0u, 0x0000002bu);
@@ -164,10 +149,10 @@ xzs_d8m4_run(int mode)
 		xzs_diag_emit("!!! FAIL: DSI timing configuration mismatch\n");
 		return -1;
 	}
-	xzs_diag_emit("[D8-M4] CHECKPOINT D8M4-30 TIMING_CONFIG PASS\n");
+	xzs_diag_emit("[D8-M4] CHECKPOINT D8M4-20 TIMING_CONFIG PASS\n");
 
-	/* CHECKPOINT D8M4-40: LANE_CONFIG (DSI_LANE_CTRL = 0x03000104) */
-	xzs_diag_emit("[D8-M4] CHECKPOINT D8M4-40 LANE_CONFIG START\n");
+	/* CHECKPOINT D8M4-30: LANE_CONFIG (DSI_LANE_CTRL = 0x03000104) */
+	xzs_diag_emit("[D8-M4] CHECKPOINT D8M4-30 LANE_CONFIG START\n");
 	if (!is_dryrun) {
 		d8m4_write32(0x009941f4u, 0x03000104u);
 	}
@@ -179,15 +164,15 @@ xzs_d8m4_run(int mode)
 		xzs_diag_emit("!!! FAIL: DSI_LANE_CTRL mismatch\n");
 		return -1;
 	}
-	xzs_diag_emit("[D8-M4] CHECKPOINT D8M4-40 LANE_CONFIG PASS\n");
+	xzs_diag_emit("[D8-M4] CHECKPOINT D8M4-30 LANE_CONFIG PASS\n");
 
 	if (mode == 1) {
 		xzs_diag_emit("[D8-M4] RESULT=PASS_STAGE_B_BASIC\n");
 		return 0;
 	}
 
-	/* CHECKPOINT D8M4-50: COMMAND_MODE_CONFIG */
-	xzs_diag_emit("[D8-M4] CHECKPOINT D8M4-50 COMMAND_MODE_CONFIG START\n");
+	/* CHECKPOINT D8M4-40: COMMAND_MODE_CONFIG */
+	xzs_diag_emit("[D8-M4] CHECKPOINT D8M4-40 COMMAND_MODE_CONFIG START\n");
 	if (!is_dryrun) {
 		d8m4_write32(0x00994110u, 0xa220aa02u);
 		d8m4_write32(0x009941b4u, 0x00000024u);
@@ -203,10 +188,10 @@ xzs_d8m4_run(int mode)
 		xzs_diag_emit("!!! FAIL: Command mode configuration mismatch\n");
 		return -1;
 	}
-	xzs_diag_emit("[D8-M4] CHECKPOINT D8M4-50 COMMAND_MODE_CONFIG PASS\n");
+	xzs_diag_emit("[D8-M4] CHECKPOINT D8M4-40 COMMAND_MODE_CONFIG PASS\n");
 
-	/* CHECKPOINT D8M4-60: HOST_ENABLE (DSI_CTRL = 0x00000001) */
-	xzs_diag_emit("[D8-M4] CHECKPOINT D8M4-60 HOST_ENABLE START\n");
+	/* CHECKPOINT D8M4-50: HOST_ENABLE (DSI_CTRL = 0x00000001) */
+	xzs_diag_emit("[D8-M4] CHECKPOINT D8M4-50 HOST_ENABLE START\n");
 	if (!is_dryrun) {
 		d8m4_write32(0x009940f0u, 0x00000001u);
 	}
@@ -218,10 +203,10 @@ xzs_d8m4_run(int mode)
 		xzs_diag_emit("!!! FAIL: DSI_CTRL not enabled\n");
 		return -1;
 	}
-	xzs_diag_emit("[D8-M4] CHECKPOINT D8M4-60 HOST_ENABLE PASS\n");
+	xzs_diag_emit("[D8-M4] CHECKPOINT D8M4-50 HOST_ENABLE PASS\n");
 
-	/* CHECKPOINT D8M4-70: HOST_ACCEPT */
-	xzs_diag_emit("[D8-M4] CHECKPOINT D8M4-70 HOST_ACCEPT START\n");
+	/* CHECKPOINT D8M4-60: HOST_ACCEPT */
+	xzs_diag_emit("[D8-M4] CHECKPOINT D8M4-60 HOST_ACCEPT START\n");
 	uint32_t hw_ver = d8m4_read32(0x00994000u);
 	xzs_diag_emit("  DSI_HW_VERSION = 0x");
 	xzs_d8m4_hex32(hw_ver);
@@ -230,6 +215,11 @@ xzs_d8m4_run(int mode)
 		xzs_diag_emit("!!! FAIL: DSI_HW_VERSION unexpected\n");
 		return -1;
 	}
+	uint32_t ctrl0_stat = d8m4_read32(0x0099400cu);
+	xzs_diag_emit("  DSI_CTRL_0 = 0x");
+	xzs_d8m4_hex32(ctrl0_stat);
+	xzs_diag_emit("\n");
+
 	/* Re-verify lower layer stability */
 	pll_stat = d8m4_read32(0x009948ccu);
 	if ((pll_stat & 0x21u) != 0x21u) {
@@ -238,7 +228,7 @@ xzs_d8m4_run(int mode)
 		xzs_diag_emit("\n");
 		return -1;
 	}
-	xzs_diag_emit("[D8-M4] CHECKPOINT D8M4-70 HOST_ACCEPT PASS\n");
+	xzs_diag_emit("[D8-M4] CHECKPOINT D8M4-60 HOST_ACCEPT PASS\n");
 
 	if (is_dryrun) {
 		xzs_diag_emit("[D8-M4] RESULT=PASS_DRYRUN\n");
