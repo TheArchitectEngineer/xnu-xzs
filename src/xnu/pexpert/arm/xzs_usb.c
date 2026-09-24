@@ -904,7 +904,7 @@ volatile uint32_t g_xzs_usb_z5_bytes[4] = { 0, 0, 0, 0 };
 static boolean_t
 xzs_tx_lock_acquire(void)
 {
-	for (uint32_t spin = 0; spin < 100000; spin++) {
+	for (uint32_t spin = 0; spin < 4096; spin++) {
 		uint32_t locked;
 		uint32_t status;
 		__asm__ volatile(
@@ -1882,7 +1882,6 @@ xzs_t1z_tx_worker(thread_call_param_t p0 __unused, thread_call_param_t p1 __unus
 		return;
 	}
 	if (!xzs_tx_lock_acquire()) {
-		xzs_tx_kick();
 		return;
 	}
 	while (count < sizeof(tmp) && s_tx_tail != s_tx_head) {

@@ -365,47 +365,11 @@ kmtimeout(void *arg)
 extern uint64_t g_xzs_ttbr0;
 extern void xzs_early_putc(char c);
 
-static volatile uint32_t s_xzs_console_lock = 0;
-
-static inline void
-xzs_console_lock_acquire(void)
-{
-	for (uint32_t spin = 0; spin < 100000; spin++) {
-		uint32_t locked;
-		uint32_t status;
-		__asm__ volatile(
-			"ldaxr %w0, [%2]\n"
-			"cbnz %w0, 1f\n"
-			"stlxr %w1, %w3, [%2]\n"
-			"cbnz %w1, 1f\n"
-			"mov %w0, #0\n"
-			"b 2f\n"
-			"1:\n"
-			"clrex\n"
-			"mov %w0, #1\n"
-			"2:\n"
-			: "=&r"(locked), "=&r"(status)
-			: "r"(&s_xzs_console_lock), "r"(1)
-			: "memory");
-		if (locked == 0) {
-			return;
-		}
-		__asm__ volatile("yield");
-	}
-}
-
-static inline void
-xzs_console_lock_release(void)
-{
-	__asm__ volatile("stlr %w0, [%1]" :: "r"(0), "r"(&s_xzs_console_lock) : "memory");
-}
-
 static inline void
 xzs_console_write(const unsigned char *buf, int len)
 {
 	uint64_t daif = 0;
 	__asm__ volatile("mrs %0, DAIF; msr DAIFSet, #0xf" : "=r"(daif));
-	xzs_console_lock_acquire();
 	if (g_xzs_ttbr0 != 0) {
 		uint64_t saved_ttbr0 = 0;
 		__asm__ volatile("mrs %0, TTBR0_EL1" : "=r"(saved_ttbr0));
@@ -419,10 +383,9 @@ xzs_console_write(const unsigned char *buf, int len)
 			xzs_early_putc((char)buf[i]);
 		}
 	}
+	__asm__ volatile("msr DAIF, %0" :: "r"(daif));
 	extern void xzs_usb_console_write(const unsigned char *buf, int len);
 	xzs_usb_console_write(buf, len);
-	xzs_console_lock_release();
-	__asm__ volatile("msr DAIF, %0" :: "r"(daif));
 }
 
 void
