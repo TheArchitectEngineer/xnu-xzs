@@ -5,13 +5,18 @@ mkdir -p artifacts/builds
 
 echo "=== Packaging artifacts/builds/xzs-xnu-boot.img ==="
 
-# 1. Rebuild bootshim if needed
-make -C src/xzs-bootshim all
+# 1. Use proven working-bootshim.bin if available, otherwise rebuild
+BOOTSHIM_SRC="src/xzs-bootshim/bootshim.bin"
+if [ -f "artifacts/builds/working-bootshim.bin" ]; then
+    BOOTSHIM_SRC="artifacts/builds/working-bootshim.bin"
+else
+    make -C src/xzs-bootshim all
+fi
 
 # 2. Compress bootshim with gzip and append genuine DTB (matching TWRP Image.gz-dtb format)
-gzip -n -9 -c src/xzs-bootshim/bootshim.bin > src/xzs-bootshim/bootshim.bin.gz
-cat src/xzs-bootshim/bootshim.bin.gz artifacts/builds/twrp-extracted.dtb > src/xzs-bootshim/bootshim-gz-dtb.bin
-echo "Created Image.gz-dtb: bootshim.gz ($(wc -c < src/xzs-bootshim/bootshim.bin.gz) B) + DTB ($(wc -c < artifacts/builds/twrp-extracted.dtb) B) = total $(wc -c < src/xzs-bootshim/bootshim-gz-dtb.bin) B"
+gzip -n -9 -c "${BOOTSHIM_SRC}" > artifacts/builds/bootshim.bin.gz
+cat artifacts/builds/bootshim.bin.gz artifacts/builds/twrp-extracted.dtb > artifacts/builds/bootshim-gz-dtb.bin
+echo "Created Image.gz-dtb: bootshim.gz ($(wc -c < artifacts/builds/bootshim.bin.gz) B) + DTB ($(wc -c < artifacts/builds/twrp-extracted.dtb) B) = total $(wc -c < artifacts/builds/bootshim-gz-dtb.bin) B"
 
 # 3. Package boot.img with bootshim as kernel and XNU Mach-O as ramdisk (at 0x82000000)
 KERNEL_XNU="src/xnu/BUILD/obj/DEVELOPMENT_ARM64_VMAPPLE/kernel.development.vmapple"
@@ -21,7 +26,7 @@ if [ "${STANDALONE:-0}" != "1" ] && [ -f "${KERNEL_XNU}" ]; then
     echo "Flattening Mach-O segments to 1:1 physical memory mapping..."
     python3 scripts/flatten_macho.py "${KERNEL_XNU}" artifacts/builds/kernel.flat
     python3 scripts/mkbootimg.py \
-      --kernel src/xzs-bootshim/bootshim-gz-dtb.bin \
+      --kernel artifacts/builds/bootshim-gz-dtb.bin \
       --ramdisk artifacts/builds/kernel.flat \
       --base 0x80000000 \
       --kernel_offset 0x00008000 \

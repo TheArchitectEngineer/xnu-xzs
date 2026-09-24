@@ -103,6 +103,23 @@ unix_syscall(
 	code = arm_get_syscall_number(state);
 
 #if CONFIG_XZS_BRINGUP
+	extern void xzs_bringup_console_write(const void *buf, int len);
+	if (proc && proc_pid(proc) == 1) {
+		char scm[128];
+		int scl = snprintf(scm, sizeof(scm),
+		    "[XZS-T4F] SHELL_PROMPT_SYSCALL_ENTER pid=1 code=%d r0=0x%llx r1=0x%llx\n",
+		    code,
+		    (unsigned long long)saved_state64(state)->x[0],
+		    (unsigned long long)saved_state64(state)->x[1]);
+		xzs_bringup_console_write(scm, scl);
+	} else if (code == 1 || code == 4 || code == 7) {
+		char scm[96];
+		int scl = snprintf(scm, sizeof(scm), "[XZS-SC] pid=%d code=%d r0=0x%llx r1=0x%llx\n",
+		    proc_pid(proc), code,
+		    (unsigned long long)saved_state64(state)->x[0],
+		    (unsigned long long)saved_state64(state)->x[1]);
+		xzs_bringup_console_write(scm, scl);
+	}
 	extern volatile boolean_t xzs_d6m4_probe_armed;
 	extern thread_t xzs_d6m4_target_thread;
 	extern struct xzs_d6m4_r650_telemetry xzs_d6m4_r650_telemetry;
@@ -283,6 +300,15 @@ skip_syscall:
 	}
 
 	uthread_assert_zero_proc_refcount(uthread);
+
+#if CONFIG_XZS_BRINGUP
+	if (code == 1 || code == 4 || code == 7) {
+		char scrm[96];
+		int scrl = snprintf(scrm, sizeof(scrm), "[XZS-SC-RET] pid=%d code=%d err=%d r0=0x%llx\n",
+		    proc_pid(proc), code, error, (unsigned long long)uthread->uu_rval[0]);
+		xzs_bringup_console_write(scrm, scrl);
+	}
+#endif
 }
 
 void
@@ -337,10 +363,29 @@ unix_syscall_return(int error)
 		 */
 		throttle_lowpri_io(1);
 	}
+
 	if (kdebug_enable && !code_is_kdebug_trace(code)) {
 		KDBG_RELEASE(BSDDBG_CODE(DBG_BSD_EXCP_SC, code) | DBG_FUNC_END,
 		    error, uthread->uu_rval[0], uthread->uu_rval[1], proc_getpid(proc));
 	}
+
+#if CONFIG_XZS_BRINGUP
+	{
+		extern void xzs_bringup_console_write(const void *buf, int len);
+		arm_saved_state64_t *s64 = (regs && is_saved_state64(regs)) ? saved_state64(regs) : NULL;
+		char retm[128];
+		int retl = snprintf(retm, sizeof(retm),
+		    "[XZS-T4R] CP=UNIX_SC_RET pid=%d code=%d err=%d r0=0x%llx pc=0x%llx sp=0x%llx\n",
+		    proc ? proc_pid(proc) : -1, (int)code, error,
+		    (unsigned long long)uthread->uu_rval[0],
+		    s64 ? (unsigned long long)s64->pc : 0ULL,
+		    s64 ? (unsigned long long)s64->sp : 0ULL);
+		xzs_bringup_console_write(retm, retl);
+		if (proc && proc_pid(proc) == 1 && code == 7) {
+			xzs_bringup_console_write("[XZS-T4F] USER_PID1_RESUMED\n", 28);
+		}
+	}
+#endif
 
 	thread_exception_return();
 	/* NOTREACHED */
@@ -363,6 +408,7 @@ arm_prepare_u32_syscall_return(const struct sysent *callp, arm_saved_state_t *re
 			ss32->cpsr |= PSR_CF;
 			unix_syscall_return_kprintf("error: setting carry to trigger cerror call\n");
 		} else {        /* (not error) */
+			ss32->cpsr &= ~PSR_CF;
 			switch (callp->sy_return_type) {
 			case _SYSCALL_RET_INT_T:
 			case _SYSCALL_RET_UINT_T:
@@ -571,6 +617,7 @@ arm_prepare_u64_syscall_return(const struct sysent *callp, arm_saved_state_t *re
 			ss64->cpsr |= PSR64_CF;
 			unix_syscall_return_kprintf("error: setting carry to trigger cerror call\n");
 		} else {        /* (not error) */
+			ss64->cpsr &= ~PSR64_CF;
 			switch (callp->sy_return_type) {
 			case _SYSCALL_RET_INT_T:
 				ss64->x[0] = uthread->uu_rval[0];

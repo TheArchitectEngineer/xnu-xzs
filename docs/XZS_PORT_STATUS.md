@@ -1,26 +1,25 @@
 # Sony Xperia XZs (MSM8996) — Port Status
 
-Current milestone is D8-M2, tag `xzs-d8-m2-complete` (`545398f30d8fda592d4ca67ee867a016c2f37092`). Display power domains and core MDSS clocks (AHB, AXI, MDP) are hardware-verified.
+Current sealed milestone is D7-T2, tag `xzs-d7t2-full-complete`. Generic native file-backed Mach-O execution (`/bin/hello`, `/bin/args` with multiple argv layouts) is hardware-sealed across 14 external exec cycles without panic or reset. DEBT-001 is RESOLVED. Display power domains and core MDSS clocks (AHB, AXI, MDP) are hardware-verified (`xzs-d8-m2-complete`). Next active milestone is D8-M3.
 
 ```text
-D8-M1 = PASS
-D8-M2 = PASS
-D8-M3 = NOT STARTED
+D7-T1 = PASS (USB transport)
+D7-T2 = PASS (generic native Mach-O execution; DEBT-001 RESOLVED)
+D8-M1 = PASS (display topology audit)
+D8-M2 = PASS (display power & core clocks)
+D8-M3 = NEXT (DSI controller / PHY / PLL / panel scanout)
 ```
 
-D8-M2 hardware verification on candidate `545398f`:
-
-```text
-MMAGIC_MDSS_GDSC    ON     0xa0222000
-MDSS_GDSC           ON     0xa0222000
-critical MMAGIC     ON     mmss_mmagic_ahb, mmss_mmagic_cfg_ahb, mmagic_mdss_noc_cfg_ahb, mmagic_mdss_axi
-mdss_ahb            ON     0x20008001 (enable=1, halt=0)
-mdss_axi            ON     0x00006221 (enable=1, halt=0)
-mdss_mdp            ON     0x00006221 (enable=1, halt=0)
-DSI/PHY/PLL         NOT STARTED (out of scope for D8-M2)
-```
-
-Read [`README.md`](../README.md), [`docs/XZS_DISPLAY_BRINGUP.md`](XZS_DISPLAY_BRINGUP.md), and [`docs/XZS_BLOCKERS_AND_DEFERRED.md`](XZS_BLOCKERS_AND_DEFERRED.md). The sections below keep the older sealed-phase record.
+D7-T2 hardware verification summary:
+- Native XZSFS regular vnodes attached to UBC (`VREG`).
+- File-backed Mach-O mappings created via `vm_map_enter_mem_object_control()`.
+- Read-only `VNOP_PAGEIN` demand paging via `DIRECT_UPL` zero-copy I/O.
+- Old exec thread cleanly retired via `AST_APC` `thread_terminate_self()`.
+- Syscall return Carry flag cleared on success for ARM32 and ARM64.
+- Userland page faults permitted after shell initialization.
+- Validated on hardware: `/bin/hello`, `/bin/args`, `/bin/args test`, `/bin/args a bb ccc dddd`, `/bin/args one two three`.
+- 14 external exec cycles verified across two independent fresh-boot mixed runs.
+- `PANIC = 0`, `RESET = 0`. Full reports: `artifacts/reports/D7_T2N5_SEAL_REPORT.md`, `artifacts/reports/D7_T2N6_SEAL_REPORT.md`.
 
 ---
 

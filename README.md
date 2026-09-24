@@ -60,30 +60,74 @@ Recovery is power-off by holding the Sony keys, then fastboot, then `fastboot bo
 ## Current milestones
 
 ```text
-native XNU boot          PASS
-MMU/cache                PASS
-interrupts/timer         PASS
-SMP                      PASS
-BSD/VFS                  PASS
-storage                  PASS
-XZSFS                    PASS
-EL0/PID1                 PASS
-/bin/sh                  PASS
-interactive shell        PASS
-USB transport            PASS
-display audit            PASS       D8-M1
-display power bring-up   PASS       D8-M2
-display controller / DSI NOT STARTED D8-M3
+Phase      Area                              Status
+-------------------------------------------------------
+A          Native XNU entry                  PASS
+B          Platform bring-up                 PASS
+C          SMP                               PASS
+D1         BSD/VFS                           PASS
+D2         eMMC                              PASS
+D3         GPT                               PASS
+D4         block/bdev                        PASS
+D5         XZSFS                             PASS
+D6         PID1 / EL0                        PASS
+D7-M2      PID1 -> /bin/sh                   PASS
+D7-M3      interactive shell                 PASS
+D7-M4      stdin/tty/read                    PASS
+D7-T1      USB transport                     PASS
+D7-T2      generic native Mach-O exec        PASS
+D8-M1      MDSS/MMCC topology                PASS
+D8-M2      display power/core clocks         PASS
+D8-M3      DSI PHY/PLL/lanes                 NEXT
 ```
 
-Tags that name durable milestones: `xzs-d7t1-complete`, `xzs-d7t2-deferred`, `xzs-d7t2-lite-complete`, `xzs-d8-m1-complete`, `xzs-d8-m2-complete`.
+Tags that name durable milestones: `xzs-d7t1-complete`, `xzs-d7t2-full-complete`, `xzs-d8-m1-complete`, `xzs-d8-m2-complete`.
+
+## Generic Native Mach-O Execution (Phase D7-T2)
+
+Phase D7-T2 established and hardware-sealed native file-backed Mach-O execution directly from the XZSFS root filesystem on Sony Xperia XZs:
+
+* **Hardware-Verified Binaries**:
+  - `/bin/hello`: Minimal Darwin userspace reference executable (`SYS_write`, `SYS_exit(0)`).
+  - `/bin/args`: Generic diagnostic binary validating user stack argument unpacking (`argc`, `argv[0..N]`, NULL termination).
+* **Architectural Execution Pipeline**:
+  - `VREG` + Unified Buffer Cache (UBC) attachment via `ubc_info_init()`
+  - File-backed Mach-O segment mapping via `vm_map_enter_mem_object_control()`
+  - Read-only XZSFS `VNOP_PAGEIN` demand paging using `DIRECT_UPL` zero-copy I/O and EOF zero-fill
+  - Return to EL0 via `task_wait_to_return` / `thread_bootstrap_return`
+  - Canonical Darwin 64-bit syscall path (`svc #0x80`)
+  - Asynchronous old exec-thread teardown via `AST_APC` (`thread_terminate_self()`), preventing task-switch hangs and duplicate process exit races
+  - Parent PID 1 synchronous child reaping via `wait4()` and clean prompt return
+  - Carry flag explicitly cleared on successful syscall returns in both ARM32 and ARM64 paths
+  - Interactive shell demand-page faults and generic SVC dispatch permitted in `sleh.c`
+* **Hardware Verification Proof**:
+  - **14 total external exec cycles** validated on physical silicon across fresh boots
+  - **2 independent fresh-boot mixed sequences** (`pwd` → `/bin/hello` → `/bin/args a b c` → `/bin/hello` → `/bin/args x y` → `/bin/hello` → `pwd`)
+  - Zero panics (`PANIC=0`), Zero watchdog resets (`RESET=0`)
+  - Full reports: [`artifacts/reports/D7_T2N5_SEAL_REPORT.md`](artifacts/reports/D7_T2N5_SEAL_REPORT.md), [`artifacts/reports/D7_T2N6_SEAL_REPORT.md`](artifacts/reports/D7_T2N6_SEAL_REPORT.md)
+
+### What is NOT Supported Yet (Userspace Boundary)
+
+Phase D7-T2 establishes minimal static Mach-O execution. It does **NOT** yet prove or claim:
+- `dyld` (dynamic linker)
+- Dynamic libraries / shared caches
+- `libSystem` / C runtime library
+- `launchd` service runtime / daemons
+- Full POSIX API compliance
+- Multithreaded userspace processes
+- GPU acceleration / Metal
+- Touchscreen input
+- Cellular / Wi-Fi / Bluetooth networking
+- Audio subsystem
+- Complete platform power management / sleep states
+- Apple proprietary frameworks (CoreFoundation, Foundation, UIKit, SpringBoard)
 
 ## Display
 
 ```text
 D8-M1 = PASS
 D8-M2 = PASS
-D8-M3 = NOT STARTED
+D8-M3 = NEXT
 ```
 
 D8-M1, tag `xzs-d8-m1-complete` at `861032cb7b137096edeb1aa5caa04aef6737533a`, read the clock controller only. MMAGIC_MDSS_GDSC was `0xa0222000` (on). MDSS_GDSC was `0x00222001` (collapsed).
@@ -97,7 +141,7 @@ D8-M2, tag `xzs-d8-m2-complete` at `545398f30d8fda592d4ca67ee867a016c2f37092`, c
 - `mdss_mdp`: enabled and running (`enable=1, halt=0`, readback `0x00006221`)
 - USB console shell remained fully responsive; zero panics, zero resets.
 
-D8-M3 (DSI host, PHY, PLL, panel, backlight, framebuffer scanout) is NOT STARTED.
+D8-M3 (DSI host, PHY, PLL, panel, backlight, framebuffer scanout) is the NEXT active milestone.
 
 Details: [`docs/XZS_DISPLAY_BRINGUP.md`](docs/XZS_DISPLAY_BRINGUP.md). Bypassed work: [`docs/XZS_BLOCKERS_AND_DEFERRED.md`](docs/XZS_BLOCKERS_AND_DEFERRED.md). Status: [`docs/XZS_PORT_STATUS.md`](docs/XZS_PORT_STATUS.md).
 
@@ -154,8 +198,11 @@ Details: [`docs/XZS_DISPLAY_BRINGUP.md`](docs/XZS_DISPLAY_BRINGUP.md). Bypassed 
 
 ## Current Development Phase
 
-* **Integrated on `main`**: clean D8-M1 display audit, tag `xzs-d8-m1-complete`.
-* **Active bring-up**: D8-M2 display power and clocks on `xzs-d8-m2-power`. That branch is PARTIAL and is not merged.
+* **Integrated on `main`**:
+  - D7-T2 generic native Mach-O execution complete and sealed (tag `xzs-d7t2-full-complete`, `DEBT-001` RESOLVED).
+  - D8-M1 display topology audit complete (tag `xzs-d8-m1-complete`).
+  - D8-M2 display power domain & core clocks hardware-verified (tag `xzs-d8-m2-complete`).
+* **Next active milestone**: D8-M3 (DSI host controller, PHY, PLL, panel, and framebuffer scanout).
 
 ---
 
@@ -172,8 +219,8 @@ Details: [`docs/XZS_DISPLAY_BRINGUP.md`](docs/XZS_DISPLAY_BRINGUP.md). Bypassed 
 | **Phase D4** | Block-storage driver integration (`bdevsw` / `disk0`) | **COMPLETE** |
 | **Phase D5** | Real root filesystem mount (RAMDisk XZSFS v1) | **COMPLETE / SEALED** |
 | **Phase D6** | PID 1 / First EL0 userspace (`initproc` / launchd) | **COMPLETE / SEALED** |
-| **Phase D7** | Interactive USB shell (`/bin/sh`) | **PASS** (external exec DEFERRED) |
-| **Phase D8** | Display audit and power/clock bring-up | **D8-M1 PASS / D8-M2 PARTIAL** |
+| **Phase D7** | Interactive USB shell (`/bin/sh`) & Generic Mach-O exec | **COMPLETE / SEALED** |
+| **Phase D8** | Display audit, power/clocks, and DSI scanout | **D8-M1 PASS / D8-M2 PASS / D8-M3 NEXT** |
 | **Phase D9** | XZSPlatform hardware/platform compatibility layer | **PLANNED** |
 | **Phase D10**| Core native device drivers | **PLANNED** |
 | **Phase D11**| System hardware integration | **PLANNED** |
@@ -235,10 +282,9 @@ The modular `XZSPlatform` design ensures that board support and native drivers c
 
 ## Known Limitations
 
-1. **Generic external exec is deferred**: `/bin/sh` builtins work. Running a separate Mach-O such as `/bin/hello` still loses its VM mappings. See DEBT-001.
-2. **Display is not scanning**: D8-M1 audit passed. D8-M2 has powered MDSS and has not got `mdss_ahb` out of halt. No panel image.
-3. **devfs Pointer-Hardening Bypass**: Commit `3e417bb` bypasses `vm_kernel_addrhash` in `devfs_getattr` to prevent a SHA-256 address hashing hang during early devfs open. Classified as `XZS PLATFORM WORKAROUND` to be re-audited under Phase D9.
-4. **Deferred Subsystems**: Advanced networking (Skywalk, lo0) and DTrace FBT are temporarily deferred until required drivers are active.
+1. **Display is not scanning**: D8-M1 topology audit passed. D8-M2 has powered MDSS and verified clocks (`mdss_ahb`, `mdss_axi`, `mdss_mdp`) on physical hardware. D8-M3 (DSI host, PHY, PLL, panel, framebuffer scanout) is the next milestone.
+2. **devfs Pointer-Hardening Bypass**: Commit `3e417bb` bypasses `vm_kernel_addrhash` in `devfs_getattr` to prevent a SHA-256 address hashing hang during early devfs open. Classified as `XZS PLATFORM WORKAROUND` to be re-audited under Phase D9.
+3. **Deferred Subsystems**: Advanced networking (Skywalk, lo0) and DTrace FBT are temporarily deferred until required drivers are active.
 
 ---
 

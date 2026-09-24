@@ -873,7 +873,7 @@ uint32_t dwc3_read32_pub(uint32_t offset)
  * Z1–Z4 leave g_xzs_usb_console_ready clear, so this path does not run.
  * Lock order: tty_lock, then this lock. Never take tty_lock or log while held.
  */
-#define XZS_TX_RING_SIZE 1024u
+#define XZS_TX_RING_SIZE 16384u
 #define XZS_RX_RING_SIZE 1024u
 static uint8_t s_tx_ring[XZS_TX_RING_SIZE];
 static volatile uint32_t s_tx_head = 0;
@@ -904,7 +904,7 @@ volatile uint32_t g_xzs_usb_z5_bytes[4] = { 0, 0, 0, 0 };
 static boolean_t
 xzs_tx_lock_acquire(void)
 {
-	for (uint32_t spin = 0; spin < 128; spin++) {
+	for (uint32_t spin = 0; spin < 4096; spin++) {
 		uint32_t locked;
 		uint32_t status;
 		__asm__ volatile(

@@ -11,15 +11,17 @@ Status values: `ACTIVE_BLOCKER`, `DEFERRED`, `BYPASSED`, `RESOLVED`, `OBSOLETE`.
 | ID | DEBT-001 |
 | AREA | userspace exec |
 | TITLE | Generic external Mach-O execution loses VM mappings |
-| STATUS | DEFERRED |
+| STATUS | RESOLVED |
 | FIRST_SEEN | D7-T2 on `xzs-d7t2-shell` |
 | LAST_KNOWN_COMMIT | `3f335e65572592d36d76ee718caf7979b3cfad5d` |
-| EVIDENCE | Fork child path proven. EL0 child `x0=0` proven. SVC 59 proven. `execve` entered. Mach-O loader reached. Entry point `0x1000002f0` identified. `load_machfile()` reports success. Final task `vm_map` has `min=0x100000000`, `max=0x00007ffffe000000`, `nentries=0`. `__TEXT` is missing. `vm_fault(0x1000002f0)` returns `KERN_INVALID_ADDRESS`. Frozen branch `xzs-d7t2-shell`. Tag `xzs-d7t2-deferred`. Notes: `docs/XZS_D7_T2_DEFERRED.md`. |
-| IMPACT | A general external executable cannot be started. |
-| CURRENT_BYPASS | Interactive `/bin/sh` stays usable. Shell builtins provide diagnostics. Generic external exec is not required for D8 display bring-up. |
-| WHY_DEFERRED | Display bring-up does not need `/bin/hello`. |
-| RESUME_CONDITION | Before full Darwin userland, launchd/service spawning, or general external executable support is required. |
-| NEXT_INVESTIGATION | Trace where Mach-O segment `vm_map` entries are created and where they disappear before the final task map becomes active. |
+| FIX_COMMITS | `fd5549f` (UBC attachment), `f377b45` (Mach-O mapping), `ace3c19`/`d3478e3` (VNOP_PAGEIN), `09e34f2` (pager data/zero-fill), `ea85c04` (exec thread teardown), `f408d26` (syscall carry clear & EL0 faults), `6321b33` (generic args & repeated exec) |
+| HARDWARE_PROOF | Fully resolved in Phase D7-T2N. Native XZSFS regular vnodes attached to UBC; file-backed Mach-O `__TEXT` mapped via `vm_map_enter_mem_object_control`; read-only `VNOP_PAGEIN` demand-paged via `DIRECT_UPL`; old exec-thread cleanly retired via `AST_APC` `thread_terminate_self`; Carry flag cleared on syscall return; EL0 user faults permitted. Verified on hardware: `/bin/hello` sealed, `/bin/args` sealed across multiple argv layouts (`/bin/args`, `/bin/args test`, `/bin/args a bb ccc dddd`, `/bin/args one two three`), 14 total external exec cycles across 2 independent fresh-boot mixed runs, parent `wait4` reap verified, prompt returned, `PANIC=0`, `RESET=0`. See `artifacts/reports/D7_T2N5_SEAL_REPORT.md` and `artifacts/reports/D7_T2N6_SEAL_REPORT.md`. |
+| HISTORICAL_EVIDENCE | Fork child path proven. EL0 child `x0=0` proven. SVC 59 proven. `execve` entered. Mach-O loader reached. Entry point `0x1000002f0` identified. `load_machfile()` reports success. Final task `vm_map` has `min=0x100000000`, `max=0x00007ffffe000000`, `nentries=0`. `__TEXT` is missing. `vm_fault(0x1000002f0)` returns `KERN_INVALID_ADDRESS`. Frozen branch `xzs-d7t2-shell`. Tag `xzs-d7t2-deferred`. Notes: `docs/XZS_D7_T2_DEFERRED.md`. |
+| IMPACT | A general external executable cannot be started. (RESOLVED: `/bin/hello` and `/bin/args` execute natively in EL0). |
+| CURRENT_BYPASS | None required; generic native Mach-O execution is fully functional on hardware. |
+| WHY_DEFERRED | (Historical) Display bring-up did not need `/bin/hello`. |
+| RESUME_CONDITION | Resumed and completed in milestone D7-T2N. |
+| NEXT_INVESTIGATION | None; sealed in D7-T2N-6. |
 
 ## DEBT-002
 

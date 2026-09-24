@@ -1482,6 +1482,11 @@ exit(proc_t p, struct exit_args *uap, int *retval)
 #if CONFIG_XZS_BRINGUP
 	{
 		extern void xzs_exec_mark(const char *tag);
+		extern void xzs_bringup_console_write(const void *buf, int len);
+		char emsg[96];
+		int elen = snprintf(emsg, sizeof(emsg), "[XZS-T4R] CP=T4R-10 ROLE=CHILD PID=%d SYS_EXIT_ENTER status=%d\n",
+		    proc_pid(p), (int)uap->rval);
+		xzs_bringup_console_write(emsg, elen);
 		xzs_exec_mark("E30 exit entered");
 	}
 #endif
@@ -2634,6 +2639,14 @@ proc_exit(proc_t p)
 		KERNEL_DEBUG_CONSTANT_IST(KDEBUG_COMMON,
 		    BSDDBG_CODE(DBG_BSD_PROC, BSD_PROC_EXIT) | DBG_FUNC_END,
 		    pid, exitval, 0, 0, 0);
+#if CONFIG_XZS_BRINGUP
+		{
+			extern void xzs_bringup_console_write(const void *buf, int len);
+			char zmsg[96];
+			int zlen = snprintf(zmsg, sizeof(zmsg), "[XZS-T4R] CP=T4R-70 ROLE=CHILD PID=%d CHILD_REAPABLE\n", proc_pid(p));
+			xzs_bringup_console_write(zmsg, zlen);
+		}
+#endif
 		p->p_stat = SZOMB;
 		/*
 		 * The current process can be reaped so, no one
@@ -2642,6 +2655,15 @@ proc_exit(proc_t p)
 
 		psignal(pp, SIGCHLD);
 
+#if CONFIG_XZS_BRINGUP
+		{
+			extern void xzs_bringup_console_write(const void *buf, int len);
+			char wmsg[112];
+			int wlen = snprintf(wmsg, sizeof(wmsg), "[XZS-T4R] CP=T4R-80 ROLE=PARENT PARENT_WAIT4_WAKE parent_pid=%d child_pid=%d\n",
+			    proc_pid(pp), proc_pid(p));
+			xzs_bringup_console_write(wmsg, wlen);
+		}
+#endif
 		/* and now wakeup the parent */
 		proc_list_lock();
 		wakeup((caddr_t)pp);
@@ -2882,6 +2904,15 @@ wait1continue(int result)
 	struct wait4_nocancel_args *uap;
 	int *retval;
 
+#if CONFIG_XZS_BRINGUP
+	{
+		extern void xzs_bringup_console_write(const void *buf, int len);
+		char cmsg[96];
+		int clen = snprintf(cmsg, sizeof(cmsg), "[XZS-T4R] CP=WAIT1CONT_ENTER result=%d\n", result);
+		xzs_bringup_console_write(cmsg, clen);
+	}
+#endif
+
 	if (result) {
 		return result;
 	}
@@ -2893,7 +2924,18 @@ wait1continue(int result)
 	wait4_data = &uth->uu_save.uus_wait4_data;
 	uap = wait4_data->args;
 	retval = wait4_data->retval;
-	return wait4_nocancel(p, uap, retval);
+	int ret = wait4_nocancel(p, uap, retval);
+
+#if CONFIG_XZS_BRINGUP
+	{
+		extern void xzs_bringup_console_write(const void *buf, int len);
+		char cmsg[96];
+		int clen = snprintf(cmsg, sizeof(cmsg), "[XZS-T4R] CP=WAIT1CONT_RETURN ret=%d\n", ret);
+		xzs_bringup_console_write(cmsg, clen);
+	}
+#endif
+
+	return ret;
 }
 
 int
@@ -2935,6 +2977,16 @@ wait4_nocancel(proc_t q, struct wait4_nocancel_args *uap, int32_t *retval)
 	if (uap->pid == INT_MIN) {
 		return EINVAL;
 	}
+
+#if CONFIG_XZS_BRINGUP
+	{
+		extern void xzs_bringup_console_write(const void *buf, int len);
+		char wemsg[96];
+		int welen = snprintf(wemsg, sizeof(wemsg), "[XZS-T4R] CP=WAIT4_ENTER PARENT_PID=%d target_pid=%d\n",
+		    proc_pid(q), (int)uap->pid);
+		xzs_bringup_console_write(wemsg, welen);
+	}
+#endif
 
 loop:
 	proc_list_lock();
@@ -3039,9 +3091,27 @@ loop1:
 				}
 			}
 
+#if CONFIG_XZS_BRINGUP
+			{
+				extern void xzs_bringup_console_write(const void *buf, int len);
+				char wrmsg[96];
+				int wrlen = snprintf(wrmsg, sizeof(wrmsg), "[XZS-T4R] CP=WAIT4_REAP PARENT_PID=%d CHILD_PID=%d\n",
+				    proc_pid(q), proc_getpid(p));
+				xzs_bringup_console_write(wrmsg, wrlen);
+			}
+#endif
 			/* Clean up */
 			(void)reap_child_locked(q, p, reap_flags);
 
+#if CONFIG_XZS_BRINGUP
+			{
+				extern void xzs_bringup_console_write(const void *buf, int len);
+				char wretmsg[128];
+				int wretlen = snprintf(wretmsg, sizeof(wretmsg), "[XZS-T4R] CP=T4R-90 ROLE=PARENT PID=%d PARENT_WAIT4_RETURN child_pid=%d thread=%p\n",
+				    proc_pid(q), retval[0], (void *)current_thread());
+				xzs_bringup_console_write(wretmsg, wretlen);
+			}
+#endif
 			return 0;
 		}
 		if (p->p_stat == SSTOP && (p->p_lflag & P_LWAITED) == 0 &&
@@ -3114,6 +3184,14 @@ loop1:
 	wait4_data->retval = retval;
 
 	thread_set_pending_block_hint(current_thread(), kThreadWaitOnProcess);
+#if CONFIG_XZS_BRINGUP
+	{
+		extern void xzs_bringup_console_write(const void *buf, int len);
+		char wsmsg[96];
+		int wslen = snprintf(wsmsg, sizeof(wsmsg), "[XZS-T4R] CP=WAIT4_SLEEP PARENT_PID=%d\n", proc_pid(q));
+		xzs_bringup_console_write(wsmsg, wslen);
+	}
+#endif
 	if ((error = msleep0((caddr_t)q, &proc_list_mlock, PWAIT | PCATCH | PDROP, "wait", 0, wait1continue))) {
 		return error;
 	}

@@ -465,6 +465,14 @@ thread_terminate_self(void)
 	void *bsd_info = get_bsdtask_info(task);
 	int threadcnt;
 
+#if CONFIG_XZS_BRINGUP
+	extern void xzs_bringup_console_write(const void *buf, int len);
+	char thmsg[128];
+	int thlen = snprintf(thmsg, sizeof(thmsg), "[XZS-T4R] CP=T4R-50 THREAD_TERMINATE_SELF_ENTER thread=%p task=%p\n",
+	    (void *)thread, (void *)task);
+	xzs_bringup_console_write(thmsg, thlen);
+#endif
+
 	pal_thread_terminate_self(thread);
 
 	DTRACE_PROC(lwp__exit);
@@ -575,8 +583,10 @@ thread_terminate_self(void)
 	/*
 	 * If we are the last thread to terminate and the task is
 	 * associated with a BSD process, perform BSD process exit.
+	 * If the task transitioned via exec, the BSD process transferred
+	 * to the new task and did not exit.
 	 */
-	if (threadcnt == 0 && bsd_info != NULL) {
+	if (threadcnt == 0 && bsd_info != NULL && !task_did_exec(task)) {
 		mach_exception_data_type_t subcode = 0;
 		if (kdebug_enable) {
 			/* since we're the last thread in this process, trace out the command name too */
@@ -746,6 +756,16 @@ thread_terminate_self(void)
 
 	thread_unlock(thread);
 	/* splsched */
+
+#if CONFIG_XZS_BRINGUP
+	{
+		extern void xzs_bringup_console_write(const void *buf, int len);
+		char bmsg[96];
+		int blen = snprintf(bmsg, sizeof(bmsg), "[XZS-T4R] CP=T4R-60 THREAD_TERMINATE_SELF_PRE_BLOCK thread=%p\n",
+		    (void *)thread);
+		xzs_bringup_console_write(bmsg, blen);
+	}
+#endif
 
 	thread_block((thread_continue_t)thread_terminate_continue);
 	/*NOTREACHED*/

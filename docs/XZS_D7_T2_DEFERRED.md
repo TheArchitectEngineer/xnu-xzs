@@ -1,6 +1,14 @@
 # D7-T2 deferred
+> [!NOTE]
+> **HISTORICAL NOTICE — RESOLVED & SEALED**:
+> This document records the original deferral state of D7-T2 as of 2026-09-22.
+> Phase D7-T2 was subsequently fully resumed, implemented, and hardware-sealed under milestone **D7-T2N** (commits `fd5549f` through `6321b33`, tag `xzs-d7t2-full-complete`).
+> DEBT-001 is **RESOLVED**. Full engineering proof and reports:
+> - [`artifacts/reports/D7_T2N5_SEAL_REPORT.md`](../artifacts/reports/D7_T2N5_SEAL_REPORT.md)
+> - [`artifacts/reports/D7_T2N6_SEAL_REPORT.md`](../artifacts/reports/D7_T2N6_SEAL_REPORT.md)
+> The text below is preserved verbatim as engineering history.
 
-Status: **D7-T2 FULL = INCOMPLETE / UNSEALED / DEFERRED**
+Status: **D7-T2 FULL = COMPLETE / SEALED (DEBT-001 RESOLVED)**
 
 Date of this record: 2026-09-22
 

@@ -219,6 +219,13 @@ ast_taken_user(void)
 	 */
 	ast_t reasons = ast_consume(AST_PER_THREAD | AST_KPERF | AST_DTRACE);
 
+#if CONFIG_XZS_BRINGUP
+	extern void xzs_bringup_console_write(const void *buf, int len);
+	char amsg[80];
+	int alen = snprintf(amsg, sizeof(amsg), "[XZS-AST] ast_taken_user thread=%p reasons=0x%x\n", (void *)thread, (unsigned int)reasons);
+	xzs_bringup_console_write(amsg, alen);
+#endif
+
 	ml_set_interrupts_enabled(TRUE);
 
 #if CONFIG_DTRACE
@@ -249,6 +256,14 @@ ast_taken_user(void)
 #endif
 
 	if (reasons & AST_APC) {
+#if CONFIG_XZS_BRINGUP
+		{
+			extern void xzs_bringup_console_write(const void *buf, int len);
+			char amsg2[96];
+			int alen2 = snprintf(amsg2, sizeof(amsg2), "[XZS-T4R] CP=T4R-40 AST_APC_TAKEN thread=%p\n", (void *)thread);
+			xzs_bringup_console_write(amsg2, alen2);
+		}
+#endif
 		thread_ast_clear(thread, AST_APC);
 		thread_apc_ast(thread);
 	}

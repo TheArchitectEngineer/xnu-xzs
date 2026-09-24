@@ -25628,3 +25628,76 @@ vm_map_maybe_serial_id(vm_map_t maybe_vm_map)
 {
 	return maybe_vm_map != NULL ? maybe_vm_map->serial_id : VM_MAP_SERIAL_NONE;
 }
+
+int
+xzs_diag_map_nentries(vm_map_t map)
+{
+	return map != VM_MAP_NULL ? map->hdr.nentries : 0;
+}
+
+void
+xzs_diag_inspect_map_entry(vm_map_t map, mach_vm_offset_t addr)
+{
+	char xline[160];
+	extern void xzs_bringup_console_write(const void *buf, int len);
+	#define XZS_MAP_EMIT(s) do { int _l = 0; while ((s)[_l]) _l++; xzs_bringup_console_write((s), _l); } while(0)
+
+	vm_map_entry_t entry = NULL;
+	boolean_t found = FALSE;
+	if (map == VM_MAP_NULL) {
+		XZS_MAP_EMIT("\n[XZS-T2N3] VM_ENTRY_BACKING\nENTRY_FOR_0x1000002f0=no\nENTRY_FOUND=no\nENTRY_START=NOT_OBSERVED\nENTRY_END=NOT_OBSERVED\nVM_OBJECT=NOT_OBSERVED\nOBJECT_INTERNAL=NOT_OBSERVED\nOBJECT_EXTERNAL=NOT_OBSERVED\nPAGER=NOT_OBSERVED\nENTRY_CONTROL=NOT_OBSERVED\n");
+		return;
+	}
+
+	vm_map_lock_read(map);
+	found = vm_map_lookup_entry(map, addr, &entry);
+
+	XZS_MAP_EMIT("\n[XZS-T2N3] VM_ENTRY_BACKING\n");
+	snprintf(xline, sizeof(xline), "ENTRY_FOR_0x1000002f0=%s\n", found ? "yes" : "no");
+	XZS_MAP_EMIT(xline);
+	snprintf(xline, sizeof(xline), "ENTRY_FOUND=%s\n", found ? "yes" : "no");
+	XZS_MAP_EMIT(xline);
+
+	if (found && entry != NULL) {
+		snprintf(xline, sizeof(xline), "ENTRY_START=0x%llx\n", (unsigned long long)entry->vme_start);
+		XZS_MAP_EMIT(xline);
+		snprintf(xline, sizeof(xline), "ENTRY_END=0x%llx\n", (unsigned long long)entry->vme_end);
+		XZS_MAP_EMIT(xline);
+		if (!entry->is_sub_map) {
+			vm_object_t obj = VME_OBJECT(entry);
+			snprintf(xline, sizeof(xline), "VM_OBJECT=%p\n", (void *)obj);
+			XZS_MAP_EMIT(xline);
+			if (obj != VM_OBJECT_NULL) {
+				snprintf(xline, sizeof(xline), "OBJECT_INTERNAL=%s\n", obj->internal ? "yes" : "no");
+				XZS_MAP_EMIT(xline);
+				snprintf(xline, sizeof(xline), "OBJECT_EXTERNAL=%s\n", !obj->internal ? "yes" : "no");
+				XZS_MAP_EMIT(xline);
+				snprintf(xline, sizeof(xline), "PAGER=%p\n", (void *)obj->pager);
+				XZS_MAP_EMIT(xline);
+				snprintf(xline, sizeof(xline), "ENTRY_CONTROL=%p\n", (void *)obj->pager_control);
+				XZS_MAP_EMIT(xline);
+				if (obj->shadow != VM_OBJECT_NULL) {
+					vm_object_t sh = obj->shadow;
+					snprintf(xline, sizeof(xline), "SHADOW_OBJECT=%p\n", (void *)sh);
+					XZS_MAP_EMIT(xline);
+					snprintf(xline, sizeof(xline), "SHADOW_INTERNAL=%s\n", sh->internal ? "yes" : "no");
+					XZS_MAP_EMIT(xline);
+					snprintf(xline, sizeof(xline), "SHADOW_EXTERNAL=%s\n", !sh->internal ? "yes" : "no");
+					XZS_MAP_EMIT(xline);
+					snprintf(xline, sizeof(xline), "SHADOW_PAGER=%p\n", (void *)sh->pager);
+					XZS_MAP_EMIT(xline);
+					snprintf(xline, sizeof(xline), "SHADOW_CONTROL=%p\n", (void *)sh->pager_control);
+					XZS_MAP_EMIT(xline);
+				}
+			} else {
+				XZS_MAP_EMIT("OBJECT_INTERNAL=NOT_OBSERVED\nOBJECT_EXTERNAL=NOT_OBSERVED\nPAGER=NOT_OBSERVED\nENTRY_CONTROL=NOT_OBSERVED\n");
+			}
+		} else {
+			XZS_MAP_EMIT("VM_OBJECT=SUBMAP\nOBJECT_INTERNAL=NOT_OBSERVED\nOBJECT_EXTERNAL=NOT_OBSERVED\nPAGER=NOT_OBSERVED\nENTRY_CONTROL=NOT_OBSERVED\n");
+		}
+	} else {
+		XZS_MAP_EMIT("ENTRY_START=NOT_OBSERVED\nENTRY_END=NOT_OBSERVED\nVM_OBJECT=NOT_OBSERVED\nOBJECT_INTERNAL=NOT_OBSERVED\nOBJECT_EXTERNAL=NOT_OBSERVED\nPAGER=NOT_OBSERVED\nENTRY_CONTROL=NOT_OBSERVED\n");
+	}
+	vm_map_unlock_read(map);
+}
+
