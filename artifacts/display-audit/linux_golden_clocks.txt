@@ -1,0 +1,42 @@
+================================================================================
+LINUX / TWRP GOLDEN CLOCK STATE AUDIT
+================================================================================
+Hardware Platform: Sony Xperia XZs G8231 (MSM8996 v3.0, Kagura-ROW)
+Environment:       TWRP Recovery Linux 3.18.20-v01+ & XNU D8-M2 HW Run (545398f)
+Source logs:       artifacts/logs/twrp-dmesg-full.log
+                   artifacts/hw/d8m2-545398f/host.txt
+                   device/reference/msm8996.dtsi
+
+--------------------------------------------------------------------------------
+1. CORE INTERCONNECT & MMAGIC CLOCKS
+--------------------------------------------------------------------------------
+Clock Name               | Register         | Parent Clock | State   | Readback Value | Evidence Class
+-------------------------+------------------+--------------+---------+----------------+---------------
+gcc_mmss_noc_cfg_ahb_clk | GCC 0x00309008   | GPLL0        | ENABLED | 0x20008001     | HARDWARE_PROVEN
+mmss_mmagic_ahb_clk      | MMCC 0x008c5024  | ahb_clk_src  | ENABLED | 0x00000001     | HARDWARE_PROVEN
+mmss_mmagic_cfg_ahb_clk  | MMCC 0x008c5054  | ahb_clk_src  | ENABLED | 0x20008001     | HARDWARE_PROVEN
+mmagic_mdss_noc_cfg_ahb  | MMCC 0x008c2478  | gcc_mmss_noc | ENABLED | 0x00000001     | HARDWARE_PROVEN
+mmagic_mdss_axi_clk      | MMCC 0x008c2474  | axi_clk_src  | ENABLED | 0x00000001     | HARDWARE_PROVEN
+
+--------------------------------------------------------------------------------
+2. MDSS POWER & CORE BUS CLOCKS
+--------------------------------------------------------------------------------
+Clock / Domain Name      | Register         | Parent Clock | State   | Readback Value | Evidence Class
+-------------------------+------------------+--------------+---------+----------------+---------------
+MMAGIC_MDSS_GDSC         | MMCC 0x008c247c  | Vdd          | POWERED | 0xa0222000     | HARDWARE_PROVEN
+MDSS_GDSC                | MMCC 0x008c2304  | MMAGIC_GDSC  | POWERED | 0xa0222000     | HARDWARE_PROVEN
+mdss_ahb_clk             | MMCC 0x008c2308  | ahb_clk_src  | ENABLED | 0x20008001     | HARDWARE_PROVEN
+mdss_axi_clk             | MMCC 0x008c2310  | axi_clk_src  | ENABLED | 0x00006221     | HARDWARE_PROVEN
+mdss_mdp_clk             | MMCC 0x008c231c  | mdp_clk_src  | ENABLED | 0x00006221     | HARDWARE_PROVEN
+
+--------------------------------------------------------------------------------
+3. DSI CONTROLLER & LINK CLOCKS (D8-M3 TARGET)
+--------------------------------------------------------------------------------
+Clock Name               | Register         | Parent Clock | Target Rate    | State (at M2 baseline) | Evidence Class
+-------------------------+------------------+--------------+----------------+------------------------+---------------
+dsi0vco_clk              | DSI0 PLL         | XO (19.2MHz) | 1,794,078,720Hz| OFF (unlocked)         | SOURCE_PROVEN
+dsi0pllbyte              | DSI0 PLL /16     | dsi0vco_clk  | 112,129,920 Hz | OFF                    | SOURCE_PROVEN
+dsi0pll (pixel)          | DSI0 PLL /12     | dsi0vco_clk  | 149,506,560 Hz | OFF                    | SOURCE_PROVEN
+mdss_byte0_clk           | MMCC 0x008c233c  | dsi0pllbyte  | 112,129,920 Hz | HALTED (0x80000000)    | HARDWARE_PROVEN
+mdss_pclk0_clk           | MMCC 0x008c2314  | dsi0pll      | 149,506,560 Hz | HALTED (0x80000000)    | HARDWARE_PROVEN
+mdss_esc0_clk            | MMCC 0x008c2344  | XO (19.2MHz) | 19,200,000 Hz  | HALTED (0x80000000)    | HARDWARE_PROVEN

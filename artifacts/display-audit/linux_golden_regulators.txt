@@ -1,0 +1,31 @@
+================================================================================
+LINUX / TWRP GOLDEN REGULATOR STATE AUDIT
+================================================================================
+Hardware Platform: Sony Xperia XZs G8231 (MSM8996 v3.0, Kagura-ROW)
+Environment:       TWRP Recovery Linux 3.18.20-v01+
+Source logs:       artifacts/logs/twrp-dmesg-full.log
+                   artifacts/builds/twrp-extracted.dts
+
+--------------------------------------------------------------------------------
+DISPLAY REGULATORS LIST
+--------------------------------------------------------------------------------
+Regulator Name     | Driver / Subsystem  | Target Voltage | Role                                | Evidence Class
+-------------------+---------------------+----------------+-------------------------------------+---------------
+gdsc_mmagic_mdss   | MMCC GDSC 0x247c    | SoC Domain     | Parent power domain for MDSS NoC    | HARDWARE_PROVEN
+gdsc_mdss          | MMCC GDSC 0x2304    | SoC Domain     | Main MDSS subsystem power domain    | HARDWARE_PROVEN
+qpnp_lab           | PMI8994 QPNP LABIBB | +5.5 V         | LCD VSP positive analog bias rail   | SOURCE_PROVEN
+qpnp_ibb           | PMI8994 QPNP LABIBB | -5.5 V         | LCD VSN negative analog bias rail   | SOURCE_PROVEN
+vddio (GPIO 51)    | PM8994 / TLMM       | 1.8 V          | LCD logic digital interface supply  | SOURCE_PROVEN
+vdda               | PM8994              | 1.25 V         | DSI controller analog supply        | SOURCE_PROVEN
+vcca               | PM8994              | 0.925 V        | DSI 14nm PHY core supply            | SOURCE_PROVEN
+wled               | PMI8994 QPNP WLED   | Current Sink   | Backlight LED cathode driver        | SOURCE_PROVEN
+
+--------------------------------------------------------------------------------
+TWRP DMESG VERIFICATION ENTRIES
+--------------------------------------------------------------------------------
+Line 709:  gdsc_mmagic_mdss: no parameters
+Line 721:  gdsc_mdss: no parameters
+Line 722:  gdsc_mdss: supplied by gdsc_mmagic_mdss
+Line 775:  qpnp_labibb_regulator_probe: qpnp_labibb: Target chatter count sets default.
+Line 776:  qpnp_labibb_regulator_probe: qpnp_labibb: Target chatter interval sets default.
+Line 876:  Dsi Ctrl->0 initialized, DSI rev:0x10040001, PHY rev:0x2

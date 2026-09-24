@@ -1,0 +1,82 @@
+================================================================================
+PANEL NODES AUDIT: KEYAKI / MSM8996 DEVICE TREE
+================================================================================
+DTS Source: artifacts/display-audit/keyaki.dts
+Container:  artifacts/builds/twrp-extracted.dtb (DTB #0)
+Parent:     qcom,mdss_dsi@0
+
+--------------------------------------------------------------------------------
+1. ACTIVE HARDWARE-PROVEN PRODUCTION PANEL
+--------------------------------------------------------------------------------
+Node:             somc,sharp_synaptics_cmd_9_panel
+Panel Name:       "9"
+Manufacturer:     Sharp (Display panel) + Synaptics (Touch IC)
+Classification:   HARDWARE_PROVEN
+Evidence:         Target hardware log (artifacts/logs/twrp-dmesg-full.log):
+                  Line 861: mdss_dsi_panel_driver_detection: physical:9996
+                  Line 862: mdss_dsi_panel_init: Panel Name = 9
+                  Line 876: Dsi Ctrl->0 initialized, DSI rev:0x10040001, PHY rev:0x2
+                  Line 886: FrameBuffer[0] 1080x1920 registered successfully!
+ADC Match:        somc,lcd-id-adc = <0x00 0xdea8> (Matched cmdline lcdid_adc=0x270C)
+Type:             dsi_cmd_mode (Command Mode)
+Geometry:         1080 x 1920, 24 bpp (RGB888), 60 Hz
+DSI Controller:   DSI 0 (dsi@994000)
+Lanes:            4 data lanes (lane 0-3 enabled)
+Phy Timings:      <0x241f0809 0x50304a0 0x241f0809 0x50304a0
+                   0x241f0809 0x50304a0 0x241f0809 0x50304a0
+                   0x241b0809 0x50304a0> (40 bytes)
+Reset GPIO:       GPIO 8, active low (&tlmm 8 0)
+TE GPIO:          GPIO 10, active low (&tlmm 10 0, te-pin-select = 1)
+VDDIO GPIO:       GPIO 51 (&tlmm 51 0)
+Touch GPIOs:      VDDIO=GPIO 50, Reset=GPIO 89, INT=GPIO 125
+Backlight:        PMIC WLED (bl_ctrl_wled), range 1-4095 (0x1 - 0xfff)
+Regulators:       vddio-supply, lab-supply (qpnp_lab), ibb-supply (qpnp_ibb)
+
+--------------------------------------------------------------------------------
+2. ALTERNATE PRODUCTION PANEL VARIANT
+--------------------------------------------------------------------------------
+Node:             somc,jdi_synaptics_cmd_6_panel
+Panel Name:       "6"
+Manufacturer:     JDI (Display panel) + Synaptics (Touch IC)
+Classification:   SOURCE_PROVEN (Defined in tree, alternate second-source hardware)
+ADC Match:        somc,lcd-id-adc = <0x89f08 0x9f6c8>
+Type:             dsi_cmd_mode (Command Mode)
+Geometry:         1080 x 1920, 24 bpp, 60 Hz
+DSI Controller:   DSI 0 (dsi@994000)
+Lanes:            4 data lanes
+
+--------------------------------------------------------------------------------
+3. DEFAULT SONY FALLBACK PANEL NODE
+--------------------------------------------------------------------------------
+Node:             somc,default_cmd_panel
+Panel Name:       "Default Panel"
+Phandle:          0x33 (referenced by qcom,dsi-pref-prim-pan = <0x33>)
+Classification:   SOURCE_PROVEN (Default probe target before ADC lookup)
+ADC Match:        somc,lcd-id-adc = <0x00 0x7fffffff> (Catch-all)
+Type:             dsi_cmd_mode (Command Mode)
+Geometry:         1080 x 1920, 24 bpp, 60 Hz
+
+--------------------------------------------------------------------------------
+4. QUALCOMM REFERENCE / SIMULATION PANELS (PRESENT IN BASE DTSI, UNUSED)
+--------------------------------------------------------------------------------
+- qcom,mdss_dsi_sharp_wqxga_video:       "Dual SHARP video mode dsi panel"
+- qcom,mdss_dsi_nt35597_wqxga_video:     "Dual nt35597 video mode dsi panel without DSC"
+- qcom,mdss_dsi_nt35597_wqxga_cmd:       "Dual nt35597 cmd mode dsi panel without DSC"
+- qcom,mdss_dsi_nt35597_dsc_wqxga_video: "NT35597 video mode dsc dsi panel"
+- qcom,dsi_jdi_qhd_video:                "Dual JDI video mode dsi panel"
+- qcom,mdss_dsi_jdi_qhd_dualmipi_cmd:    "Dual cmd mode dsi panel"
+- qcom,dsi_jdi_4k_nofbc_video:           "JDI 4K no FBC Dual video mode dsi panel"
+- qcom,mdss_dsi_sim_video:               "Simulator video mode dsi panel"
+- qcom,mdss_dsi_dual_sim_video:          "Sim dual video mode dsi panel"
+- qcom,mdss_dsi_sim_cmd:                 "Simulator cmd mode dsi panel"
+- qcom,mdss_dsi_dual_sim_cmd:            "Sim dual cmd mode dsi panel"
+- qcom,mdss_dsi_nt35597_dsc_wqxga_cmd:   "NT35597 cmd mode dsc dsi panel"
+- qcom,mdss_dsi_hx8379a_fwvga_truly_vid: "HX8379A fwvga video mode dsi panel"
+- qcom,mdss_dsi_r69007_wqxga_cmd:        "r69007 command mode dual dsi panel"
+- dsi_adv7533_720p:                      "adv7533 720p video mode dsi panel"
+- dsi_adv7533_1080p:                     "adv7533 1080p video mode dsi panel"
+- qcom,mdss_dsi_nt35950_4k_dsc_cmd:      "NT35950 4k cmd mode dsc dsi panel"
+- qcom,mdss_dual_sharp_1080p_120hz_cmd:  "sharp 1080p 120hz dual dsi cmd mode panel"
+- qcom,mdss_dsi_sharp_1080p_cmd:         "sharp 1080p cmd mode dsi panel"
+- qcom,mdss_dsi_sharp_4k_dsc_video:      "Sharp 4k video mode dsc dsi panel"
+- qcom,mdss_dsi_sharp_4k_dsc_cmd:        "Sharp 4k cmd mode dsc dsi panel"
