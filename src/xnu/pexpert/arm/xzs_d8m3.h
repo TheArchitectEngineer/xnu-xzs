@@ -816,14 +816,10 @@ xzs_d8m3_run(int mode)
 	display_write32(0x00994664u, 0x0000001du, is_dryrun); /* DL2 regulator */
 	display_write32(0x009946e4u, 0x0000001du, is_dryrun); /* DL3 regulator */
 	display_write32(0x00994764u, 0x0000001du, is_dryrun); /* CLK regulator */
-
-	/* 2. Configure PHY timing parameters */
-	display_write32(0x00994018u, 0x0000001bu, is_dryrun); /* DSI_T_CLK_POST = 27 */
-	display_write32(0x009942a0u, 0x0000002bu, is_dryrun); /* DSI_T_CLK_PRE = 43 */
 	xzs_diag_emit("[D8-M3] CHECKPOINT D8M3-A0 PHY_COMMON PASS\n");
 
 	xzs_diag_emit("[D8-M3] CHECKPOINT D8M3-B0 PHY_LANES START\n");
-	/* 3. Configure lane drive strength */
+	/* 2. Configure lane drive strength */
 	display_write32(0x00994440u, 0x000006ffu, is_dryrun); /* DL0 drive strength */
 	display_write32(0x009944c0u, 0x000006ffu, is_dryrun); /* DL1 drive strength */
 	display_write32(0x00994540u, 0x000006ffu, is_dryrun); /* DL2 drive strength */
@@ -871,17 +867,27 @@ xzs_d8m3_run(int mode)
 		uint32_t dl2 = xzs_phys_read32(0x00994540);
 		uint32_t dl3 = xzs_phys_read32(0x009945c0);
 		uint32_t clk = xzs_phys_read32(0x00994640);
+		uint32_t reg0 = xzs_phys_read32(0x00994564);
+		uint32_t reg1 = xzs_phys_read32(0x009945e4);
+		uint32_t reg2 = xzs_phys_read32(0x00994664);
+		uint32_t reg3 = xzs_phys_read32(0x009946e4);
+		uint32_t regc = xzs_phys_read32(0x00994764);
 		uint32_t pll = xzs_phys_read32(0x009948cc);
 		uint32_t byte0_cbcr = xzs_phys_read32(0x008c233c);
 		uint32_t pclk0_cbcr = xzs_phys_read32(0x008c2314);
 		uint32_t esc0_cbcr  = xzs_phys_read32(0x008c2344);
 
-		if (dl0 != 0x06ff || dl1 != 0x06ff || dl2 != 0x06ff || dl3 != 0x06ff || clk != 0x00ff) {
+		if ((dl0 & 0xffu) != 0xffu || (dl1 & 0xffu) != 0xffu || (dl2 & 0xffu) != 0xffu || (dl3 & 0xffu) != 0xffu || (clk & 0xffu) != 0xffu) {
 			xzs_diag_emit("[D8-M3] ERROR: DRIVE_STRENGTH_VERIFY_FAILED\n");
 			xzs_diag_emit("[D8-M3] RESULT=DRIVE_STRENGTH_FAILED\n");
 			return;
 		}
-		if ((pll & 0x21) != 0x21) {
+		if (reg0 != 0x1du || reg1 != 0x1du || reg2 != 0x1du || reg3 != 0x1du || regc != 0x1du) {
+			xzs_diag_emit("[D8-M3] ERROR: REGULATOR_BIAS_VERIFY_FAILED\n");
+			xzs_diag_emit("[D8-M3] RESULT=REGULATOR_BIAS_FAILED\n");
+			return;
+		}
+		if ((pll & 0x21u) != 0x21u) {
 			xzs_diag_emit("[D8-M3] ERROR: PLL_UNLOCKED_AFTER_PHY status=0x");
 			xzs_diag_hex32(pll);
 			xzs_diag_emit("\n");
