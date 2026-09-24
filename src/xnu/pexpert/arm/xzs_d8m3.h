@@ -732,12 +732,6 @@ xzs_d8m3_run(int mode)
 
 	xzs_diag_emit("[D8-M3] CHECKPOINT D8M3-80 PCLK_CONFIG PASS\n");
 
-	/* Targeted Stop Boundary: mode 1 halts immediately after PCLK0 for PCLK0-only run */
-	if (mode == 1) {
-		xzs_diag_emit("[D8-M3] RESULT=PASS_PLL_STAGE\n");
-		return;
-	}
-
 	/* Checkpoint D8M3-90: Escape Clock Configuration (Writes 60..62) */
 	xzs_diag_emit("[D8-M3] CHECKPOINT D8M3-90 ESCCLK_CONFIG START\n");
 	xzs_d8m3_print_esc0_status("PRE");
