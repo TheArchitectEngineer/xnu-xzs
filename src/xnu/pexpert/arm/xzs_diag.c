@@ -775,6 +775,7 @@ xzs_d8m2_critical_on(const char *action, uint32_t offset, int parent)
 }
 
 #include "xzs_d8m3.h"
+#include "xzs_d8m4.h"
 
 void
 xzs_diag_dispatch(uint64_t which, uint64_t arg1, uint64_t arg2, uint64_t arg3)
@@ -864,6 +865,18 @@ xzs_diag_dispatch(uint64_t which, uint64_t arg1, uint64_t arg2, uint64_t arg3)
 		break;
 	case 27:
 		xzs_d8m3_dump_phy();
+		break;
+	case 28:
+		xzs_d8m4_dump_status();
+		break;
+	case 29:
+		xzs_d8m4_run(0);
+		break;
+	case 30:
+		xzs_d8m4_run(1);
+		break;
+	case 31:
+		xzs_d8m4_run(2);
 		break;
 	default:
 		xzs_diag_emit("[XZS-D8M1] unknown diag\n");
