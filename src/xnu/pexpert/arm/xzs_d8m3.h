@@ -307,6 +307,88 @@ xzs_d8m3_print_byte0_status(const char *label)
 }
 
 static void
+xzs_d8m3_print_pclk0_status(const char *label)
+{
+	uint32_t cmd = xzs_phys_read32(0x008c2000);
+	uint32_t cfg = xzs_phys_read32(0x008c2004);
+	uint32_t cbcr = xzs_phys_read32(0x008c2314);
+	uint32_t pll = xzs_phys_read32(0x009948cc);
+
+	xzs_diag_emit("[D8-M3] PCLK0 ");
+	xzs_diag_emit(label);
+	xzs_diag_emit(":\n");
+	xzs_diag_emit("  CMD=0x");
+	xzs_diag_hex32(cmd);
+	xzs_diag_emit(" (root_off=");
+	xzs_diag_emit((cmd & 0x80000000u) ? "1" : "0");
+	xzs_diag_emit(" root_en=");
+	xzs_diag_emit((cmd & 0x02u) ? "1" : "0");
+	xzs_diag_emit(" update=");
+	xzs_diag_emit((cmd & 0x01u) ? "1" : "0");
+	xzs_diag_emit(")\n  CFG=0x");
+	xzs_diag_hex32(cfg);
+	xzs_diag_emit(" (src_sel=");
+	uint32_t src_sel = (cfg >> 8) & 0x7u;
+	xzs_diag_emit(src_sel == 2 ? "2:DSI0_PIXEL" : (src_sel == 1 ? "1:DSI1_PIXEL" : (src_sel == 0 ? "0:XO" : "?")));
+	xzs_diag_emit(" div=");
+	xzs_diag_hex32(cfg & 0x1fu);
+	xzs_diag_emit(")\n  CBCR=0x");
+	xzs_diag_hex32(cbcr);
+	xzs_diag_emit(" (halt=");
+	xzs_diag_emit((cbcr & 0x80000000u) ? "1" : "0");
+	xzs_diag_emit(" enable=");
+	xzs_diag_emit((cbcr & 0x01u) ? "1" : "0");
+	xzs_diag_emit(")\n  PLL_PRIMARY_STATUS=0x");
+	xzs_diag_hex32(pll);
+	xzs_diag_emit(" (locked=");
+	xzs_diag_emit((pll & 0x20u) ? "1" : "0");
+	xzs_diag_emit(" ready=");
+	xzs_diag_emit((pll & 0x01u) ? "1" : "0");
+	xzs_diag_emit(")\n");
+}
+
+static void
+xzs_d8m3_print_esc0_status(const char *label)
+{
+	uint32_t cmd = xzs_phys_read32(0x008c2160);
+	uint32_t cfg = xzs_phys_read32(0x008c2164);
+	uint32_t cbcr = xzs_phys_read32(0x008c2344);
+	uint32_t pll = xzs_phys_read32(0x009948cc);
+
+	xzs_diag_emit("[D8-M3] ESC0 ");
+	xzs_diag_emit(label);
+	xzs_diag_emit(":\n");
+	xzs_diag_emit("  CMD=0x");
+	xzs_diag_hex32(cmd);
+	xzs_diag_emit(" (root_off=");
+	xzs_diag_emit((cmd & 0x80000000u) ? "1" : "0");
+	xzs_diag_emit(" root_en=");
+	xzs_diag_emit((cmd & 0x02u) ? "1" : "0");
+	xzs_diag_emit(" update=");
+	xzs_diag_emit((cmd & 0x01u) ? "1" : "0");
+	xzs_diag_emit(")\n  CFG=0x");
+	xzs_diag_hex32(cfg);
+	xzs_diag_emit(" (src_sel=");
+	uint32_t src_sel = (cfg >> 8) & 0x7u;
+	xzs_diag_emit(src_sel == 0 ? "0:XO" : "?");
+	xzs_diag_emit(" div=");
+	xzs_diag_hex32(cfg & 0x1fu);
+	xzs_diag_emit(")\n  CBCR=0x");
+	xzs_diag_hex32(cbcr);
+	xzs_diag_emit(" (halt=");
+	xzs_diag_emit((cbcr & 0x80000000u) ? "1" : "0");
+	xzs_diag_emit(" enable=");
+	xzs_diag_emit((cbcr & 0x01u) ? "1" : "0");
+	xzs_diag_emit(")\n  PLL_PRIMARY_STATUS=0x");
+	xzs_diag_hex32(pll);
+	xzs_diag_emit(" (locked=");
+	xzs_diag_emit((pll & 0x20u) ? "1" : "0");
+	xzs_diag_emit(" ready=");
+	xzs_diag_emit((pll & 0x01u) ? "1" : "0");
+	xzs_diag_emit(")\n");
+}
+
+static void
 xzs_d8m3_run(int mode)
 {
 	int is_dryrun = (mode == 0);
@@ -578,26 +660,26 @@ xzs_d8m3_run(int mode)
 
 	xzs_diag_emit("[D8-M3] CHECKPOINT D8M3-70 BYTECLK_CONFIG PASS\n");
 
-	/* Targeted Stop Boundary: mode 1 halts immediately after BYTE0 */
-	if (mode == 1) {
-		xzs_diag_emit("[D8-M3] RESULT=PASS_PLL_STAGE\n");
-		return;
-	}
-
 	/* Checkpoint D8M3-80: Pixel Clock Configuration (Writes 57..59) */
 	xzs_diag_emit("[D8-M3] CHECKPOINT D8M3-80 PCLK_CONFIG START\n");
-	/* 1. Configure RCG source */
+	xzs_d8m3_print_pclk0_status("PRE");
+
+	/* 1. Configure RCG source (s_m3_writes[57]: 0x008c2004 = 0x00000200 for DSI0 PHY PLL Pixel) */
 	if (display_write32(s_m3_writes[57].addr, s_m3_writes[57].val, is_dryrun) != 0) {
 		xzs_diag_emit("[D8-M3] ERROR: write failed at step D8M3-80 (CFG)\n");
 		xzs_diag_emit("[D8-M3] RESULT=WRITE_FAILED\n");
 		return;
 	}
-	/* 2. Trigger CMD update bit */
+	xzs_d8m3_print_pclk0_status("AFTER_CFG_WRITE");
+	xzs_diag_emit("[D8-M3] PCLK0 parent programmed\n");
+
+	/* 2. Trigger CMD update bit (s_m3_writes[58]: 0x008c2000 = 0x00000001) */
 	if (display_write32(s_m3_writes[58].addr, s_m3_writes[58].val, is_dryrun) != 0) {
 		xzs_diag_emit("[D8-M3] ERROR: write failed at step D8M3-80 (CMD)\n");
 		xzs_diag_emit("[D8-M3] RESULT=WRITE_FAILED\n");
 		return;
 	}
+
 	/* 3. Bounded poll for update completion (bit 0 == 0) */
 	if (!is_dryrun) {
 		uint32_t cmd_val = 0;
@@ -605,27 +687,56 @@ xzs_d8m3_run(int mode)
 			xzs_diag_emit("[D8-M3] ERROR: PCLK_RCG_UPDATE_TIMEOUT cmd=0x");
 			xzs_diag_hex32(cmd_val);
 			xzs_diag_emit("\n");
+			xzs_d8m3_print_pclk0_status("UPDATE_FAILED");
 			xzs_diag_emit("[D8-M3] RESULT=PCLK_TIMEOUT\n");
 			return;
 		}
 	}
-	/* 4. Enable/unhalt CBCR */
+	xzs_diag_emit("[D8-M3] PCLK0 RCG update complete\n");
+	xzs_d8m3_print_pclk0_status("AFTER_UPDATE_TRIGGER");
+
+	/* 4. Enable/unhalt CBCR (s_m3_writes[59]: 0x008c2314 = 0x00000001) */
+	xzs_diag_emit("[D8-M3] STEP 4: Writing PCLK0_CBCR = 0x00000001\n");
 	if (display_write32(s_m3_writes[59].addr, s_m3_writes[59].val, is_dryrun) != 0) {
 		xzs_diag_emit("[D8-M3] ERROR: write failed at step D8M3-80 (CBCR)\n");
 		xzs_diag_emit("[D8-M3] RESULT=WRITE_FAILED\n");
 		return;
 	}
 	if (!is_dryrun) {
+		delay(10);
+		xzs_diag_emit("[D8-M3] STEP 5: Polling PCLK0_CBCR unhalt\n");
 		uint32_t cbcr = 0;
 		if (display_poll_cbcr(0x008c2314, 50000, &cbcr) != 0) {
 			xzs_diag_emit("[D8-M3] ERROR: PCLK_UNHALT_TIMEOUT cbcr=0x");
 			xzs_diag_hex32(cbcr);
 			xzs_diag_emit("\n");
+			xzs_d8m3_print_pclk0_status("AFTER_CBCR_ENABLE_FAILED");
 			xzs_diag_emit("[D8-M3] RESULT=PCLK_TIMEOUT\n");
 			return;
 		}
 	}
+	xzs_d8m3_print_pclk0_status("AFTER_CBCR_ENABLE");
+
+	/* 5. Verify PLL did not lose lock during PCLK0 programming */
+	uint32_t pll_pclk_post = xzs_phys_read32(0x009948cc);
+	xzs_diag_emit("[D8-M3] PLL_PRIMARY_STATUS=0x");
+	xzs_diag_hex32(pll_pclk_post);
+	xzs_diag_emit("\n");
+	if (!is_dryrun && (pll_pclk_post & 0x21u) != 0x21u) {
+		xzs_diag_emit("[D8-M3] ERROR: PCLK0_PARENT_CHAIN_REGRESSION pll=0x");
+		xzs_diag_hex32(pll_pclk_post);
+		xzs_diag_emit("\n");
+		xzs_diag_emit("[D8-M3] RESULT=PCLK0_PARENT_CHAIN_REGRESSION\n");
+		return;
+	}
+
 	xzs_diag_emit("[D8-M3] CHECKPOINT D8M3-80 PCLK_CONFIG PASS\n");
+
+	/* Targeted Stop Boundary: mode 1 halts immediately after PCLK0 for PCLK0-only run */
+	if (mode == 1) {
+		xzs_diag_emit("[D8-M3] RESULT=PASS_PLL_STAGE\n");
+		return;
+	}
 
 	/* Checkpoint D8M3-90: Escape Clock Configuration (Writes 60..62) */
 	xzs_diag_emit("[D8-M3] CHECKPOINT D8M3-90 ESCCLK_CONFIG START\n");
