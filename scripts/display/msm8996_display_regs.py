@@ -328,7 +328,7 @@ DISPLAY_REGISTERS: Dict[int, Dict[str, Any]] = {
         "access": AccessType.RW_CONFIG,
         "side_effect": SideEffect.STATE_ALTERING,
         "is_volatile": False,
-        "description": "PLL lock comparison threshold byte 0 (0x57 / mask 0x1f)",
+        "description": "Kvco divider ref 2 / lock cmp low byte (0x05)",
     },
     0x00994840: {
         "name": "PLL_PLLLOCK_CMP2",
@@ -340,7 +340,7 @@ DISPLAY_REGISTERS: Dict[int, Dict[str, Any]] = {
         "access": AccessType.RW_CONFIG,
         "side_effect": SideEffect.STATE_ALTERING,
         "is_volatile": False,
-        "description": "PLL lock comparison threshold byte 1 (0x09)",
+        "description": "Kvco divider ref 1 / lock cmp high byte (0x5f)",
     },
     0x00994850: {
         "name": "PLL_RESETSM_READY_STATUS_UPSTREAM",
@@ -376,7 +376,7 @@ DISPLAY_REGISTERS: Dict[int, Dict[str, Any]] = {
         "access": AccessType.RW_CONFIG,
         "side_effect": SideEffect.STATE_ALTERING,
         "is_volatile": False,
-        "description": "Integer decimation start divider (0x5d = 93)",
+        "description": "VCO divider ref 1 (0x5f)",
     },
     0x00994870: {
         "name": "PLL_DIV_FRAC_START1",
@@ -388,7 +388,7 @@ DISPLAY_REGISTERS: Dict[int, Dict[str, Any]] = {
         "access": AccessType.RW_CONFIG,
         "side_effect": SideEffect.STATE_ALTERING,
         "is_volatile": False,
-        "description": "Fractional divider start part 1 (0xf0 / hardware mask 0x03)",
+        "description": "VCO divider ref 2 (0x00)",
     },
     0x00994874: {
         "name": "PLL_DIV_FRAC_START2",
@@ -400,7 +400,7 @@ DISPLAY_REGISTERS: Dict[int, Dict[str, Any]] = {
         "access": AccessType.RW_CONFIG,
         "side_effect": SideEffect.STATE_ALTERING,
         "is_volatile": False,
-        "description": "Fractional divider start part 2 (0x40)",
+        "description": "VCO count 1 (0x81)",
     },
     0x00994878: {
         "name": "PLL_DIV_FRAC_START3",
@@ -412,7 +412,7 @@ DISPLAY_REGISTERS: Dict[int, Dict[str, Any]] = {
         "access": AccessType.RW_CONFIG,
         "side_effect": SideEffect.STATE_ALTERING,
         "is_volatile": False,
-        "description": "Fractional divider start part 3 (0x07)",
+        "description": "VCO count 2 (0x03)",
     },
     0x009948cc: {
         "name": "PLL_RESET_SM_STATUS_DOWNSTREAM",
