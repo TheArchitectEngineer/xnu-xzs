@@ -62,26 +62,25 @@ Recovery is power-off by holding the Sony keys, then fastboot, then `fastboot bo
 ```text
 Phase      Area                              Status
 -------------------------------------------------------
-A          Native XNU entry                  PASS
-B          Platform bring-up                 PASS
-C          SMP                               PASS
-D1         BSD/VFS                           PASS
-D2         eMMC                              PASS
-D3         GPT                               PASS
-D4         block/bdev                        PASS
-D5         XZSFS                             PASS
-D6         PID1 / EL0                        PASS
-D7-M2      PID1 -> /bin/sh                   PASS
-D7-M3      interactive shell                 PASS
-D7-M4      stdin/tty/read                    PASS
-D7-T1      USB transport                     PASS
-D7-T2      generic native Mach-O exec        PASS
-D8-M1      MDSS/MMCC topology                PASS
-D8-M2      display power/core clocks         PASS
-D8-M3      DSI PHY/PLL/lanes                 NEXT
+Phase A    Native XNU entry                  COMPLETE
+Phase B    Platform bring-up                 COMPLETE
+Phase C    SMP                               COMPLETE
+D1         BSD/VFS                           COMPLETE
+D2         eMMC                              COMPLETE
+D3         GPT                               COMPLETE
+D4         block/bdev                        COMPLETE
+D5         XZSFS                             COMPLETE
+D6         PID1 / EL0                        COMPLETE
+D7         Interactive shell / external exec COMPLETE
+
+D8-M1      Display topology/MMIO             COMPLETE
+D8-M2      Display power/core clocks         COMPLETE
+D8-A0..A3  Display audit/tooling             COMPLETE
+D8-M3      DSI PLL/clocks/14nm PHY           COMPLETE
+D8-M4      DSI host/controller               NEXT
 ```
 
-Tags that name durable milestones: `xzs-d7t1-complete`, `xzs-d7t2-full-complete`, `xzs-d8-m1-complete`, `xzs-d8-m2-complete`.
+Tags that name durable milestones: `xzs-d7t1-complete`, `xzs-d7t2-full-complete`, `xzs-d8-m1-complete`, `xzs-d8-m2-complete`, `xzs-d8m3-display-pll-phy-complete`.
 
 ## Generic Native Mach-O Execution (Phase D7-T2)
 
@@ -125,9 +124,11 @@ Phase D7-T2 establishes minimal static Mach-O execution. It does **NOT** yet pro
 ## Display
 
 ```text
-D8-M1 = PASS
-D8-M2 = PASS
-D8-M3 = NEXT
+D8-M1     = PASS
+D8-M2     = PASS
+D8-A0..A3 = PASS
+D8-M3     = PASS (COMPLETE / SEALED / HARDWARE_PROVEN)
+D8-M4     = NEXT
 ```
 
 D8-M1, tag `xzs-d8-m1-complete` at `861032cb7b137096edeb1aa5caa04aef6737533a`, read the clock controller only. MMAGIC_MDSS_GDSC was `0xa0222000` (on). MDSS_GDSC was `0x00222001` (collapsed).
@@ -141,9 +142,22 @@ D8-M2, tag `xzs-d8-m2-complete` at `545398f30d8fda592d4ca67ee867a016c2f37092`, c
 - `mdss_mdp`: enabled and running (`enable=1, halt=0`, readback `0x00006221`)
 - USB console shell remained fully responsive; zero panics, zero resets.
 
-D8-M3 (DSI host, PHY, PLL, panel, backlight, framebuffer scanout) is the NEXT active milestone.
+D8-M3, tag `xzs-d8m3-display-pll-phy-complete`, completed DSI0 PLL, MMCC clock tree branches, and Qualcomm 14nm DSI PHY Stage B bring-up on physical Xperia XZs hardware across two independent fresh-boot runs:
+- DSI0 PLL locked and ready: `0x009948cc = 0x0000002f` (`pll_locked=1, pll_ready=1`)
+- BYTE0 clock branch unhalted: `BYTE0_CFG_RCGR = 0x00000100` (`src_sel=1:DSI0_BYTE`), `BYTE0_CBCR = 0x00000001` (`halt=0, enable=1`)
+- PCLK0 clock branch unhalted: `PCLK0_CFG_RCGR = 0x00000100` (`src_sel=1:DSI0_PIXEL`), `PCLK0_CBCR = 0x00000001` (`halt=0, enable=1`)
+- ESC0 clock branch unhalted: `ESC0_CFG_RCGR = 0x00000000` (`src_sel=0:XO`), `ESC0_CBCR = 0x00000001` (`halt=0, enable=1`)
+- 14nm PHY Stage B: All 5 lane regulator biases verified (`0x1d`), drive strengths calibrated (`0x0ff`), full acceptance readback verified
+- Reproducibility: 2/2 independent fresh boots passed 100%
+- Critical M3 diff: 0 against Linux golden state
+- Safety invariants: 0 panel GPIO writes, 0 LAB/IBB writes, 0 WLED writes, 0 DCS packets sent; shell and USB console remained 100% responsive; 0 bus aborts, 0 panics, 0 resets.
 
-Details: [`docs/XZS_DISPLAY_BRINGUP.md`](docs/XZS_DISPLAY_BRINGUP.md). Bypassed work: [`docs/XZS_BLOCKERS_AND_DEFERRED.md`](docs/XZS_BLOCKERS_AND_DEFERRED.md). Status: [`docs/XZS_PORT_STATUS.md`](docs/XZS_PORT_STATUS.md).
+> Native XNU now brings up the MSM8996 DSI0 PLL, MMCC BYTE0/PCLK0/ESC0 clock tree, and Qualcomm 14nm DSI PHY on physical Xperia XZs hardware.
+> *(Note: panel power, DSI host traffic, backlight, and pixel scanout are not yet active and remain subsequent milestones).*
+
+D8-M4 (DSI0 host / controller bring-up) is the NEXT active milestone.
+
+Details: [`docs/XZS_DISPLAY_BRINGUP.md`](docs/XZS_DISPLAY_BRINGUP.md), [`docs/XZS_D8_M3_SEAL_REPORT.md`](docs/XZS_D8_M3_SEAL_REPORT.md). Bypassed work: [`docs/XZS_BLOCKERS_AND_DEFERRED.md`](docs/XZS_BLOCKERS_AND_DEFERRED.md). Status: [`docs/XZS_PORT_STATUS.md`](docs/XZS_PORT_STATUS.md).
 
 ### Verified Milestone Capabilities
 
@@ -202,7 +216,8 @@ Details: [`docs/XZS_DISPLAY_BRINGUP.md`](docs/XZS_DISPLAY_BRINGUP.md). Bypassed 
   - D7-T2 generic native Mach-O execution complete and sealed (tag `xzs-d7t2-full-complete`, `DEBT-001` RESOLVED).
   - D8-M1 display topology audit complete (tag `xzs-d8-m1-complete`).
   - D8-M2 display power domain & core clocks hardware-verified (tag `xzs-d8-m2-complete`).
-* **Next active milestone**: D8-M3 (DSI host controller, PHY, PLL, panel, and framebuffer scanout).
+  - D8-M3 DSI0 PLL, MMCC clock tree, and 14nm PHY hardware-verified (tag `xzs-d8m3-display-pll-phy-complete`).
+* **Next active milestone**: D8-M4 (DSI0 host controller bring-up in command mode).
 
 ---
 
@@ -220,7 +235,7 @@ Details: [`docs/XZS_DISPLAY_BRINGUP.md`](docs/XZS_DISPLAY_BRINGUP.md). Bypassed 
 | **Phase D5** | Real root filesystem mount (RAMDisk XZSFS v1) | **COMPLETE / SEALED** |
 | **Phase D6** | PID 1 / First EL0 userspace (`initproc` / launchd) | **COMPLETE / SEALED** |
 | **Phase D7** | Interactive USB shell (`/bin/sh`) & Generic Mach-O exec | **COMPLETE / SEALED** |
-| **Phase D8** | Display audit, power/clocks, and DSI scanout | **D8-M1 PASS / D8-M2 PASS / D8-M3 NEXT** |
+| **Phase D8** | Display audit, power/clocks, and DSI scanout | **D8-M1..M3 PASS / D8-M4 NEXT** |
 | **Phase D9** | XZSPlatform hardware/platform compatibility layer | **PLANNED** |
 | **Phase D10**| Core native device drivers | **PLANNED** |
 | **Phase D11**| System hardware integration | **PLANNED** |
@@ -282,7 +297,7 @@ The modular `XZSPlatform` design ensures that board support and native drivers c
 
 ## Known Limitations
 
-1. **Display is not scanning**: D8-M1 topology audit passed. D8-M2 has powered MDSS and verified clocks (`mdss_ahb`, `mdss_axi`, `mdss_mdp`) on physical hardware. D8-M3 (DSI host, PHY, PLL, panel, framebuffer scanout) is the next milestone.
+1. **Display is not scanning**: D8-M1 topology audit passed. D8-M2 has powered MDSS and verified clocks on physical hardware. D8-M3 has locked DSI0 PLL (`0x2f`), unhalted MMCC BYTE0/PCLK0/ESC0 branches (`CBCR=1, halt=0`), and verified 14nm PHY lanes. D8-M4 (DSI0 host controller bring-up) is the next milestone. Panel power, backlight, and framebuffer scanout follow in subsequent milestones.
 2. **devfs Pointer-Hardening Bypass**: Commit `3e417bb` bypasses `vm_kernel_addrhash` in `devfs_getattr` to prevent a SHA-256 address hashing hang during early devfs open. Classified as `XZS PLATFORM WORKAROUND` to be re-audited under Phase D9.
 3. **Deferred Subsystems**: Advanced networking (Skywalk, lo0) and DTrace FBT are temporarily deferred until required drivers are active.
 

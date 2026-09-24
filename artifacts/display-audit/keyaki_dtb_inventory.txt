@@ -1,0 +1,70 @@
+================================================================================
+XPERIA XZS (KEYAKI) DTB CONTAINER INVENTORY & ANALYSIS
+================================================================================
+Source artifact:  artifacts/builds/twrp-extracted.dtb
+Container size:   1,590,244 bytes
+Container SHA256: 40bcd199ecf857f6d1a33ce3fa010f2113f31cd363e021339e7c93fbe63b08b1
+Format:           Qualcomm concatenated multi-DTB container (4 FDT blobs)
+Hardware Target:  Sony Xperia XZs G8231 (keyaki / tone / Kagura-ROW)
+Target Silicon:   MSM8996 v3.0, Serial: BH905SX976
+
+--------------------------------------------------------------------------------
+DTB ENTRY TABLE
+--------------------------------------------------------------------------------
+Index | Offset (Hex) | Size (Bytes) | SHA256 (DTB image)
+--------------------------------------------------------------------------------
+#0    | 0x000000     | 397,305      | e92dbd78f60796cc13309634f864f4b10ef0fcdbe2e6eb5cd6774ab86866e4ba
+#1    | 0x060ff9     | 397,305      | 7758238811c8351068d406eda45a1f09b0cb31d21e4af09a45a9ddb9950f9da4
+#2    | 0x0c1ff2     | 397,817      | ef744b56c9563dea92c66c7edfb56e87a506744e9039d3179f49f2315768d2ea
+#3    | 0x1231eb     | 397,817      | 201769d7852f1f950b1acf40047b59bfd87aef5e732cb98f8a2eaa927defa58d
+
+--------------------------------------------------------------------------------
+DTB HEADER / IDENTITY METADATA
+--------------------------------------------------------------------------------
+DTB #0:
+  Model:        "SoMC Kagura-ROW"
+  Compatible:   "somc,kagura-row", "qcom,msm8996"
+  qcom,msm-id:  <246 0x30000> (MSM8996 v3.0)
+  qcom,pmic-id: <0x20009 0x2000a 0x00 0x00> (PM8994 v2.0 + PMI8994 v2.0)
+  qcom,board-id:<8 0> (Tone / Kagura-ROW hardware revision)
+  Status:       PRIMARY ACTIVE DTB for target silicon MSM8996 v3.0
+
+DTB #1:
+  Model:        "SoMC Kagura-ROW"
+  Compatible:   "somc,kagura-row", "qcom,msm8996"
+  qcom,msm-id:  <246 0x30000> (MSM8996 v3.0)
+  qcom,pmic-id: <0x20009 0x10013 0x00 0x00> (PM8994 v2.0 + PMI8996 v1.3)
+  qcom,board-id:<8 0>
+
+DTB #2:
+  Model:        "SoMC Kagura-ROW"
+  Compatible:   "somc,kagura-row", "qcom,msm8996"
+  qcom,msm-id:  <246 0x30001> (MSM8996 v3.1)
+  qcom,pmic-id: <0x20009 0x2000a 0x00 0x00>
+  qcom,board-id:<8 0>
+
+DTB #3:
+  Model:        "SoMC Kagura-ROW"
+  Compatible:   "somc,kagura-row", "qcom,msm8996"
+  qcom,msm-id:  <246 0x30001> (MSM8996 v3.1)
+  qcom,pmic-id: <0x20009 0x10013 0x00 0x00>
+  qcom,board-id:<8 0>
+
+--------------------------------------------------------------------------------
+DISPLAY TOPOLOGY CROSS-VERIFICATION ACROSS ALL VARIANTS
+--------------------------------------------------------------------------------
+Node: somc,sharp_synaptics_cmd_9_panel
+  Length: 20,550 bytes in all 4 DTB variants
+  SHA256: 4dc567be47885a8f278a5dcfd4eb7af5aeabf5acd6f6d842dae5ce07428e5531 (IDENTICAL across #0, #1, #2, #3)
+
+Node: qcom,mdss_dsi_ctrl0@994000
+  Length: 3,125 bytes in all 4 DTB variants
+  SHA256: 503561cba5d8d3cc6caf6632bc4898b51f18ffa71e598036776b792f8eb63afc (IDENTICAL across #0, #1, #2, #3)
+
+Node: qcom,mdss_dsi_ctrl1@996000
+  Status: disabled in all 4 DTB variants
+
+Conclusion:
+Display topology, panel definitions, timings, clocks, GPIOs, power regulators,
+and DCS command sequences are 100% UNIFORM across all 4 DTB variants.
+DTB #0 was decompiled directly to `artifacts/display-audit/keyaki.dts`.

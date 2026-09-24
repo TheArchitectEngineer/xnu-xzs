@@ -1,0 +1,73 @@
+SEQ,BLOCK,ADDRESS,OFFSET,VALUE,MASK,CALLER,PURPOSE
+0001,PHY,0x00994564,0x164,0x0000001d,0x000000ff,mdss_dsi_8996_phy_regulator_enable,DL0 regulator bias
+0002,PHY,0x009945e4,0x1e4,0x0000001d,0x000000ff,mdss_dsi_8996_phy_regulator_enable,DL1 regulator bias
+0003,PHY,0x00994664,0x264,0x0000001d,0x000000ff,mdss_dsi_8996_phy_regulator_enable,DL2 regulator bias
+0004,PHY,0x009946e4,0x2e4,0x0000001d,0x000000ff,mdss_dsi_8996_phy_regulator_enable,DL3 regulator bias
+0005,PHY,0x00994764,0x364,0x0000001d,0x000000ff,mdss_dsi_8996_phy_regulator_enable,CLK lane regulator bias
+0006,DSI_CTRL,0x0099412c,0x12c,0x00000001,0x00000001,mdss_dsi_phy_sw_reset,Assert PHY software reset
+0007,DSI_CTRL,0x0099412c,0x12c,0x00000000,0x00000001,mdss_dsi_phy_sw_reset,De-assert PHY software reset
+0008,PLL,0x0099444c,0x04c,0x00000001,0x000000ff,pll_vco_set_rate_8996,Set Post-N1 divider = 2
+0009,PLL,0x00994448,0x048,0x00000000,0x000000ff,pll_db_commit_8996,Disable ext clk override
+0010,PLL,0x00994800,0x000,0x00000004,0x000000ff,pll_db_commit_8996,Sysclk enable & reset config
+0011,PLL,0x00994804,0x004,0x00000007,0x000000ff,pll_db_commit_8996,Enable Tx clock channels
+0012,PLL,0x00994810,0x010,0x00000005,0x000000ff,pll_db_commit_8996,Reset SM control 3
+0013,PLL,0x00994828,0x028,0x00000020,0x000000ff,pll_db_commit_8996,Reset SM counter initial
+0014,PLL,0x0099482c,0x02c,0x00000000,0x000000ff,pll_db_commit_8996,Clear backup control
+0015,PLL,0x00994830,0x030,0x00000038,0x000000ff,pll_db_commit_8996,Kvco divider reference part 1
+0016,PLL,0x0099483c,0x03c,0x00000057,0x000000ff,pll_db_commit_8996,Lock comparison low byte (0x957)
+0017,PLL,0x00994840,0x040,0x00000009,0x000000ff,pll_db_commit_8996,Lock comparison high byte (0x957)
+0018,PLL,0x00994844,0x044,0x00000000,0x000000ff,pll_db_commit_8996,Lock comparison upper byte
+0019,PLL,0x00994848,0x048,0x00000001,0x000000ff,pll_db_commit_8996,Enable lock comparison
+0020,PLL,0x0099484c,0x04c,0x00000019,0x000000ff,pll_db_commit_8996,Min lock delay cycles
+0021,PLL,0x0099486c,0x06c,0x0000005d,0x000000ff,pll_db_commit_8996,Integer decimation start (93)
+0022,PLL,0x00994870,0x070,0x000000f0,0x000000ff,pll_db_commit_8996,Frac start byte 0 (0x740f0)
+0023,PLL,0x00994874,0x074,0x00000040,0x000000ff,pll_db_commit_8996,Frac start byte 1 (0x740f0)
+0024,PLL,0x00994878,0x078,0x00000007,0x000000ff,pll_db_commit_8996,Frac start byte 2 (0x740f0)
+0025,PLL,0x0099487c,0x07c,0x00000033,0x000000ff,pll_db_commit_8996,VCO divider ref part 1
+0026,PLL,0x00994880,0x080,0x00000003,0x000000ff,pll_db_commit_8996,VCO divider ref part 2
+0027,PLL,0x00994884,0x084,0x0000000b,0x000000ff,pll_db_commit_8996,Charge pump current setting
+0028,PLL,0x00994888,0x088,0x0000001f,0x000000ff,pll_db_commit_8996,Loop filter resistor 1
+0029,PLL,0x00994890,0x090,0x00000000,0x000000ff,pll_db_commit_8996,Loop filter capacitor 1
+0030,PLL,0x00994894,0x094,0x00000030,0x000000ff,pll_db_commit_8996,Loop filter capacitor 2
+0031,PLL,0x00994898,0x098,0x00000000,0x000000ff,pll_db_commit_8996,Disable BIST mode on lanes
+0032,PLL,0x0099489c,0x09c,0x00000002,0x000000ff,pll_db_commit_8996,Reset SM control 4
+0033,PLL,0x009948a0,0x0a0,0x00000000,0x000000ff,pll_db_commit_8996,Reset SM control 5
+0034,PLL,0x009948a4,0x0a4,0x00000000,0x000000ff,pll_db_commit_8996,Kvco count register 1
+0035,PLL,0x009948a8,0x0a8,0x00000000,0x000000ff,pll_db_commit_8996,Kvco count register 2
+0036,PLL,0x009948ac,0x0ac,0x00000014,0x000000ff,pll_db_commit_8996,Calibration config 0
+0037,PLL,0x009948b4,0x0b4,0x00000000,0x000000ff,pll_db_commit_8996,Calibration config 1
+0038,PLL,0x009948b8,0x0b8,0x00000000,0x000000ff,pll_db_commit_8996,Calibration config 2
+0039,PLL,0x009948bc,0x0bc,0x00000000,0x000000ff,pll_db_commit_8996,Calibration config 3
+0040,PLL,0x009948c0,0x0c0,0x00000000,0x000000ff,pll_db_commit_8996,Calibration config 4
+0041,PLL,0x009948c4,0x0c4,0x00000000,0x000000ff,pll_db_commit_8996,Calibration config 5
+0042,PLL,0x009948e8,0x0e8,0x00000000,0x000000ff,pll_db_commit_8996,Calibration config 6
+0043,PLL,0x009948f0,0x0f0,0x00000000,0x000000ff,pll_db_commit_8996,Calibration config 7
+0044,PLL,0x009948f4,0x0f4,0x00000000,0x000000ff,pll_db_commit_8996,Calibration config 8
+0045,PLL,0x009948f8,0x0f8,0x00000000,0x000000ff,pll_db_commit_8996,Calibration config 9
+0046,PLL,0x009948fc,0x0fc,0x00000000,0x000000ff,pll_db_commit_8996,Calibration config 10
+0047,PLL,0x00994900,0x100,0x00000000,0x000000ff,pll_db_commit_8996,Calibration config 11
+0048,PLL,0x00994904,0x104,0x00000020,0x000000ff,pll_db_commit_8996,Efuse config 1
+0049,PHY,0x00994410,0x010,0x0000001e,0x000000ff,pll_db_commit_8996,PHY common control 0
+0050,PHY,0x00994414,0x014,0x00000000,0x000000ff,pll_db_commit_8996,PHY common control 1
+0051,PHY,0x0099441c,0x01c,0x00000000,0x000000ff,pll_db_commit_8996,PHY common control 2
+0052,PHY,0x00994420,0x020,0x00000000,0x000000ff,pll_db_commit_8996,PHY common control 3
+0053,PLL,0x0099485c,0x05c,0x00000010,0x000000ff,dsi_pll_enable_seq_8996,Enable PLL common output buffer
+0054,PHY,0x00994448,0x048,0x00000001,0x000000ff,dsi_pll_enable_seq_8996,Enable PLL clock generation kick
+0055,MMCC,0x008c2124,0x124,0x00000200,0x00000700,mdss_dsi_clk_ctrl,Select DSI0 PLL Byte Mux
+0056,MMCC,0x008c2120,0x120,0x00000001,0x00000001,mdss_dsi_clk_ctrl,Trigger Byte0 RCG update
+0057,MMCC,0x008c233c,0x33c,0x00000001,0x00000001,mdss_dsi_clk_ctrl,Enable mdss_byte0_clk branch
+0058,MMCC,0x008c2004,0x004,0x00000200,0x00000700,mdss_dsi_clk_ctrl,Select DSI0 PLL Pixel Mux
+0059,MMCC,0x008c2000,0x000,0x00000001,0x00000001,mdss_dsi_clk_ctrl,Trigger Pclk0 RCG update
+0060,MMCC,0x008c2314,0x314,0x00000001,0x00000001,mdss_dsi_clk_ctrl,Enable mdss_pclk0_clk branch
+0061,MMCC,0x008c2164,0x164,0x00000000,0x00000700,mdss_dsi_clk_ctrl,Select XO as Esc0 source
+0062,MMCC,0x008c2160,0x160,0x00000001,0x00000001,mdss_dsi_clk_ctrl,Trigger Esc0 RCG update
+0063,MMCC,0x008c2344,0x344,0x00000001,0x00000001,mdss_dsi_clk_ctrl,Enable mdss_esc0_clk branch
+0064,PHY,0x00994440,0x040,0x000006ff,0x0000ffff,mdss_dsi_phy_init,Data lane 0 drive strength
+0065,PHY,0x009944c0,0x0c0,0x000006ff,0x0000ffff,mdss_dsi_phy_init,Data lane 1 drive strength
+0066,PHY,0x00994540,0x140,0x000006ff,0x0000ffff,mdss_dsi_phy_init,Data lane 2 drive strength
+0067,PHY,0x009945c0,0x1c0,0x000006ff,0x0000ffff,mdss_dsi_phy_init,Data lane 3 drive strength
+0068,PHY,0x00994640,0x240,0x000000ff,0x0000ffff,mdss_dsi_phy_init,Clock lane drive strength
+0069,DSI_CTRL,0x00994018,0x018,0x0000001b,0x0000003f,mdss_dsi_phy_init,Program t_clk_post (27 cycles)
+0070,DSI_CTRL,0x009942a0,0x2a0,0x0000002b,0x0000003f,mdss_dsi_phy_init,Program t_clk_pre (43 cycles)
+0071,DSI_CTRL,0x009941f4,0x1f4,0x03000104,0xffffffff,mdss_dsi_host_init,Enable 4 data lanes + CLK
+0072,DSI_CTRL,0x009940f0,0x0f0,0x00000001,0x00000001,mdss_dsi_host_init,Enable DSI Controller

@@ -1,0 +1,30 @@
+================================================================================
+LINUX / TWRP GOLDEN GPIO STATE AUDIT
+================================================================================
+Hardware Platform: Sony Xperia XZs G8231 (MSM8996 v3.0, Kagura-ROW)
+Environment:       TWRP Recovery Linux 3.18.20-v01+
+Source DTS:        artifacts/builds/twrp-extracted.dts
+Parent Controller: tlmm (MSM8996 TLMM at 0x01010000)
+
+--------------------------------------------------------------------------------
+DISPLAY & TOUCH GPIO ASSIGNMENT TABLE
+--------------------------------------------------------------------------------
+GPIO #  | Label / Role           | Direction | Polarity   | State during Display ON | Evidence Class
+--------+------------------------+-----------+------------+-------------------------+---------------
+GPIO 8  | disp_reset_n           | Output    | Active Low | HIGH (1) (Deasserted)   | SOURCE_PROVEN
+GPIO 10 | mdp_vsync / TE         | Input     | Active Low | TE Pulses               | SOURCE_PROVEN
+GPIO 51 | lcd_vddio_en           | Output    | Active High| HIGH (1) (Enabled)      | SOURCE_PROVEN
+GPIO 50 | panel_tvdd (Touch VDD) | Output    | Active High| HIGH (1)                | SOURCE_PROVEN
+GPIO 89 | touch_reset_n          | Output    | Active Low | HIGH (1)                | SOURCE_PROVEN
+GPIO 125| touch_int_n            | Input     | Active Low | IRQ                     | SOURCE_PROVEN
+
+--------------------------------------------------------------------------------
+VERIFICATION IN DEVICE TREE
+--------------------------------------------------------------------------------
+qcom,mdss_dsi_ctrl0@994000:
+  qcom,platform-reset-gpio       = <&tlmm 8 0>;   (GPIO 8)
+  qcom,platform-te-gpio          = <&tlmm 10 0>;  (GPIO 10)
+  qcom,platform-vddio-gpio       = <&tlmm 51 0>;  (GPIO 51)
+  qcom,platform-touch-vddio-gpio = <&tlmm 50 0>;  (GPIO 50)
+  qcom,platform-touch-reset-gpio = <&tlmm 89 0>;  (GPIO 89)
+  qcom,platform-touch-int-gpio   = <&tlmm 125 0>; (GPIO 125)

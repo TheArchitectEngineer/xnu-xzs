@@ -1,0 +1,42 @@
+# Linux Golden DSI PLL Status Verification: Xperia XZs (Keyaki / MSM8996)
+# Hardware Target: BH905SX976
+
+PLL_MODEL=Qualcomm 14nm DSI PLL v2
+DSI0_PLL_BASE=0x00994800
+DSI0_PHY_BASE=0x00994400
+
+# PLL Acceptance Status Register
+# Note: In downstream Qualcomm 3.18 kernel (mdss-dsi-pll-8996.c:pll_is_pll_locked_8996),
+# the poll register is pll_base + 0x4cc (where pll_base in DT is 0x00994400) -> 0x009948cc.
+# In upstream Linux DRM (dsi_phy_14nm.c), the poll register is RESET_SM_READY_STATUS at 0x00994850.
+PLL_STATUS_ADDRESS=0x009948cc
+PLL_STATUS_ADDRESS_ALT=0x00994850
+PLL_STATUS_VALUE=0x21
+PLL_LOCK_MASK=0x20
+PLL_READY_MASK=0x01
+PLL_LOCK=1
+PLL_READY=1
+
+# Working PLL Frequencies & Dividers (Hardware Proven via Debugfs)
+PLL_VCO_RATE=1794078720
+PLL_POST_N1_DIV=2
+PLL_N2_DIV=3
+PLL_BYTE_DIV=8
+PLL_PIXEL_DIV=2
+PLL_BIT_CLOCK=897039360
+PLL_BYTE_CLOCK=112129920
+PLL_PIXEL_CLOCK=149506560
+
+# Reconciled VCO Programming Parameters (fref = 19.2 MHz, Multiplier = 2^20)
+PLL_DEC_START=0x5d
+PLL_DIV_FRAC_START=0x740f0
+PLL_PLLLOCK_CMP=0x957
+PLL_PLLLOCK_CMP_EN=0x1
+PLL_CMN_CONFIG=0x10
+PLL_RESETSM_ENABLE=0x1
+
+# Checkpoint Acceptance
+PLL_LOCK_WORKING_VALUE=0x20
+PLL_READY_WORKING_VALUE=0x01
+PLL_ACCEPTANCE_MASK=0x21
+PLL_ACCEPTANCE_EXPECTED=0x21

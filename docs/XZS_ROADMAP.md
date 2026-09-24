@@ -20,7 +20,7 @@ Progress is strictly gated by physical hardware verification. Speculative percen
 | **Phase D5** | Real root filesystem mount (RAMDisk XZSFS) | **COMPLETE / SEALED** |
 | **Phase D6** | PID 1 / First EL0 userspace (`initproc` / launchd) | **COMPLETE / SEALED** |
 | **Phase D7** | Interactive USB shell (`/bin/sh`) & Generic Mach-O exec | **COMPLETE / SEALED (D7-M1..M4, D7-T1, D7-T2 COMPLETE)** |
-| **Phase D8** | Native display / framebuffer / touch / recovery console | **IN PROGRESS (D8-M1 PASS, D8-M2 PASS, D8-M3 NEXT)** |
+| **Phase D8** | Native display / framebuffer / touch / recovery console | **IN PROGRESS (D8-M1..M3 PASS, D8-M4 NEXT)** |
 | **Phase D9** | XZSPlatform hardware/platform compatibility layer | **PLANNED** |
 | **Phase D10**| Core native device drivers | **PLANNED** |
 | **Phase D11**| System hardware integration | **PLANNED** |
@@ -383,18 +383,42 @@ Progress is strictly gated by physical hardware verification. Speculative percen
 ### Phase D8 — Native Display / Recovery
 * **Goal**: Bring the Xperia XZs physical display (1080x1920 IPS LCD) to life under native XNU and render the console directly on-device.
 * **Important Constraint**: **GPU acceleration is NOT required for initial D8 framebuffer/text console.**
-* **Subtasks**:
-  - **D8-M1**: MSM8996 / Xperia display hardware audit (MDSS/MDP5, DSI controller, panel ID).
-  - **D8-M2**: Display clocks, power domains, and PMIC regulators.
-  - **D8-M3**: MDP5 framebuffer scanout configuration.
-  - **D8-M4**: DSI controller + panel initialization (Sony Novatek NT35596 / Synaptics).
-  - **D8-M5**: WLED display backlight driver.
-  - **D8-M6**: In-kernel CPU bitmap font / text renderer.
-  - **D8-M7**: Framebuffer terminal / on-screen console (`/dev/tty0`).
-  - **D8-M8**: Touchscreen input driver (Synaptics ClearPad I2C/SPI).
-  - **D8-M9**: Interactive on-device terminal with touch keyboard.
-  - **D8-M10**: Recovery UI foundation.
-  - **D8-M11**: D8 regression and final seal.
+* **Display Priority Path**:
+  ```text
+  PRIMARY DISPLAY OBJECTIVE:
+  reach physical first pixels as directly as possible.
+
+  Priority path:
+  M4 (DSI Host)
+  → P1/P2 (GPIO & PMIC LAB/IBB)
+  → M5 (Panel Power & Reset)
+  → M6 (Panel Vendor & DCS Init)
+  → P3/M7 (WLED Backlight)
+  → M8 (MDP Framebuffer Scanout)
+  → M9 FIRST PIXELS
+  ```
+  *(Do not expand into unrelated GPU/network/userland work before first pixels).*
+
+* **Subtasks & Milestone Status**:
+  - **D8-M1**: MDSS/MMCC topology + safe MMIO audit — **PASS**
+  - **D8-M2**: Power domain + core clocks (AHB, AXI, MDP) — **PASS**
+  - **D8-A0**: Exact Keyaki display audit — **PASS**
+  - **D8-A1**: Linux/TWRP golden state trace — **PASS**
+  - **D8-A2**: Register comparison tooling & test suite — **PASS**
+  - **D8-A3**: TRACE_ONLY state machine & dry-run validation — **PASS**
+  - **D8-M3**: DSI PLL + clocks (BYTE0/PCLK0/ESC0) + 14nm PHY Stage B — **COMPLETE / SEALED** (tag `xzs-d8m3-display-pll-phy-complete`)
+  - **D8-M4**: DSI host/controller configuration (Command Mode, 4-lane) — **NEXT**
+  - **D8-P1**: TLMM GPIO prerequisite — **PENDING**
+  - **D8-P2**: SPMI + LAB/IBB power rail driver — **PENDING**
+  - **D8-M5**: Panel power/reset sequence — **PENDING**
+  - **D8-M6**: Panel vendor/DCS initialization sequence — **PENDING**
+  - **D8-P3**: PMIC WLED backlight prerequisite — **PENDING**
+  - **D8-M7**: Backlight control driver — **PENDING**
+  - **D8-M8**: MDP framebuffer scanout configuration — **PENDING**
+  - **D8-M9**: Physical first pixels on screen — **PENDING**
+  - **D8-M10**: Framebuffer text console (`/dev/tty0`) — **PENDING**
+  - **D8-M11**: Boot splash/logo — **PENDING**
+  - **D8-M12**: Display regression suite and final seal — **PENDING**
 * **Hardware Targets**:
   `TEST_PATTERN_VISIBLE=yes` -> XNU-XZS text visible -> shell output visible -> interactive recovery.
 

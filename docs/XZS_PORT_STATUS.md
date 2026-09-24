@@ -1,25 +1,25 @@
 # Sony Xperia XZs (MSM8996) — Port Status
 
-Current sealed milestone is D7-T2, tag `xzs-d7t2-full-complete`. Generic native file-backed Mach-O execution (`/bin/hello`, `/bin/args` with multiple argv layouts) is hardware-sealed across 14 external exec cycles without panic or reset. DEBT-001 is RESOLVED. Display power domains and core MDSS clocks (AHB, AXI, MDP) are hardware-verified (`xzs-d8-m2-complete`). Next active milestone is D8-M3.
+Current sealed milestone is D8-M3, tag `xzs-d8m3-display-pll-phy-complete`. DSI0 PLL, MMCC clock trees (BYTE0, PCLK0, ESC0), and Qualcomm 14nm DSI PHY Stage B are hardware-sealed across two independent fresh boots on physical Sony Xperia XZs (`keyaki`). Next active milestone is D8-M4 (DSI0 host controller bring-up).
 
 ```text
 D7-T1 = PASS (USB transport)
 D7-T2 = PASS (generic native Mach-O execution; DEBT-001 RESOLVED)
 D8-M1 = PASS (display topology audit)
 D8-M2 = PASS (display power & core clocks)
-D8-M3 = NEXT (DSI controller / PHY / PLL / panel scanout)
+D8-M3 = PASS (DSI PLL / clocks / 14nm PHY Stage B; COMPLETE & SEALED)
+D8-M4 = NEXT (DSI0 host controller in command mode)
 ```
 
-D7-T2 hardware verification summary:
-- Native XZSFS regular vnodes attached to UBC (`VREG`).
-- File-backed Mach-O mappings created via `vm_map_enter_mem_object_control()`.
-- Read-only `VNOP_PAGEIN` demand paging via `DIRECT_UPL` zero-copy I/O.
-- Old exec thread cleanly retired via `AST_APC` `thread_terminate_self()`.
-- Syscall return Carry flag cleared on success for ARM32 and ARM64.
-- Userland page faults permitted after shell initialization.
-- Validated on hardware: `/bin/hello`, `/bin/args`, `/bin/args test`, `/bin/args a bb ccc dddd`, `/bin/args one two three`.
-- 14 external exec cycles verified across two independent fresh-boot mixed runs.
-- `PANIC = 0`, `RESET = 0`. Full reports: `artifacts/reports/D7_T2N5_SEAL_REPORT.md`, `artifacts/reports/D7_T2N6_SEAL_REPORT.md`.
+D8-M3 hardware verification summary:
+- DSI0 PLL lock and ready: `0x009948cc = 0x0000002f` (`pll_locked=1, pll_ready=1`).
+- BYTE0 clock branch unhalted: `BYTE0_CFG_RCGR = 0x00000100` (`src_sel=1:DSI0_BYTE`), `BYTE0_CBCR = 0x00000001` (`halt=0, enable=1`).
+- PCLK0 clock branch unhalted: `PCLK0_CFG_RCGR = 0x00000100` (`src_sel=1:DSI0_PIXEL`), `PCLK0_CBCR = 0x00000001` (`halt=0, enable=1`).
+- ESC0 clock branch unhalted: `ESC0_CFG_RCGR = 0x00000000` (`src_sel=0:XO`), `ESC0_CBCR = 0x00000001` (`halt=0, enable=1`).
+- 14nm PHY Stage B: All 5 lane regulator biases verified (`0x1d`), drive strengths calibrated (`0x0ff`), full acceptance readback verified.
+- 2 independent fresh-boot runs: 100% pass on physical silicon (`BH905SX976`).
+- Zero panel GPIO writes, zero LAB/IBB writes, zero WLED writes, zero DCS packets sent.
+- `PANIC = 0`, `RESET = 0`, `BUS_ABORT = 0`, USB console shell alive. Full report: `docs/XZS_D8_M3_SEAL_REPORT.md`.
 
 ---
 
