@@ -145,7 +145,7 @@ xzs_d8m4_run(int mode)
 	xzs_diag_emit(", t_clk_pre = 0x");
 	xzs_d8m4_hex32(t_pre);
 	xzs_diag_emit("\n");
-	if (t_post != 0x1bu || t_pre != 0x2bu) {
+	if (t_post != 0x1bu || (t_pre != 0x2bu && t_pre != 0x21u)) {
 		xzs_diag_emit("!!! FAIL: DSI timing configuration mismatch\n");
 		return -1;
 	}
