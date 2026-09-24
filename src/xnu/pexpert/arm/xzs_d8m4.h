@@ -64,6 +64,7 @@ xzs_d8m4_dump_status(void)
 		0x00994010u, /* DSI_STATUS */
 		0x00994014u, /* DSI_FIFO_STATUS */
 		0x00994018u, /* DSI_TIMING_CTRL */
+		0x0099401cu, /* DSI_CLK_CTRL */
 		0x009940f0u, /* DSI_CTRL */
 		0x00994110u, /* DSI_COMMAND_MODE_MDP_CTRL */
 		0x009941b4u, /* DSI_EOT_PACKET_CTRL */
@@ -133,11 +134,13 @@ xzs_d8m4_run(int mode)
 	}
 	xzs_diag_emit("[D8-M4] CHECKPOINT D8M4-10 LOWER_LAYER_VERIFY PASS\n");
 
-	/* CHECKPOINT D8M4-20: TIMING_CONFIG (DSI_TIMING_CTRL = 0x1b, DSI_T_CLK_PRE_EXTEND = 0x2b) */
+	/* CHECKPOINT D8M4-20: TIMING_CONFIG (DSI_TIMING_CTRL mask 0x3f = 0x1b, DSI_T_CLK_PRE_EXTEND mask 0x3f = 0x2b) */
 	xzs_diag_emit("[D8-M4] CHECKPOINT D8M4-20 TIMING_CONFIG START\n");
 	if (!is_dryrun) {
-		d8m4_write32(0x00994018u, 0x0000001bu);
-		d8m4_write32(0x009942a0u, 0x0000002bu);
+		uint32_t cur_timing = d8m4_read32(0x00994018u);
+		d8m4_write32(0x00994018u, (cur_timing & ~0x3fu) | 0x0000001bu);
+		uint32_t cur_extend = d8m4_read32(0x009942a0u);
+		d8m4_write32(0x009942a0u, (cur_extend & ~0x3fu) | 0x0000002bu);
 	}
 	uint32_t t_post = is_dryrun ? 0x0000001bu : (d8m4_read32(0x00994018u) & 0x3fu);
 	uint32_t t_pre  = is_dryrun ? 0x0000002bu : (d8m4_read32(0x009942a0u) & 0x3fu);
@@ -152,13 +155,17 @@ xzs_d8m4_run(int mode)
 	}
 	xzs_diag_emit("[D8-M4] CHECKPOINT D8M4-20 TIMING_CONFIG PASS\n");
 
-	/* CHECKPOINT D8M4-30: LANE_CONFIG (DSI_LANE_CTRL = 0x03000104) */
+	/* CHECKPOINT D8M4-30: LANE_CONFIG (DSI_CTRL_0 = 0x33333000, DSI_LANE_CTRL = 0x03000104) */
 	xzs_diag_emit("[D8-M4] CHECKPOINT D8M4-30 LANE_CONFIG START\n");
 	if (!is_dryrun) {
+		d8m4_write32(0x0099400cu, 0x33333000u);
 		d8m4_write32(0x009941f4u, 0x03000104u);
 	}
+	uint32_t ctrl_0    = is_dryrun ? 0x33333000u : d8m4_read32(0x0099400cu);
 	uint32_t lane_ctrl = is_dryrun ? 0x03000104u : d8m4_read32(0x009941f4u);
-	xzs_diag_emit("  DSI_LANE_CTRL = 0x");
+	xzs_diag_emit("  DSI_CTRL_0 = 0x");
+	xzs_d8m4_hex32(ctrl_0);
+	xzs_diag_emit(", DSI_LANE_CTRL = 0x");
 	xzs_d8m4_hex32(lane_ctrl);
 	xzs_diag_emit("\n");
 	if (lane_ctrl != 0x03000104u) {
@@ -194,9 +201,21 @@ xzs_d8m4_run(int mode)
 	/* CHECKPOINT D8M4-50: HOST_ENABLE (DSI_CTRL = 0x00000001) */
 	xzs_diag_emit("[D8-M4] CHECKPOINT D8M4-50 HOST_ENABLE START\n");
 	if (!is_dryrun) {
-		d8m4_write32(0x009940f0u, 0x00000001u);
+		uint32_t cur_ctrl = d8m4_read32(0x009940f0u);
+		d8m4_write32(0x009940f0u, cur_ctrl | 0x00000001u);
 	}
-	uint32_t dsi_ctrl = is_dryrun ? 0x00000001u : d8m4_read32(0x009940f0u);
+	uint32_t dsi_ctrl = 0;
+	if (is_dryrun) {
+		dsi_ctrl = 0x00000001u;
+	} else {
+		for (int p = 0; p < 1000; p++) {
+			dsi_ctrl = d8m4_read32(0x009940f0u);
+			if (dsi_ctrl & 1u) {
+				break;
+			}
+			for (volatile int d = 0; d < 100; d++) { }
+		}
+	}
 	xzs_diag_emit("  DSI_CTRL = 0x");
 	xzs_d8m4_hex32(dsi_ctrl);
 	xzs_diag_emit("\n");
