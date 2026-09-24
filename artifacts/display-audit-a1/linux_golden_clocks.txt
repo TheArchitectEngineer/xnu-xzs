@@ -1,0 +1,74 @@
+# Linux Golden Clock Verification: Sony Xperia XZs (Keyaki / MSM8996)
+# Target Serial: BH905SX976
+# Captured Live from Physical Device Debugfs (/sys/kernel/debug/clk/)
+
+GOLDEN_ENV=TWRP_RECOVERY_3.18.20-v01+
+GOLDEN_KERNEL_VERSION=Linux localhost 3.18.20-v01+ #1 SMP PREEMPT
+TARGET_SERIAL=BH905SX976
+PANEL_WORKING=yes
+DISPLAY_RESOLUTION=1080x1920
+
+# Live Hardware Proven Clock Rates (Hz)
+LINUX_PIXEL_CLOCK=149506560
+LINUX_DSI_BIT_CLOCK=897039360
+LINUX_DSI_BYTE_CLOCK=112129920
+LINUX_DSI_ESC_CLOCK=19200000
+LINUX_PLL_VCO=1794078720
+LINUX_MDP_CLOCK=171428571
+LINUX_AHB_CLOCK=19200000
+
+# A0 Baseline Calculated Values (Hz)
+A0_PIXEL_CLOCK=149506560
+A0_BIT_CLOCK=897039360
+A0_BYTE_CLOCK=112129920
+A0_ESC_CLOCK=19200000
+A0_VCO=1794078720
+
+# Comparison Verdict
+CLOCK_VALUE_COMPARISON:
+PIXEL=MATCH
+BIT=MATCH
+BYTE=MATCH
+ESC=MATCH
+VCO=MATCH
+
+# Clock Tree Topology & Dividers (Hardware Proven from Debugfs Parent Links)
+# VCO (1,794,078,720 Hz)
+#   --> dsi0pll_post_n1_div_clk (div = 2) = 897,039,360 Hz [BIT CLOCK]
+#         --> dsi0pll_byte_clk_src (div = 8) = 112,129,920 Hz [BYTE CLOCK]
+#               --> dsi0pll_byte_clk_mux = 112,129,920 Hz
+#                     --> ext_byte0_clk_src = 112,129,920 Hz
+#                           --> byte0_clk_src (MMCC) = 112,129,920 Hz
+#                                 --> mdss_byte0_clk (MMCC Branch) = 112,129,920 Hz
+#         --> dsi0pll_n2_div_clk (div = 3) = 299,013,120 Hz
+#               --> dsi0pll_pixel_clk_src (div = 2) = 149,506,560 Hz [PIXEL CLOCK]
+#                     --> dsi0pll_pixel_clk_mux = 149,506,560 Hz
+#                           --> ext_pclk0_clk_src = 149,506,560 Hz
+#                                 --> pclk0_clk_src (MMCC) = 149,506,560 Hz
+#                                       --> mdss_pclk0_clk (MMCC Branch) = 149,506,560 Hz
+# XO (19,200,000 Hz)
+#   --> esc0_clk_src (MMCC) = 19,200,000 Hz
+#         --> mdss_esc0_clk (MMCC Branch) = 19,200,000 Hz [ESCAPE CLOCK]
+# GPLL0 (600,000,000 Hz)
+#   --> mdp_clk_src (MMCC div = 3.5 / 7) = 171,428,571 Hz [MDP CORE CLOCK]
+#         --> mdss_mdp_clk (MMCC Branch) = 171,428,571 Hz
+
+COMMAND_MODE_CLOCK_CALCULATOR=mdss_panel_calc_clk_rate + mdss_dsi_clk_refresh + pll_vco_set_rate_8996
+INPUT_PARAMETERS:
+- xres: 1080
+- yres: 1920
+- h_back_porch: 8
+- h_pulse_width: 8
+- h_front_porch: 56 (h_total = 1152)
+- v_back_porch: 8
+- v_pulse_width: 8
+- v_front_porch: 227 (v_total = 2163)
+- frame_rate: 60
+- bpp: 24 (RGB888)
+- data_lanes: 4
+OUTPUT_PARAMETERS:
+- pclk: 149506560 Hz
+- bitclk: 897039360 Hz
+- byteclk: 112129920 Hz
+- vco: 1794078720 Hz
+A0_CALCULATED_CLOCKS_VALID_FOR_PROGRAMMING=yes
