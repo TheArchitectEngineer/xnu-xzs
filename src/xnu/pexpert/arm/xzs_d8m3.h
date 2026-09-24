@@ -529,32 +529,16 @@ xzs_d8m3_run(int mode)
 	xzs_diag_emit("[D8-M3] BYTE0 RCG update complete\n");
 	xzs_d8m3_print_byte0_status("AFTER_UPDATE_TRIGGER");
 
-	/* 4. Ensure RCG root is active / enabled (CMD_ROOT_EN bit 1) */
-	if (!is_dryrun) {
-		uint32_t cmd_curr = xzs_phys_read32(0x008c2120);
-		if ((cmd_curr & 0x80000000u) != 0 || (cmd_curr & 0x02u) == 0) {
-			display_write32(0x008c2120u, cmd_curr | 0x02u, is_dryrun);
-			uint32_t poll_count = 500;
-			while (poll_count > 0) {
-				cmd_curr = xzs_phys_read32(0x008c2120);
-				if ((cmd_curr & 0x80000000u) == 0) {
-					break;
-				}
-				delay(10);
-				poll_count--;
-			}
-		}
-	}
-	xzs_diag_emit("[D8-M3] BYTE0 root active\n");
-	xzs_d8m3_print_byte0_status("AFTER_RCG_ENABLE");
-
-	/* 5. Enable/unhalt CBCR (s_m3_writes[56]: 0x008c233c = 0x00000001) */
+	/* 4. Enable/unhalt CBCR (s_m3_writes[56]: 0x008c233c = 0x00000001) */
+	xzs_diag_emit("[D8-M3] STEP 4: Writing BYTE0_CBCR = 0x00000001\n");
 	if (display_write32(s_m3_writes[56].addr, s_m3_writes[56].val, is_dryrun) != 0) {
 		xzs_diag_emit("[D8-M3] ERROR: write failed at step D8M3-70 (CBCR)\n");
 		xzs_diag_emit("[D8-M3] RESULT=WRITE_FAILED\n");
 		return;
 	}
 	if (!is_dryrun) {
+		delay(10);
+		xzs_diag_emit("[D8-M3] STEP 5: Polling BYTE0_CBCR unhalt\n");
 		uint32_t cbcr = 0;
 		if (display_poll_cbcr(0x008c233c, 50000, &cbcr) != 0) {
 			xzs_diag_emit("[D8-M3] ERROR: BYTECLK_UNHALT_TIMEOUT cbcr=0x");
