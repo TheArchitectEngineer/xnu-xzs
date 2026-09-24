@@ -143,6 +143,26 @@ display_which(int argc, char **argv)
 	if (argc == 1) {
 		return 1;
 	}
+	if (argc == 2 && seq(argv[1], "status")) {
+		return 1;
+	}
+	if (argc == 2 && seq(argv[1], "regs")) {
+		return 25;
+	}
+	if (argc == 2 && seq(argv[1], "m3-dryrun")) {
+		return 22;
+	}
+	if (argc == 3 && seq(argv[1], "m3-run")) {
+		if (seq(argv[2], "dryrun")) {
+			return 22;
+		}
+		if (seq(argv[2], "pll")) {
+			return 23;
+		}
+		if (seq(argv[2], "full")) {
+			return 24;
+		}
+	}
 	if (argc == 3 && seq(argv[1], "power")) {
 		if (seq(argv[2], "status")) {
 			return 7;
@@ -153,6 +173,21 @@ display_which(int argc, char **argv)
 		if (seq(argv[2], "mdss-on")) {
 			return 9;
 		}
+	}
+	return -1;
+}
+
+static long
+dsi_which(int argc, char **argv)
+{
+	if (argc == 1) {
+		return 2;
+	}
+	if (argc == 2 && seq(argv[1], "pll")) {
+		return 26;
+	}
+	if (argc == 2 && seq(argv[1], "phy")) {
+		return 27;
 	}
 	return -1;
 }
@@ -507,7 +542,12 @@ xzs_d7t2_shell(void)
 				cmd_diag(which);
 			}
 		} else if (seq(argv[0], "dsi")) {
-			cmd_diag(2);
+			long which = dsi_which(argc, argv);
+			if (which < 0) {
+				werr("dsi: usage: dsi [pll|phy]\n");
+			} else {
+				cmd_diag(which);
+			}
 		} else if (seq(argv[0], "clocks")) {
 			long which = clocks_which(argc, argv);
 			if (which < 0) {

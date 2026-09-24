@@ -774,6 +774,8 @@ xzs_d8m2_critical_on(const char *action, uint32_t offset, int parent)
 	xzs_d8m2_finish("PASS");
 }
 
+#include "xzs_d8m3.h"
+
 void
 xzs_diag_dispatch(uint64_t which, uint64_t arg1, uint64_t arg2, uint64_t arg3)
 {
@@ -845,6 +847,24 @@ xzs_diag_dispatch(uint64_t which, uint64_t arg1, uint64_t arg2, uint64_t arg3)
 		xzs_diag_xzsfs_pagecheck(arg1, arg2, arg3);
 		break;
 	}
+	case 22:
+		xzs_d8m3_run(0);
+		break;
+	case 23:
+		xzs_d8m3_run(1);
+		break;
+	case 24:
+		xzs_d8m3_run(2);
+		break;
+	case 25:
+		xzs_d8m3_dump_regs();
+		break;
+	case 26:
+		xzs_d8m3_dump_pll();
+		break;
+	case 27:
+		xzs_d8m3_dump_phy();
+		break;
 	default:
 		xzs_diag_emit("[XZS-D8M1] unknown diag\n");
 		break;
