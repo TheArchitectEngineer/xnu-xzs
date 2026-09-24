@@ -408,6 +408,7 @@ arm_prepare_u32_syscall_return(const struct sysent *callp, arm_saved_state_t *re
 			ss32->cpsr |= PSR_CF;
 			unix_syscall_return_kprintf("error: setting carry to trigger cerror call\n");
 		} else {        /* (not error) */
+			ss32->cpsr &= ~PSR_CF;
 			switch (callp->sy_return_type) {
 			case _SYSCALL_RET_INT_T:
 			case _SYSCALL_RET_UINT_T:
@@ -616,6 +617,7 @@ arm_prepare_u64_syscall_return(const struct sysent *callp, arm_saved_state_t *re
 			ss64->cpsr |= PSR64_CF;
 			unix_syscall_return_kprintf("error: setting carry to trigger cerror call\n");
 		} else {        /* (not error) */
+			ss64->cpsr &= ~PSR64_CF;
 			switch (callp->sy_return_type) {
 			case _SYSCALL_RET_INT_T:
 				ss64->x[0] = uthread->uu_rval[0];

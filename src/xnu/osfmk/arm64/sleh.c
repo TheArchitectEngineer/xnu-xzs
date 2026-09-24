@@ -897,10 +897,7 @@ sleh_synchronous(arm_context_t *context, uint64_t esr, vm_offset_t far, __unused
 			ss64->cpsr &= ~0x20000000ULL;
 			return;
 		} else if (is_user && class == ESR_EC_SVC_64 && xzs_d7m4_post_read_el0 &&
-		    ESR_ISS(esr) == 0x80 &&
-		    (ss64->x[16] == 1 || ss64->x[16] == 2 || ss64->x[16] == 5 ||
-		    ss64->x[16] == 6 || ss64->x[16] == 7 || ss64->x[16] == 12 ||
-		    ss64->x[16] == 55 || ss64->x[16] == 59 || ss64->x[16] == 196)) {
+		    ESR_ISS(esr) == 0x80) {
 			if (ss64->x[16] == 55) {
 				extern void xzs_usb_t1z_report(void);
 				extern void xzs_spin_halt(void);
@@ -908,6 +905,10 @@ sleh_synchronous(arm_context_t *context, uint64_t esr, vm_offset_t far, __unused
 				xzs_spin_halt();
 			}
 			/* Interactive shell syscalls after the sealed M4 read. */
+			goto xzs_d6m5_dispatch_first_svc;
+		} else if (is_user && xzs_d7m4_post_read_el0 &&
+		    (class == ESR_EC_DABORT_EL0 || class == ESR_EC_IABORT_EL0)) {
+			/* Allow userland page faults during interactive shell session. */
 			goto xzs_d6m5_dispatch_first_svc;
 		} else if (is_user && class == ESR_EC_SVC_64 && xzs_d7m4_armed) {
 			if (!xzs_d7m4_read_entered &&
