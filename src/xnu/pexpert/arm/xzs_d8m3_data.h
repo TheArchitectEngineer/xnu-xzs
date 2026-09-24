@@ -112,7 +112,7 @@ static const struct m3_reg_write s_m3_writes[68] = {
     { 0x00994420u, 0x00000000u, "D8M3-30", "PHY common control 3" },
     { 0x0099485cu, 0x00000010u, "D8M3-40", "Common PLL output buffer enable" },
     { 0x00994448u, 0x00000001u, "D8M3-40", "PLL clock generation kick" },
-    { 0x008c2124u, 0x00000200u, "D8M3-70", "Select DSI0 PLL Byte Mux" },
+    { 0x008c2124u, 0x00000100u, "D8M3-70", "Select DSI0 PLL Byte Mux" },
     { 0x008c2120u, 0x00000001u, "D8M3-70", "Trigger Byte0 update" },
     { 0x008c233cu, 0x00000001u, "D8M3-70", "Enable mdss_byte0_clk" },
     { 0x008c2004u, 0x00000200u, "D8M3-80", "Select DSI0 PLL Pixel Mux" },
