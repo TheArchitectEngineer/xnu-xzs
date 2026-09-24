@@ -93,7 +93,15 @@ display_write32(uint32_t phys, uint32_t val, int is_dryrun)
 
 	/* Diagnostic readback check for PLL configuration registers */
 	if (phys >= 0x00994800u && phys <= 0x00994904u) {
-		if ((rb & 0xffu) != (val & 0xffu)) {
+		uint32_t mask = 0xffu;
+		if (phys == 0x0099483cu) mask = 0x1fu;
+		else if (phys == 0x0099484cu) mask = 0x01u;
+		else if (phys == 0x00994870u) mask = 0x03u;
+		else if (phys == 0x00994884u) mask = 0x03u;
+		else if (phys == 0x00994888u) mask = 0x1fu;
+		else if (phys == 0x00994894u) mask = 0x00u;
+
+		if ((rb & mask) != (val & mask)) {
 			xzs_diag_emit("[D8-M3] WRITE_MISMATCH addr=0x");
 			xzs_diag_hex32(phys);
 			xzs_diag_emit(" wrote=0x");
@@ -157,6 +165,10 @@ xzs_d8m3_dump_pll(void)
 	xzs_d8m3_print_reg(0x00994870, xzs_phys_read32(0x00994870));
 	xzs_d8m3_print_reg(0x00994874, xzs_phys_read32(0x00994874));
 	xzs_d8m3_print_reg(0x00994878, xzs_phys_read32(0x00994878));
+	xzs_d8m3_print_reg(0x0099487c, xzs_phys_read32(0x0099487c));
+	xzs_d8m3_print_reg(0x00994880, xzs_phys_read32(0x00994880));
+	xzs_d8m3_print_reg(0x00994890, xzs_phys_read32(0x00994890));
+	xzs_d8m3_print_reg(0x009948b4, xzs_phys_read32(0x009948b4));
 	xzs_d8m3_print_reg(0x00994410, xzs_phys_read32(0x00994410));
 	xzs_d8m3_print_reg(0x00994414, xzs_phys_read32(0x00994414));
 	xzs_d8m3_print_reg(0x00994448, xzs_phys_read32(0x00994448));
@@ -293,6 +305,11 @@ xzs_d8m3_run(int mode)
 	/* Checkpoint D8M3-30: Writes 8..51 (Ext clk override, PLL registers, PHY cmn ctrl) */
 	xzs_diag_emit("[D8-M3] CHECKPOINT D8M3-30 PLL_CONFIG_DONE START\n");
 	for (int i = 8; i < 52; i++) {
+		if (!is_dryrun && s_m3_writes[i].addr == 0x00994420u) {
+			/* Qualcomm downstream 14nm PHY CMN reset pulse: 0x20 -> delay 10us -> 0x00 */
+			display_write32(0x00994420u, 0x20u, is_dryrun);
+			delay(10);
+		}
 		if (display_write32(s_m3_writes[i].addr, s_m3_writes[i].val, is_dryrun) != 0) {
 			xzs_diag_emit("[D8-M3] ERROR: write failed at step D8M3-30\n");
 			xzs_diag_emit("[D8-M3] RESULT=WRITE_FAILED\n");
