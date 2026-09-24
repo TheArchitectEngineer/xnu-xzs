@@ -329,7 +329,7 @@ xzs_d8m3_print_pclk0_status(const char *label)
 	xzs_diag_hex32(cfg);
 	xzs_diag_emit(" (src_sel=");
 	uint32_t src_sel = (cfg >> 8) & 0x7u;
-	xzs_diag_emit(src_sel == 2 ? "2:DSI0_PIXEL" : (src_sel == 1 ? "1:DSI1_PIXEL" : (src_sel == 0 ? "0:XO" : "?")));
+	xzs_diag_emit(src_sel == 1 ? "1:DSI0_PIXEL" : (src_sel == 2 ? "2:DSI1_PIXEL" : (src_sel == 0 ? "0:XO" : "?")));
 	xzs_diag_emit(" div=");
 	xzs_diag_hex32(cfg & 0x1fu);
 	xzs_diag_emit(")\n  CBCR=0x");
@@ -740,18 +740,23 @@ xzs_d8m3_run(int mode)
 
 	/* Checkpoint D8M3-90: Escape Clock Configuration (Writes 60..62) */
 	xzs_diag_emit("[D8-M3] CHECKPOINT D8M3-90 ESCCLK_CONFIG START\n");
+	xzs_d8m3_print_esc0_status("PRE");
+
 	/* 1. Configure RCG source */
 	if (display_write32(s_m3_writes[60].addr, s_m3_writes[60].val, is_dryrun) != 0) {
 		xzs_diag_emit("[D8-M3] ERROR: write failed at step D8M3-90 (CFG)\n");
 		xzs_diag_emit("[D8-M3] RESULT=WRITE_FAILED\n");
 		return;
 	}
+	xzs_d8m3_print_esc0_status("AFTER_CFG_WRITE");
+
 	/* 2. Trigger CMD update bit */
 	if (display_write32(s_m3_writes[61].addr, s_m3_writes[61].val, is_dryrun) != 0) {
 		xzs_diag_emit("[D8-M3] ERROR: write failed at step D8M3-90 (CMD)\n");
 		xzs_diag_emit("[D8-M3] RESULT=WRITE_FAILED\n");
 		return;
 	}
+
 	/* 3. Bounded poll for update completion (bit 0 == 0) */
 	if (!is_dryrun) {
 		uint32_t cmd_val = 0;
@@ -759,26 +764,48 @@ xzs_d8m3_run(int mode)
 			xzs_diag_emit("[D8-M3] ERROR: ESCCLK_RCG_UPDATE_TIMEOUT cmd=0x");
 			xzs_diag_hex32(cmd_val);
 			xzs_diag_emit("\n");
+			xzs_d8m3_print_esc0_status("UPDATE_FAILED");
 			xzs_diag_emit("[D8-M3] RESULT=ESCCLK_TIMEOUT\n");
 			return;
 		}
 	}
+	xzs_d8m3_print_esc0_status("AFTER_UPDATE_TRIGGER");
+
 	/* 4. Enable/unhalt CBCR */
+	xzs_diag_emit("[D8-M3] STEP 4: Writing ESC0_CBCR = 0x00000001\n");
 	if (display_write32(s_m3_writes[62].addr, s_m3_writes[62].val, is_dryrun) != 0) {
 		xzs_diag_emit("[D8-M3] ERROR: write failed at step D8M3-90 (CBCR)\n");
 		xzs_diag_emit("[D8-M3] RESULT=WRITE_FAILED\n");
 		return;
 	}
 	if (!is_dryrun) {
+		delay(10);
+		xzs_diag_emit("[D8-M3] STEP 5: Polling ESC0_CBCR unhalt\n");
 		uint32_t cbcr = 0;
 		if (display_poll_cbcr(0x008c2344, 50000, &cbcr) != 0) {
 			xzs_diag_emit("[D8-M3] ERROR: ESCCLK_UNHALT_TIMEOUT cbcr=0x");
 			xzs_diag_hex32(cbcr);
 			xzs_diag_emit("\n");
+			xzs_d8m3_print_esc0_status("AFTER_CBCR_ENABLE_FAILED");
 			xzs_diag_emit("[D8-M3] RESULT=ESCCLK_TIMEOUT\n");
 			return;
 		}
 	}
+	xzs_d8m3_print_esc0_status("AFTER_CBCR_ENABLE");
+
+	/* 5. Verify PLL did not lose lock during ESC0 programming */
+	uint32_t pll_esc_post = xzs_phys_read32(0x009948cc);
+	xzs_diag_emit("[D8-M3] PLL_PRIMARY_STATUS=0x");
+	xzs_diag_hex32(pll_esc_post);
+	xzs_diag_emit("\n");
+	if (!is_dryrun && (pll_esc_post & 0x21u) != 0x21u) {
+		xzs_diag_emit("[D8-M3] ERROR: ESC0_PARENT_CHAIN_REGRESSION pll=0x");
+		xzs_diag_hex32(pll_esc_post);
+		xzs_diag_emit("\n");
+		xzs_diag_emit("[D8-M3] RESULT=ESC0_PARENT_CHAIN_REGRESSION\n");
+		return;
+	}
+
 	xzs_diag_emit("[D8-M3] CHECKPOINT D8M3-90 ESCCLK_CONFIG PASS\n");
 
 	/* If PLL Stage only, complete here */
