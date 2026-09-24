@@ -19,9 +19,8 @@ Progress is strictly gated by physical hardware verification. Speculative percen
 | **Phase D4** | Block-storage driver integration (`bdevsw` / `disk0`) | **COMPLETE** |
 | **Phase D5** | Real root filesystem mount (RAMDisk XZSFS) | **COMPLETE / SEALED** |
 | **Phase D6** | PID 1 / First EL0 userspace (`initproc` / launchd) | **COMPLETE / SEALED** |
-| **Phase D7** | Interactive serial shell (`/bin/sh` headless REPL) | **IN PROGRESS (D7-M1..M4 COMPLETE; D7-T1 Candidate-2A and Candidate-2B COMPLETE)** |
-
-| **Phase D8** | Native display / framebuffer / touch / recovery console | **PLANNED** |
+| **Phase D7** | Interactive USB shell (`/bin/sh`) & Generic Mach-O exec | **COMPLETE / SEALED (D7-M1..M4, D7-T1, D7-T2 COMPLETE)** |
+| **Phase D8** | Native display / framebuffer / touch / recovery console | **IN PROGRESS (D8-M1 PASS, D8-M2 PASS, D8-M3 NEXT)** |
 | **Phase D9** | XZSPlatform hardware/platform compatibility layer | **PLANNED** |
 | **Phase D10**| Core native device drivers | **PLANNED** |
 | **Phase D11**| System hardware integration | **PLANNED** |
@@ -304,13 +303,8 @@ Progress is strictly gated by physical hardware verification. Speculative percen
   - **D7-M2 (PID1 -> `/bin/sh` Handoff)**: ✅ **COMPLETE / SEALED** (PID1 in-place same-thread reload to `/bin/sh` static Mach-O image; old bootstrap image deallocated, new `__TEXT` mapped RX, stack reinitialized RW/NX with canonical Darwin initial frame; hardware verified real EL0 transition, `SYS_write(1, "XZS: /bin/sh EL0 online\n", 24)` returning 24 with zero error, subsequent EL0 instruction execution, and clean exit trapped via `SYS_exit(0)`).
   - **D7-M3 (Shell Stdout & Visual Identity)**: ✅ **COMPLETE / SEALED** (Userspace `/bin/sh` in EL0 executing Darwin `write(1, banner, 1332)` and `write(1, prompt, 5)` to `/dev/console`; exact banner and prompt text observed on physical console transport; passive syscall dispatch verified; 64 sustained post-prompt EL0 getpid round-trips; UART RX preserved as unavailable).
   - **D7-M4 (Shell Stdin)**: ✅ **COMPLETE / SEALED** (MSM8996 UARTDM RX engine, GICv3 SPI 114 / INTID 146 level-high IRQ, bounded SPSC RX ring, deferred tty delivery via thread_call, native tty line discipline, canonical blocking Darwin read(0), native wakeup, exact ABC\n payload return to EL0, and post-read EL0 execution continuity hardware-verified on Xperia XZs. Physical UART test-point input is classified as out of scope under the original non-invasive project boundary; native kernel stdin semantics are 100% verified.)
-  - **D7-T1 Candidate-2A (USB Physical-Layer Snapshot)**: ✅ **COMPLETE / HARDWARE VERIFIED** (Extended read-only snapshot of MSM8996 DWC3, QSCRATCH, QUSB2 and primary-PHY reset ownership; no USB register writes and no USB state mutation. See `docs/D7_T1_CANDIDATE2A_REPORT.md`.)
-  - **D7-T1 Candidate-2B (Halted DWC3 `DCFG` Normalization)**: ✅ **COMPLETE / HARDWARE VERIFIED** (One masked DWC3 `DCFG` write only, under `RUN_STOP=0` and `DEVCTRLHLT=1`: `0x0008080c → 0x00080800`; QSCRATCH, QUSB2, GCC, event-buffer and EP0 paths remained untouched. D7-T1 itself remains unsealed. See `docs/D7_T1_CANDIDATE2B_REPORT.md`.)
-  - **D7-M5**: Interactive REPL / command loop (line editing, enter key handling).
-  - **D7-M6**: Filesystem commands (`pwd`, `ls`, `cat`).
-  - **D7-M7**: System commands (`uname`, `mount`, `reboot`).
-  - **D7-M8**: Stable normal boot (successful shell boot remains running interactively).
-  - **D7-M9**: Full D7 regression and final seal.
+  - **D7-T1 (USB Console Transport)**: ✅ **COMPLETE / SEALED** (DWC3 USB gadget console; Z1-Z4 transport handshake; bi-directional bulk loopback; interactive `/bin/sh` shell over USB console).
+  - **D7-T2 (Native Generic Mach-O Execution)**: ✅ **COMPLETE / SEALED** (VREG UBC attachment via `ubc_info_init()`; file-backed Mach-O mapping via `vm_map_enter_mem_object_control()`; XZSFS read-only `VNOP_PAGEIN` demand-paging via `DIRECT_UPL`; AST_APC clean old-thread retirement; syscall return Carry flag clear; `/bin/hello` and `/bin/args` hardware-sealed across 14 external exec cycles; `DEBT-001` RESOLVED). Tag: `xzs-d7t2-full-complete`.
 * **D7-M2 Hardware Evidence**:
   - Tested boot image SHA-256: `a78af05bbd39e2c93a04d3b3384d885a83005e40b25dd6cb5b7140795c71e24e`.
   - Tested commit: `694446c0af85095e3045fb3d15bd12215aea203e`.

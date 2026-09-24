@@ -1,6 +1,11 @@
 # XNU-XZS Current Session Handoff
 
-Current accepted milestone is D8-M2, tag `xzs-d8-m2-complete` (`545398f30d8fda592d4ca67ee867a016c2f37092`). D8-M2 display power and core clock bring-up (AHB, AXI, MDP) is PASS on physical hardware. D8-M3 is NOT STARTED. Do not reopen DEBT-001, DEBT-002, or DEBT-003. ACTIVE-D8-001 is RESOLVED in [`docs/XZS_BLOCKERS_AND_DEFERRED.md`](XZS_BLOCKERS_AND_DEFERRED.md). Entry point: [`README.md`](../README.md). Display notes: [`docs/XZS_DISPLAY_BRINGUP.md`](XZS_DISPLAY_BRINGUP.md).
+Current accepted milestones:
+- **D7-T2 (Native Generic Mach-O Execution)**: COMPLETE & SEALED, tag `xzs-d7t2-full-complete`. DEBT-001 is RESOLVED. Generic external Mach-O execution (`/bin/hello`, `/bin/args` with multiple argv layouts) is hardware-verified across 14 external exec cycles without panic or reset.
+- **D8-M2 (Display Power & Core Clocks)**: COMPLETE & SEALED, tag `xzs-d8-m2-complete` (`545398f30d8fda592d4ca67ee867a016c2f37092`). AHB, AXI, MDP clocks verified on physical hardware.
+- **D8-M3 (DSI PHY / PLL / Lanes / Framebuffer)**: NEXT ACTIVE MILESTONE.
+
+Do not reopen DEBT-001 (RESOLVED). DEBT-002 and DEBT-003 remain active/deferred. ACTIVE-D8-001 is RESOLVED in [`docs/XZS_BLOCKERS_AND_DEFERRED.md`](XZS_BLOCKERS_AND_DEFERRED.md). Entry point: [`README.md`](../README.md). Display notes: [`docs/XZS_DISPLAY_BRINGUP.md`](XZS_DISPLAY_BRINGUP.md).
 
 The record below is the older D6/D7 handoff and is kept as history.
 
