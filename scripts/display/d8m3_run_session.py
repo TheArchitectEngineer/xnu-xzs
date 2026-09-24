@@ -30,13 +30,13 @@ def collect(dev, seconds=1.0):
             quiet = 0
         else:
             quiet += 1
-            if buf and quiet >= 4:
+            if buf and (b"RESULT=" in buf or b"xzs#" in buf or b"[D8-M3] RESULT=" in buf) and quiet >= 4:
                 break
             time.sleep(0.05)
     return buf
 
 
-def send_cmd(dev, cmd_str, wait_sec=1.5):
+def send_cmd(dev, cmd_str, wait_sec=2.0):
     print(f"\n>>> SEND: {cmd_str.strip()}", flush=True)
     payload = cmd_str.encode("utf-8") if isinstance(cmd_str, str) else cmd_str
     if not payload.endswith(b"\n"):
@@ -150,7 +150,7 @@ def main():
     # 5. Execution based on mode
     if args.mode == "pll":
         print("\n=== STEP 3: REAL HARDWARE PLL + CLOCKS PROGRAMMING (MODE 1: STAGE A ONLY) ===", flush=True)
-        pll_out = run_step("RUN PLL PROGRAMMING", "display m3-run pll\n", 3.0)
+        pll_out = run_step("RUN PLL PROGRAMMING", "display m3-run pll\n", 6.0)
         if "RESULT=PASS_PLL_STAGE" not in pll_out:
             print("!!! PLL LOCK / CLOCKS FAILED OR TIMEOUT. Halting.", flush=True)
             run_step("DUMP PLL STATUS", "dsi pll\n", 1.5)
@@ -161,7 +161,7 @@ def main():
 
     elif args.mode == "full":
         print("\n=== STEP 3: REAL HARDWARE FULL M3 PROGRAMMING (MODE 2: PLL + CLOCKS + PHY) ===", flush=True)
-        full_out = run_step("RUN FULL M3 PROGRAMMING", "display m3-run full\n", 3.0)
+        full_out = run_step("RUN FULL M3 PROGRAMMING", "display m3-run full\n", 6.0)
         if "RESULT=PASS_FULL_M3" not in full_out:
             print("!!! FULL M3 PROGRAMMING FAILED. Halting.", flush=True)
             run_step("DUMP PLL STATUS", "dsi pll\n", 1.5)

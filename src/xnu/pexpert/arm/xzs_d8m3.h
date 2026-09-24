@@ -86,7 +86,10 @@ display_write32(uint32_t phys, uint32_t val, int is_dryrun)
 	}
 	*(volatile uint32_t *)(uintptr_t)phys = val;
 	__asm__ volatile("dsb sy" ::: "memory");
-	uint32_t rb = *(volatile uint32_t *)(uintptr_t)phys;
+	uint32_t rb = 0;
+	if (phys >= 0x00994800u && phys <= 0x00994904u) {
+		rb = *(volatile uint32_t *)(uintptr_t)phys;
+	}
 	if (g_xzs_ttbr0 != 0) {
 		__asm__ volatile("msr TTBR0_EL1, %0; isb sy" :: "r"(saved) : "memory");
 	}
@@ -122,6 +125,50 @@ display_poll32(uint32_t phys, uint32_t mask, uint32_t expected, uint32_t timeout
 	while (elapsed <= timeout_us) {
 		val = xzs_phys_read32(phys);
 		if ((val & mask) == expected) {
+			if (last_val) {
+				*last_val = val;
+			}
+			return 0;
+		}
+		delay(10);
+		elapsed += 10;
+	}
+	if (last_val) {
+		*last_val = val;
+	}
+	return -1;
+}
+
+static int
+display_poll_rcg(uint32_t phys, uint32_t timeout_us, uint32_t *last_val)
+{
+	uint32_t val = 0;
+	uint32_t elapsed = 0;
+	while (elapsed <= timeout_us) {
+		val = xzs_phys_read32(phys);
+		if ((val & 0x01u) == 0) {
+			if (last_val) {
+				*last_val = val;
+			}
+			return 0;
+		}
+		delay(10);
+		elapsed += 10;
+	}
+	if (last_val) {
+		*last_val = val;
+	}
+	return -1;
+}
+
+static int
+display_poll_cbcr(uint32_t phys, uint32_t timeout_us, uint32_t *last_val)
+{
+	uint32_t val = 0;
+	uint32_t elapsed = 0;
+	while (elapsed <= timeout_us) {
+		val = xzs_phys_read32(phys);
+		if ((val & 0x80000000u) == 0 || ((val >> 28) & 7u) == 2u) {
 			if (last_val) {
 				*last_val = val;
 			}
@@ -395,7 +442,7 @@ xzs_d8m3_run(int mode)
 	/* 3. Bounded poll for update completion (bit 0 == 0) */
 	if (!is_dryrun) {
 		uint32_t cmd_val = 0;
-		if (display_poll32(0x008c2120, 0x01, 0x00, 10000, &cmd_val) != 0) {
+		if (display_poll_rcg(0x008c2120, 10000, &cmd_val) != 0) {
 			xzs_diag_emit("[D8-M3] ERROR: BYTECLK_RCG_UPDATE_TIMEOUT cmd=0x");
 			xzs_diag_hex32(cmd_val);
 			xzs_diag_emit("\n");
@@ -411,7 +458,7 @@ xzs_d8m3_run(int mode)
 	}
 	if (!is_dryrun) {
 		uint32_t cbcr = 0;
-		if (display_poll32(0x008c233c, 0x80000000u, 0, 50000, &cbcr) != 0) {
+		if (display_poll_cbcr(0x008c233c, 50000, &cbcr) != 0) {
 			xzs_diag_emit("[D8-M3] ERROR: BYTECLK_UNHALT_TIMEOUT cbcr=0x");
 			xzs_diag_hex32(cbcr);
 			xzs_diag_emit("\n");
@@ -438,7 +485,7 @@ xzs_d8m3_run(int mode)
 	/* 3. Bounded poll for update completion (bit 0 == 0) */
 	if (!is_dryrun) {
 		uint32_t cmd_val = 0;
-		if (display_poll32(0x008c2000, 0x01, 0x00, 10000, &cmd_val) != 0) {
+		if (display_poll_rcg(0x008c2000, 10000, &cmd_val) != 0) {
 			xzs_diag_emit("[D8-M3] ERROR: PCLK_RCG_UPDATE_TIMEOUT cmd=0x");
 			xzs_diag_hex32(cmd_val);
 			xzs_diag_emit("\n");
@@ -454,7 +501,7 @@ xzs_d8m3_run(int mode)
 	}
 	if (!is_dryrun) {
 		uint32_t cbcr = 0;
-		if (display_poll32(0x008c2314, 0x80000000u, 0, 50000, &cbcr) != 0) {
+		if (display_poll_cbcr(0x008c2314, 50000, &cbcr) != 0) {
 			xzs_diag_emit("[D8-M3] ERROR: PCLK_UNHALT_TIMEOUT cbcr=0x");
 			xzs_diag_hex32(cbcr);
 			xzs_diag_emit("\n");
@@ -481,7 +528,7 @@ xzs_d8m3_run(int mode)
 	/* 3. Bounded poll for update completion (bit 0 == 0) */
 	if (!is_dryrun) {
 		uint32_t cmd_val = 0;
-		if (display_poll32(0x008c2160, 0x01, 0x00, 10000, &cmd_val) != 0) {
+		if (display_poll_rcg(0x008c2160, 10000, &cmd_val) != 0) {
 			xzs_diag_emit("[D8-M3] ERROR: ESCCLK_RCG_UPDATE_TIMEOUT cmd=0x");
 			xzs_diag_hex32(cmd_val);
 			xzs_diag_emit("\n");
@@ -497,7 +544,7 @@ xzs_d8m3_run(int mode)
 	}
 	if (!is_dryrun) {
 		uint32_t cbcr = 0;
-		if (display_poll32(0x008c2344, 0x80000000u, 0, 50000, &cbcr) != 0) {
+		if (display_poll_cbcr(0x008c2344, 50000, &cbcr) != 0) {
 			xzs_diag_emit("[D8-M3] ERROR: ESCCLK_UNHALT_TIMEOUT cbcr=0x");
 			xzs_diag_hex32(cbcr);
 			xzs_diag_emit("\n");
