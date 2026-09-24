@@ -808,16 +808,58 @@ xzs_d8m3_run(int mode)
 		return;
 	}
 
-	/* Stage B: PHY Lanes (Writes 63..67) */
+	/* Stage B: PHY Common & Lanes */
+	xzs_diag_emit("[D8-M3] CHECKPOINT D8M3-A0 PHY_COMMON START\n");
+	/* 1. Configure 5-lane regulator bias (0x1d) */
+	display_write32(0x00994564u, 0x0000001du, is_dryrun); /* DL0 regulator */
+	display_write32(0x009945e4u, 0x0000001du, is_dryrun); /* DL1 regulator */
+	display_write32(0x00994664u, 0x0000001du, is_dryrun); /* DL2 regulator */
+	display_write32(0x009946e4u, 0x0000001du, is_dryrun); /* DL3 regulator */
+	display_write32(0x00994764u, 0x0000001du, is_dryrun); /* CLK regulator */
+
+	/* 2. Configure PHY timing parameters */
+	display_write32(0x00994018u, 0x0000001bu, is_dryrun); /* DSI_T_CLK_POST = 27 */
+	display_write32(0x009942a0u, 0x0000002bu, is_dryrun); /* DSI_T_CLK_PRE = 43 */
 	xzs_diag_emit("[D8-M3] CHECKPOINT D8M3-A0 PHY_COMMON PASS\n");
 
 	xzs_diag_emit("[D8-M3] CHECKPOINT D8M3-B0 PHY_LANES START\n");
-	for (int i = 63; i < 68; i++) {
-		if (display_write32(s_m3_writes[i].addr, s_m3_writes[i].val, is_dryrun) != 0) {
-			xzs_diag_emit("[D8-M3] ERROR: write failed at step D8M3-B0\n");
-			xzs_diag_emit("[D8-M3] RESULT=WRITE_FAILED\n");
-			return;
-		}
+	/* 3. Configure lane drive strength */
+	display_write32(0x00994440u, 0x000006ffu, is_dryrun); /* DL0 drive strength */
+	display_write32(0x009944c0u, 0x000006ffu, is_dryrun); /* DL1 drive strength */
+	display_write32(0x00994540u, 0x000006ffu, is_dryrun); /* DL2 drive strength */
+	display_write32(0x009945c0u, 0x000006ffu, is_dryrun); /* DL3 drive strength */
+	display_write32(0x00994640u, 0x000000ffu, is_dryrun); /* CLK drive strength */
+
+	if (!is_dryrun) {
+		xzs_diag_emit("[D8-M3] DL0: REGULATOR=0x");
+		xzs_diag_hex32(xzs_phys_read32(0x00994564));
+		xzs_diag_emit(" STRENGTH=0x");
+		xzs_diag_hex32(xzs_phys_read32(0x00994440));
+		xzs_diag_emit("\n");
+
+		xzs_diag_emit("[D8-M3] DL1: REGULATOR=0x");
+		xzs_diag_hex32(xzs_phys_read32(0x009945e4));
+		xzs_diag_emit(" STRENGTH=0x");
+		xzs_diag_hex32(xzs_phys_read32(0x009944c0));
+		xzs_diag_emit("\n");
+
+		xzs_diag_emit("[D8-M3] DL2: REGULATOR=0x");
+		xzs_diag_hex32(xzs_phys_read32(0x00994664));
+		xzs_diag_emit(" STRENGTH=0x");
+		xzs_diag_hex32(xzs_phys_read32(0x00994540));
+		xzs_diag_emit("\n");
+
+		xzs_diag_emit("[D8-M3] DL3: REGULATOR=0x");
+		xzs_diag_hex32(xzs_phys_read32(0x009946e4));
+		xzs_diag_emit(" STRENGTH=0x");
+		xzs_diag_hex32(xzs_phys_read32(0x009945c0));
+		xzs_diag_emit("\n");
+
+		xzs_diag_emit("[D8-M3] CLK: REGULATOR=0x");
+		xzs_diag_hex32(xzs_phys_read32(0x00994764));
+		xzs_diag_emit(" STRENGTH=0x");
+		xzs_diag_hex32(xzs_phys_read32(0x00994640));
+		xzs_diag_emit("\n");
 	}
 	xzs_diag_emit("[D8-M3] CHECKPOINT D8M3-B0 PHY_LANES PASS\n");
 
@@ -830,6 +872,9 @@ xzs_d8m3_run(int mode)
 		uint32_t dl3 = xzs_phys_read32(0x009945c0);
 		uint32_t clk = xzs_phys_read32(0x00994640);
 		uint32_t pll = xzs_phys_read32(0x009948cc);
+		uint32_t byte0_cbcr = xzs_phys_read32(0x008c233c);
+		uint32_t pclk0_cbcr = xzs_phys_read32(0x008c2314);
+		uint32_t esc0_cbcr  = xzs_phys_read32(0x008c2344);
 
 		if (dl0 != 0x06ff || dl1 != 0x06ff || dl2 != 0x06ff || dl3 != 0x06ff || clk != 0x00ff) {
 			xzs_diag_emit("[D8-M3] ERROR: DRIVE_STRENGTH_VERIFY_FAILED\n");
@@ -841,6 +886,11 @@ xzs_d8m3_run(int mode)
 			xzs_diag_hex32(pll);
 			xzs_diag_emit("\n");
 			xzs_diag_emit("[D8-M3] RESULT=PLL_UNLOCKED_POST_PHY\n");
+			return;
+		}
+		if ((byte0_cbcr & 0x80000000u) != 0 || (pclk0_cbcr & 0x80000000u) != 0 || (esc0_cbcr & 0x80000000u) != 0) {
+			xzs_diag_emit("[D8-M3] ERROR: CLOCK_BRANCH_HALTED_POST_PHY\n");
+			xzs_diag_emit("[D8-M3] RESULT=CLOCK_HALTED_POST_PHY\n");
 			return;
 		}
 	}
