@@ -20,7 +20,7 @@ Progress is strictly gated by physical hardware verification. Speculative percen
 | **Phase D5** | Real root filesystem mount (RAMDisk XZSFS) | **COMPLETE / SEALED** |
 | **Phase D6** | PID 1 / First EL0 userspace (`initproc` / launchd) | **COMPLETE / SEALED** |
 | **Phase D7** | Interactive USB shell (`/bin/sh`) & Generic Mach-O exec | **COMPLETE / SEALED (D7-M1..M4, D7-T1, D7-T2 COMPLETE)** |
-| **Phase D8** | Native display / framebuffer / touch / recovery console | **IN PROGRESS (D8-M1..M4 PASS, D8-P1..P2 COMPLETE / SEALED, D8-M5 NEXT)** |
+| **Phase D8** | Native display / framebuffer / touch / recovery console | **IN PROGRESS (D8-M1..M5 PASS / SEALED, D8-P1..P2 COMPLETE / SEALED, D8-M6 NEXT)** |
 | **Phase D9** | XZSPlatform hardware/platform compatibility layer | **PLANNED** |
 | **Phase D10**| Core native device drivers | **PLANNED** |
 | **Phase D11**| System hardware integration | **PLANNED** |
@@ -410,8 +410,8 @@ Progress is strictly gated by physical hardware verification. Speculative percen
   - **D8-M4**: DSI host/controller configuration (Command Mode, 4-lane) — **COMPLETE / SEALED** (tag `xzs-d8m4-dsi-host-complete`)
   - **D8-P1**: TLMM GPIO prerequisite — **COMPLETE / SEALED** (tag `xzs-d8p1-gpio-complete`)
   - **D8-P2**: SPMI + LAB/IBB power rail driver — **COMPLETE / SEALED** (tag `xzs-d8p2-power-rails-complete`)
-  - **D8-M5**: Panel power/reset sequence — **NEXT**
-  - **D8-M6**: Panel vendor/DCS initialization sequence — **PENDING**
+  - **D8-M5**: Panel power/reset sequence — **COMPLETE / SEALED** (tag `xzs-d8m5-panel-power-reset-complete`)
+  - **D8-M6**: Panel vendor/DCS initialization sequence — **NEXT**
   - **D8-P3**: PMIC WLED backlight prerequisite — **PENDING**
   - **D8-M7**: Backlight control driver — **PENDING**
   - **D8-M8**: MDP framebuffer scanout configuration — **PENDING**
