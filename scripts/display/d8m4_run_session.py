@@ -38,6 +38,11 @@ def collect(dev, seconds=1.0):
 
 def send_cmd(dev, cmd_str, wait_sec=2.0):
     print(f"\n>>> SEND: {cmd_str.strip()}", flush=True)
+    # Drain any lingering bytes before issuing command
+    while True:
+        pre_drain, _ = xzs_console.bulk_read(dev, timeout_ms=50)
+        if not pre_drain:
+            break
     payload = cmd_str.encode("utf-8") if isinstance(cmd_str, str) else cmd_str
     if not payload.endswith(b"\n"):
         payload += b"\n"
@@ -127,7 +132,7 @@ def main():
 
     # 3. Establish M3 Lower Layer (PLL Locked + Clocks + 14nm PHY)
     print("\n=== RUNNING M3 LOWER-LAYER HARDWARE BRING-UP ===", flush=True)
-    m3_out = run_step("RUN M3 FULL", "display m3-run full\n", 20.0)
+    m3_out = run_step("RUN M3 FULL", "display m3-run full\n", 50.0)
     if "RESULT=PASS_FULL_M3" not in m3_out:
         print("!!! M3 LOWER LAYER FAILED. Halting before M4.", flush=True)
         log_file.write_text("".join(full_log))
@@ -136,7 +141,7 @@ def main():
 
     # 4. Pre-M4 Host Status
     print("\n=== STEP 1: PRE-M4 HOST STATUS ===", flush=True)
-    run_step("PRE-M4 DSI HOST STATUS", "display m4-status\n", 6.0)
+    run_step("PRE-M4 DSI HOST STATUS", "display m4-status\n", 10.0)
 
     # 5. M4 Dry-Run Verification
     print("\n=== STEP 2: DSI HOST DRY-RUN (TRACE_ONLY) ===", flush=True)
@@ -166,7 +171,7 @@ def main():
     elif args.mode == "full":
         print("\n=== STEP 3: FULL DSI HOST BRING-UP (MODE 2) ===", flush=True)
         full_out = run_step("RUN M4 FULL", "display m4-run full\n", 10.0)
-        if "RESULT=PASS_FULL_M4" not in full_out:
+        if "RESULT=PASS_MODE2" not in full_out and "RESULT=PASS_FULL_M4" not in full_out:
             print("!!! M4 FULL HOST BRING-UP FAILED. Halting.", flush=True)
             log_file.write_text("".join(full_log))
             sys.exit(1)

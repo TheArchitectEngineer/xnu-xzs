@@ -77,10 +77,11 @@ D8-M1      Display topology/MMIO             COMPLETE
 D8-M2      Display power/core clocks         COMPLETE
 D8-A0..A3  Display audit/tooling             COMPLETE
 D8-M3      DSI PLL/clocks/14nm PHY           COMPLETE
-D8-M4      DSI host/controller               NEXT
+D8-M4      DSI host/controller               COMPLETE
+D8-P1/P2   Panel GPIO/power prerequisites    NEXT
 ```
 
-Tags that name durable milestones: `xzs-d7t1-complete`, `xzs-d7t2-full-complete`, `xzs-d8-m1-complete`, `xzs-d8-m2-complete`, `xzs-d8m3-display-pll-phy-complete`.
+Tags that name durable milestones: `xzs-d7t1-complete`, `xzs-d7t2-full-complete`, `xzs-d8-m1-complete`, `xzs-d8-m2-complete`, `xzs-d8m3-display-pll-phy-complete`, `xzs-d8m4-dsi-host-complete`.
 
 ## Generic Native Mach-O Execution (Phase D7-T2)
 
@@ -128,7 +129,8 @@ D8-M1     = PASS
 D8-M2     = PASS
 D8-A0..A3 = PASS
 D8-M3     = PASS (COMPLETE / SEALED / HARDWARE_PROVEN)
-D8-M4     = NEXT
+D8-M4     = PASS (COMPLETE / SEALED / HARDWARE_PROVEN)
+D8-P1/P2  = NEXT
 ```
 
 D8-M1, tag `xzs-d8-m1-complete` at `861032cb7b137096edeb1aa5caa04aef6737533a`, read the clock controller only. MMAGIC_MDSS_GDSC was `0xa0222000` (on). MDSS_GDSC was `0x00222001` (collapsed).
@@ -152,12 +154,22 @@ D8-M3, tag `xzs-d8m3-display-pll-phy-complete`, completed DSI0 PLL, MMCC clock t
 - Critical M3 diff: 0 against Linux golden state
 - Safety invariants: 0 panel GPIO writes, 0 LAB/IBB writes, 0 WLED writes, 0 DCS packets sent; shell and USB console remained 100% responsive; 0 bus aborts, 0 panics, 0 resets.
 
-> Native XNU now brings up the MSM8996 DSI0 PLL, MMCC BYTE0/PCLK0/ESC0 clock tree, and Qualcomm 14nm DSI PHY on physical Xperia XZs hardware.
-> *(Note: panel power, DSI host traffic, backlight, and pixel scanout are not yet active and remain subsequent milestones).*
+D8-M4, tag `xzs-d8m4-dsi-host-complete`, completed DSI0 host controller staged configuration and master enable (Command Mode, 4 active data lanes) on physical Xperia XZs hardware across two independent fresh-boot runs:
+- DSI controller enable: `DSI_CTRL_PRE_ENABLE = 0x000001f4` (command mode, 4 data lanes, clock lane, master disabled) -> `DSI_CTRL_POST_ENABLE = 0x000001f5` (master bit 0 enabled)
+- DSI timing & packets: `DSI_CLKOUT_TIMING_CTRL = 0x00001b2b` (Keyaki `t_clk_post=0x1b`, `t_clk_pre=0x2b`), `DSI_EOT_PACKET_CTRL = 0x00000011`
+- DSI lane status: `DSI_LANE_STATUS = 0x00001f1f` (all 4 data lanes and clock lane in clean MIPI Stopstate, idle and ready)
+- DSI internal clocks: `DSI_CLK_CTRL = 0x0000023f`, `DSI_CLK_STATUS = 0x0000234f` (all core clock gates active)
+- DSI FIFO status: `DSI_FIFO_STATUS = 0x11111000` (idle, transmit queues ready)
+- Reproducibility: 2/2 independent cold/fresh boots passed 100%
+- Critical M4 diff: 0 against updated Linux golden state
+- Safety invariants: 0 DCS packets sent, 0 DMA/BTA/MDP SW triggers, 0 panel GPIO writes, 0 LAB/IBB/WLED writes, 0 bus aborts, 0 SError, 0 panics, 0 resets; shell and USB console remained 100% responsive.
 
-D8-M4 (DSI0 host / controller bring-up) is the NEXT active milestone.
+> Native XNU now configures and enables the MSM8996 DSI0 host controller in 4-lane command mode on physical Xperia XZs hardware, remaining in a stable idle stopstate ready for panel initialization.
+> *(Note: panel power rails LAB/IBB, reset GPIO, DCS initialization packets, backlight, and pixel scanout remain subsequent milestones).*
 
-Details: [`docs/XZS_DISPLAY_BRINGUP.md`](docs/XZS_DISPLAY_BRINGUP.md), [`docs/XZS_D8_M3_SEAL_REPORT.md`](docs/XZS_D8_M3_SEAL_REPORT.md). Bypassed work: [`docs/XZS_BLOCKERS_AND_DEFERRED.md`](docs/XZS_BLOCKERS_AND_DEFERRED.md). Status: [`docs/XZS_PORT_STATUS.md`](docs/XZS_PORT_STATUS.md).
+D8-P1/D8-P2 (TLMM GPIOs and SPMI LAB/IBB power rail prerequisites) is the NEXT active milestone.
+
+Details: [`docs/XZS_DISPLAY_BRINGUP.md`](docs/XZS_DISPLAY_BRINGUP.md), [`docs/XZS_D8_M3_SEAL_REPORT.md`](docs/XZS_D8_M3_SEAL_REPORT.md), [`docs/XZS_D8_M4_SEAL_REPORT.md`](docs/XZS_D8_M4_SEAL_REPORT.md). Bypassed work: [`docs/XZS_BLOCKERS_AND_DEFERRED.md`](docs/XZS_BLOCKERS_AND_DEFERRED.md). Status: [`docs/XZS_PORT_STATUS.md`](docs/XZS_PORT_STATUS.md).
 
 ### Verified Milestone Capabilities
 

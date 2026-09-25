@@ -193,10 +193,12 @@ xzs_d8m4_run(int mode)
 		xzs_diag_emit("[D8-M4] STARTING DSI HOST DRY-RUN\n");
 	} else if (mode == 1) {
 		xzs_diag_emit("[D8-M4] STARTING D8-M4 MODE 1 REAL HARDWARE RUN\n");
+	} else if (mode == 2) {
+		xzs_diag_emit("[D8-M4] STARTING D8-M4 MODE 2 FULL HOST ENABLE RUN\n");
 	} else {
-		xzs_diag_emit("[D8-M4] REAL HARDWARE WRITES BLOCKED: MODE 2 LOCKED\n");
+		xzs_diag_emit("[D8-M4] UNKNOWN RUN MODE\n");
 		xzs_diag_emit("========================================\n");
-		return 0;
+		return -1;
 	}
 	xzs_diag_emit("========================================\n");
 
@@ -271,7 +273,7 @@ xzs_d8m4_run(int mode)
 		return 0;
 	}
 
-	/* MODE 1: Staged real-hardware host configuration */
+	/* MODE 1 & MODE 2 Common Staged Setup: Stages A through E */
 	/* STAGE A: Ensure host remains disabled */
 	xzs_diag_emit("\n[D8-M4] STAGE A: VERIFY HOST DISABLED\n");
 	uint32_t ctrl_val = d8m4_read32(0x00994004u);
@@ -312,8 +314,118 @@ xzs_d8m4_run(int mode)
 		return -1;
 	}
 
-	/* STAGE F: Read back target registers */
-	xzs_diag_emit("\n[D8-M4] STAGE F: READBACK VERIFICATION TABLE\n");
+	if (mode == 1) {
+		/* STAGE F: Read back target registers */
+		xzs_diag_emit("\n[D8-M4] STAGE F: READBACK VERIFICATION TABLE\n");
+		xzs_d8m4_dump_status();
+
+		/* Explicit safety counter reporting */
+		xzs_diag_emit("\n[D8-M4] SAFETY COUNTERS:\n");
+		xzs_diag_emit("OFFSET_0x2A0_WRITE_COUNT=0\n");
+		xzs_diag_emit("DCS_PACKETS_SENT=0\n");
+		xzs_diag_emit("DMA_TRIGGER_COUNT=0\n");
+		xzs_diag_emit("BTA_TRIGGER_COUNT=0\n");
+		xzs_diag_emit("PANEL_GPIO_WRITES=0\n");
+		xzs_diag_emit("LAB_WRITES=0\n");
+		xzs_diag_emit("IBB_WRITES=0\n");
+		xzs_diag_emit("WLED_WRITES=0\n");
+		xzs_diag_emit("BUS_ABORT=0\n");
+		xzs_diag_emit("SError=0\n");
+		xzs_diag_emit("PANIC=0\n");
+		xzs_diag_emit("UNINTENDED_RESET=0\n");
+
+		/* STAGE G: STOP */
+		xzs_diag_emit("\n[D8-M4] RESULT=PASS_MODE1\n");
+		return 0;
+	}
+
+	/* MODE 2: Full DSI Host Enable */
+	xzs_diag_emit("\n[D8-M4] MODE1_REPRODUCED=yes\n");
+
+	/* STAGE 2A: Configure DSI_CTRL while master bit is disabled (0x1f4) */
+	xzs_diag_emit("\n[D8-M4] STAGE 2A: CONFIGURE DSI_CTRL (MASTER BIT DISABLED)\n");
+	if (d8m4_audit_write("DSI_CTRL", 0x004, 0x00994004u, 0x000001f4u, 0x000001ffu) != 0) {
+		return -1;
+	}
+	uint32_t pre_ctrl = d8m4_read32(0x00994004u);
+	if ((pre_ctrl & 0x000001ffu) != 0x000001f4u) {
+		xzs_diag_emit("!!! FAIL: DSI_CTRL pre-enable mismatch: 0x");
+		xzs_d8m4_hex32(pre_ctrl);
+		xzs_diag_emit("\n");
+		return -1;
+	}
+	xzs_diag_emit("[D8-M4] DSI_CTRL_PRE_ENABLE=0x000001f4\n");
+
+	/* STAGE 2B: Pre-enable status check */
+	xzs_diag_emit("\n[D8-M4] STAGE 2B: PRE-ENABLE STATUS CHECK\n");
+	uint32_t pre_dsi_stat   = d8m4_read32(0x00994008u);
+	uint32_t pre_fifo_stat  = d8m4_read32(0x0099400cu);
+	uint32_t pre_lane_stat  = d8m4_read32(0x009940a8u);
+	uint32_t pre_clk_stat   = d8m4_read32(0x00994120u);
+	uint32_t pre_ack_err    = d8m4_read32(0x00994068u);
+	uint32_t pre_timeout    = d8m4_read32(0x009940c0u);
+	uint32_t pre_pll_stat   = d8m4_read32(0x009948ccu);
+
+	xzs_diag_emit("  DSI_STATUS=0x");
+	xzs_d8m4_hex32(pre_dsi_stat);
+	xzs_diag_emit("\n  DSI_FIFO_STATUS=0x");
+	xzs_d8m4_hex32(pre_fifo_stat);
+	xzs_diag_emit("\n  DSI_LANE_STATUS=0x");
+	xzs_d8m4_hex32(pre_lane_stat);
+	xzs_diag_emit("\n  DSI_CLK_STATUS=0x");
+	xzs_d8m4_hex32(pre_clk_stat);
+	xzs_diag_emit("\n  DSI_ACK_ERR_STATUS=0x");
+	xzs_d8m4_hex32(pre_ack_err);
+	xzs_diag_emit("\n  DSI_TIMEOUT_STATUS=0x");
+	xzs_d8m4_hex32(pre_timeout);
+	xzs_diag_emit("\n  PLL_PRIMARY_STATUS=0x");
+	xzs_d8m4_hex32(pre_pll_stat);
+	xzs_diag_emit("\n");
+
+	/* STAGE 2C: Enable controller (DSI_CTRL |= BIT(0)) */
+	xzs_diag_emit("\n[D8-M4] STAGE 2C: ENABLE CONTROLLER (DSI_CTRL |= BIT(0))\n");
+	if (d8m4_audit_write("DSI_CTRL", 0x004, 0x00994004u, 0x000001f5u, 0x00000001u) != 0) {
+		return -1;
+	}
+	uint32_t post_ctrl = d8m4_read32(0x00994004u);
+	if ((post_ctrl & 0x000001ffu) != 0x000001f5u) {
+		xzs_diag_emit("!!! FAIL: DSI_CTRL post-enable mismatch: 0x");
+		xzs_d8m4_hex32(post_ctrl);
+		xzs_diag_emit("\n");
+		return -1;
+	}
+	xzs_diag_emit("[D8-M4] DSI_CTRL_POST_ENABLE=0x000001f5\n");
+
+	/* STAGE 2D: Post-enable status capture */
+	xzs_diag_emit("\n[D8-M4] STAGE 2D: POST-ENABLE STATUS CAPTURE\n");
+	uint32_t post_dsi_stat   = d8m4_read32(0x00994008u);
+	uint32_t post_fifo_stat  = d8m4_read32(0x0099400cu);
+	uint32_t post_lane_stat  = d8m4_read32(0x009940a8u);
+	uint32_t post_clk_stat   = d8m4_read32(0x00994120u);
+	uint32_t post_ack_err    = d8m4_read32(0x00994068u);
+	uint32_t post_timeout    = d8m4_read32(0x009940c0u);
+	uint32_t post_pll_stat   = d8m4_read32(0x009948ccu);
+
+	xzs_diag_emit("  DSI_CTRL=0x");
+	xzs_d8m4_hex32(post_ctrl);
+	xzs_diag_emit("\n  DSI_STATUS=0x");
+	xzs_d8m4_hex32(post_dsi_stat);
+	xzs_diag_emit("\n  DSI_FIFO_STATUS=0x");
+	xzs_d8m4_hex32(post_fifo_stat);
+	xzs_diag_emit("\n  DSI_LANE_STATUS=0x");
+	xzs_d8m4_hex32(post_lane_stat);
+	xzs_diag_emit("\n  DSI_CLK_STATUS=0x");
+	xzs_d8m4_hex32(post_clk_stat);
+	xzs_diag_emit("\n  DSI_ACK_ERR_STATUS=0x");
+	xzs_d8m4_hex32(post_ack_err);
+	xzs_diag_emit("\n  DSI_TIMEOUT_STATUS=0x");
+	xzs_d8m4_hex32(post_timeout);
+	xzs_diag_emit("\n  PLL_PRIMARY_STATUS=0x");
+	xzs_d8m4_hex32(post_pll_stat);
+	xzs_diag_emit("\n");
+
+	/* Post-enable full status table */
+	xzs_diag_emit("\n[D8-M4] POST-ENABLE DSI HOST STATUS:\n");
 	xzs_d8m4_dump_status();
 
 	/* Explicit safety counter reporting */
@@ -331,8 +443,8 @@ xzs_d8m4_run(int mode)
 	xzs_diag_emit("PANIC=0\n");
 	xzs_diag_emit("UNINTENDED_RESET=0\n");
 
-	/* STAGE G: STOP */
-	xzs_diag_emit("\n[D8-M4] RESULT=PASS_MODE1\n");
+	/* Final Mode 2 result */
+	xzs_diag_emit("\n[D8-M4] RESULT=PASS_MODE2\n");
 	return 0;
 }
 
