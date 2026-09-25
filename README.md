@@ -80,10 +80,11 @@ D8-M3      DSI PLL/clocks/14nm PHY           COMPLETE
 D8-M4      DSI host/controller               COMPLETE
 D8-P1      TLMM GPIO prerequisite            COMPLETE
 D8-P2      SPMI + LAB/IBB power rails        COMPLETE
-D8-M5      Panel power/reset sequence        NEXT
+D8-M5      Panel power/reset sequence        COMPLETE
+D8-M6      Panel vendor/DCS init sequence    NEXT
 ```
 
-Tags that name durable milestones: `xzs-d7t1-complete`, `xzs-d7t2-full-complete`, `xzs-d8-m1-complete`, `xzs-d8-m2-complete`, `xzs-d8m3-display-pll-phy-complete`, `xzs-d8m4-dsi-host-complete`, `xzs-d8p1-gpio-complete`, `xzs-d8p2-power-rails-complete`.
+Tags that name durable milestones: `xzs-d7t1-complete`, `xzs-d7t2-full-complete`, `xzs-d8-m1-complete`, `xzs-d8-m2-complete`, `xzs-d8m3-display-pll-phy-complete`, `xzs-d8m4-dsi-host-complete`, `xzs-d8p1-gpio-complete`, `xzs-d8p2-power-rails-complete`, `xzs-d8m5-panel-power-reset-complete`.
 
 ## Generic Native Mach-O Execution (Phase D7-T2)
 
@@ -134,7 +135,8 @@ D8-M3     = PASS (COMPLETE / SEALED / HARDWARE_PROVEN)
 D8-M4     = PASS (COMPLETE / SEALED / HARDWARE_PROVEN)
 D8-P1     = PASS (COMPLETE / SEALED / HARDWARE_PROVEN)
 D8-P2     = PASS (COMPLETE / SEALED / HARDWARE_PROVEN)
-D8-M5     = NEXT
+D8-M5     = PASS (COMPLETE / SEALED / HARDWARE_PROVEN)
+D8-M6     = NEXT
 ```
 
 D8-M1, tag `xzs-d8-m1-complete` at `861032cb7b137096edeb1aa5caa04aef6737533a`, read the clock controller only. MMAGIC_MDSS_GDSC was `0xa0222000` (on). MDSS_GDSC was `0x00222001` (collapsed).
@@ -186,12 +188,19 @@ D8-P2, tag `xzs-d8p2-power-rails-complete`, completed SPMI Arbiter v2 communicat
 - Reproducibility: 2/2 independent physical cold/fresh boots passed 100%.
 - Safety invariants: 0 DCS packets sent, 0 WLED writes, panel reset held asserted LOW (GPIO 8 = 0), 0 bus aborts, 0 SError, 0 panics, 0 resets; shell and USB console remained 100% responsive.
 
-> Native XNU now controls, verifies regulation of, and cleanly powers down both LCD panel bias power rails (+5.6V LAB, -5.6V IBB) via SPMI on physical Xperia XZs hardware.
-> *(Note: Panel reset release, DCS initialization, and backlight enable remain subsequent milestones).*
+D8-M5, tag `xzs-d8m5-panel-power-reset-complete`, completed Keyaki panel power-on sequence, cycle-accurate hardware reset sequence, powered-idle verification, and source-proven safe power-down sequence on physical hardware across two independent fresh boots:
+- Sequence Verification: Fully compliant with authoritative downstream kernel `keyaki.dts` specification (`VDDIO_10MS->LAB_10MS->IBB_0MS->RST_LOW_10MS->RST_HIGH_10MS`).
+- Hardware Timed Reset: `RESET_DELTA_US = 10,000 µs` (Run 1) and `10,002 µs` (Run 2) cycle-accurate via `cntvct_el0` (19.2 MHz clock base).
+- Powered-Idle Check: GPIO8=HIGH (Reset released), GPIO10=LOW (TE inactive), GPIO51=HIGH (VDDIO 1.8V enabled), LAB=0xa0 (VREG_OK=1), IBB=0x80 (VREG_OK=1), DSI0 host stopstate intact (`LANE=0x00001f1f`).
+- Mandatory Safe Power-Down: Reset assert LOW (5ms) -> IBB disable (10ms) -> LAB disable (10ms) -> VDDIO disable -> 300ms settling window passed 100%.
+- Reproducibility: 2/2 independent physical cold/fresh boots passed 100%.
+- Strict Scope Locks: 0 DCS packets sent, 0 WLED writes, 0 MDP scanouts/DMA triggers, 0 bus aborts, 0 SError, 0 panics, 0 resets.
 
-D8-M5 (Panel power/reset sequence) is the NEXT active milestone.
+> Native XNU now deterministically powers on, resets, verifies regulation of, and cleanly shuts down the physical Sharp + Synaptics command-mode panel on Sony Xperia XZs hardware.
 
-Details: [`docs/XZS_DISPLAY_BRINGUP.md`](docs/XZS_DISPLAY_BRINGUP.md), [`docs/XZS_D8_M3_SEAL_REPORT.md`](docs/XZS_D8_M3_SEAL_REPORT.md), [`docs/XZS_D8_M4_SEAL_REPORT.md`](docs/XZS_D8_M4_SEAL_REPORT.md), [`docs/XZS_D8_P1_SEAL_REPORT.md`](docs/XZS_D8_P1_SEAL_REPORT.md), [`docs/XZS_D8_P2_SEAL_REPORT.md`](docs/XZS_D8_P2_SEAL_REPORT.md). Bypassed work: [`docs/XZS_BLOCKERS_AND_DEFERRED.md`](docs/XZS_BLOCKERS_AND_DEFERRED.md). Status: [`docs/XZS_PORT_STATUS.md`](docs/XZS_PORT_STATUS.md).
+D8-M6 (Panel vendor/DCS initialization sequence) is the NEXT active milestone.
+
+Details: [`docs/XZS_DISPLAY_BRINGUP.md`](docs/XZS_DISPLAY_BRINGUP.md), [`docs/XZS_D8_M3_SEAL_REPORT.md`](docs/XZS_D8_M3_SEAL_REPORT.md), [`docs/XZS_D8_M4_SEAL_REPORT.md`](docs/XZS_D8_M4_SEAL_REPORT.md), [`docs/XZS_D8_P1_SEAL_REPORT.md`](docs/XZS_D8_P1_SEAL_REPORT.md), [`docs/XZS_D8_P2_SEAL_REPORT.md`](docs/XZS_D8_P2_SEAL_REPORT.md), [`docs/XZS_D8_M5_SEAL_REPORT.md`](docs/XZS_D8_M5_SEAL_REPORT.md). Bypassed work: [`docs/XZS_BLOCKERS_AND_DEFERRED.md`](docs/XZS_BLOCKERS_AND_DEFERRED.md). Status: [`docs/XZS_PORT_STATUS.md`](docs/XZS_PORT_STATUS.md).
 
 ### Verified Milestone Capabilities
 

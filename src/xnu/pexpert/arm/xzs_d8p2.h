@@ -32,12 +32,9 @@ extern uint32_t d8p1_read32(uint32_t phys);
 static inline void
 xzs_d8p2_delay_us(uint32_t usec)
 {
-	uint64_t frq;
-	__asm__ volatile ("mrs %0, cntfrq_el0" : "=r" (frq));
-	if (frq == 0) frq = 19200000ULL;
-	uint64_t ticks = ((uint64_t)usec * frq) / 1000000ULL;
+	uint64_t ticks = ((uint64_t)usec * 192ULL) / 10ULL;
 	uint64_t start, cur;
-	__asm__ volatile ("isb; mrs %0, cntvct_el0" : "=r" (start));
+	__asm__ volatile ("isb\n\tmrs %0, cntvct_el0" : "=r" (start));
 	do {
 		xzs_watchdog_pet();
 		__asm__ volatile ("mrs %0, cntvct_el0" : "=r" (cur));

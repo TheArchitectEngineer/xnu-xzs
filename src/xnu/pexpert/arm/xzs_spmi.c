@@ -18,6 +18,18 @@ extern void xzs_breadcrumb(uint32_t cp, uint32_t err);
 extern void delay(int usec);
 extern void xzs_spin_halt(void);
 
+static inline void
+xzs_spmi_delay_us(uint32_t usec)
+{
+	uint64_t ticks = ((uint64_t)usec * 192ULL) / 10ULL;
+	uint64_t start, cur;
+	__asm__ volatile ("isb\n\tmrs %0, cntvct_el0" : "=r" (start));
+	do {
+		xzs_watchdog_pet();
+		__asm__ volatile ("mrs %0, cntvct_el0" : "=r" (cur));
+	} while ((cur - start) < ticks);
+}
+
 /*
  * Static MMIO virtual address mappings
  */
@@ -221,7 +233,7 @@ xzs_spmi_read8(uint8_t sid, uint16_t addr, uint8_t *val)
 		if (status & PMIC_ARB_STATUS_DONE) {
 			break;
 		}
-		delay(1);
+		xzs_spmi_delay_us(1);
 	}
 
 	if (!(status & PMIC_ARB_STATUS_DONE)) {
@@ -285,7 +297,7 @@ xzs_spmi_read_bulk(uint8_t sid, uint16_t addr, uint8_t *buf, size_t len)
 		if (status & PMIC_ARB_STATUS_DONE) {
 			break;
 		}
-		delay(1);
+		xzs_spmi_delay_us(1);
 	}
 
 	if (!(status & PMIC_ARB_STATUS_DONE)) {
@@ -377,7 +389,7 @@ xzs_spmi_write8(uint8_t sid, uint16_t addr, uint8_t val)
 			done = true;
 			break;
 		}
-		delay(1);
+		xzs_spmi_delay_us(1);
 		elapsed_us++;
 	}
 
@@ -1033,7 +1045,7 @@ xzs_spmi_phase_d2c24c_probe(void)
 	uint8_t status_poll = 0;
 	bool vreg_ok = false;
 	for (int p = 0; p < 500; p++) {
-		delay(10); /* 10 us * 500 = 5000 us */
+		xzs_spmi_delay_us(10); /* 10 us * 500 = 5000 us */
 		xzs_spmi_read8(PM8994_SID, PM8994_PERIPH_L28 + PMIC_REG_STATUS, &status_poll);
 		if (status_poll & 0x80U) {
 			vreg_ok = true;
