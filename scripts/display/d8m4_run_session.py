@@ -59,7 +59,11 @@ def parse_regs_dump(output_text):
             parts = line.split("=")
             if len(parts) == 2:
                 addr_str = parts[0].replace("REG:", "").strip()
+                if "(" in addr_str:
+                    addr_str = addr_str.split("(")[0].strip()
                 val_str = parts[1].strip()
+                if " " in val_str:
+                    val_str = val_str.split()[0].strip()
                 try:
                     addr = int(addr_str, 16)
                     val = int(val_str, 16)
@@ -173,6 +177,8 @@ def main():
     print("\n=== STEP 4: POST-PROGRAMMING REGISTER SNAPSHOT ===", flush=True)
     post_regs_out = run_step("SNAPSHOT POST-M4 REGS", "display regs\n", 2.0)
     post_regs = parse_regs_dump(post_regs_out)
+    m4_status_out = run_step("SNAPSHOT M4 STATUS", "display m4-status\n", 2.0)
+    post_regs.update(parse_regs_dump(m4_status_out))
     with open(log_dir / "xnu_post_m4_registers.txt", "w") as f:
         for addr in sorted(post_regs.keys()):
             f.write(f"0x{addr:08x}: 0x{post_regs[addr]:08x}\n")
@@ -196,7 +202,9 @@ def main():
             sys.executable,
             "scripts/display/compare_display_state.py",
             str(golden_path),
-            str(post_json_path)
+            str(post_json_path),
+            "--phase",
+            "mode1" if args.mode == "basic" else ("mode2" if args.mode == "full" else "auto")
         ]
         diff_res = subprocess.run(diff_cmd, capture_output=True, text=True)
         print(diff_res.stdout)
