@@ -875,30 +875,29 @@ sleh_synchronous(arm_context_t *context, uint64_t esr, vm_offset_t far, __unused
 			/* Subsequent known-safe getpid calls remain on the native path. */
 			goto xzs_d6m5_dispatch_first_svc;
 		} else if (is_user && class == ESR_EC_SVC_64 && xzs_d7m4_post_read_el0 &&
-		    ESR_ISS(esr) == 0x80 &&
-		    (ss64->x[16] == 3 || ss64->x[16] == 4 || ss64->x[16] == 20)) {
-			if (ss64->x[16] == 3 && ss64->x[0] == 0 && !xzs_d7t1_read_entered) {
-				xzs_d7t1_read_entered = 1;
-				__asm__ volatile("dmb ish" ::: "memory");
-			}
-			if (ss64->x[16] == 4 && ss64->x[0] == 1 && ss64->x[2] == 5 &&
-			    xzs_d7t1_read_returned) {
-				xzs_d7t1_prompt_write_entered = 1;
-				__asm__ volatile("dmb ish" ::: "memory");
-			}
-			goto xzs_d6m5_dispatch_first_svc;
-		} else if (is_user && class == ESR_EC_SVC_64 && xzs_d7m4_post_read_el0 &&
-		    ESR_ISS(esr) == 0x80 && ss64->x[16] == 58) {
-			extern void xzs_diag_dispatch(uint64_t which, uint64_t arg1, uint64_t arg2, uint64_t arg3);
-			/* Shell diagnostics. Carry must be clear for xzs_svc. */
-			ml_set_interrupts_enabled(TRUE);
-			xzs_diag_dispatch(ss64->x[0], ss64->x[1], ss64->x[2], ss64->x[3]);
-			ss64->x[0] = 0;
-			ss64->cpsr &= ~0x20000000ULL;
-			return;
-		} else if (is_user && class == ESR_EC_SVC_64 && xzs_d7m4_post_read_el0 &&
 		    ESR_ISS(esr) == 0x80) {
-			if (ss64->x[16] == 55) {
+			extern void xzs_watchdog_pet(void);
+			xzs_watchdog_pet();
+			if (ss64->x[16] == 3 || ss64->x[16] == 4 || ss64->x[16] == 20) {
+				if (ss64->x[16] == 3 && ss64->x[0] == 0 && !xzs_d7t1_read_entered) {
+					xzs_d7t1_read_entered = 1;
+					__asm__ volatile("dmb ish" ::: "memory");
+				}
+				if (ss64->x[16] == 4 && ss64->x[0] == 1 && ss64->x[2] == 5 &&
+				    xzs_d7t1_read_returned) {
+					xzs_d7t1_prompt_write_entered = 1;
+					__asm__ volatile("dmb ish" ::: "memory");
+				}
+				goto xzs_d6m5_dispatch_first_svc;
+			} else if (ss64->x[16] == 58) {
+				extern void xzs_diag_dispatch(uint64_t which, uint64_t arg1, uint64_t arg2, uint64_t arg3);
+				/* Shell diagnostics. Carry must be clear for xzs_svc. */
+				ml_set_interrupts_enabled(TRUE);
+				xzs_diag_dispatch(ss64->x[0], ss64->x[1], ss64->x[2], ss64->x[3]);
+				ss64->x[0] = 0;
+				ss64->cpsr &= ~0x20000000ULL;
+				return;
+			} else if (ss64->x[16] == 55) {
 				extern void xzs_usb_t1z_report(void);
 				extern void xzs_spin_halt(void);
 				xzs_usb_t1z_report();

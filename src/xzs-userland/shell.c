@@ -229,6 +229,18 @@ display_which(int argc, char **argv)
 	if (argc >= 2 && (seq(argv[1], "m5-run") || (argc >= 3 && seq(argv[1], "m5") && seq(argv[2], "run")))) {
 		return 44;
 	}
+	if (argc >= 2 && (seq(argv[1], "m6-dryrun") || (argc >= 3 && seq(argv[1], "m6") && seq(argv[2], "dryrun")))) {
+		return 45;
+	}
+	if (argc >= 2 && (seq(argv[1], "m6-stage1") || (argc >= 3 && seq(argv[1], "m6") && seq(argv[2], "stage1")))) {
+		return 46;
+	}
+	if (argc >= 2 && (seq(argv[1], "m6-stage2") || (argc >= 3 && seq(argv[1], "m6") && seq(argv[2], "stage2")))) {
+		return 47;
+	}
+	if (argc >= 2 && (seq(argv[1], "m6-run") || (argc >= 3 && seq(argv[1], "m6") && seq(argv[2], "run")))) {
+		return 48;
+	}
 	if (argc == 3 && seq(argv[1], "power")) {
 		if (seq(argv[2], "status")) {
 			return 7;
