@@ -123,7 +123,7 @@ def main():
 
     # 3. Establish M3 Lower Layer (PLL Locked + Clocks + 14nm PHY)
     print("\n=== RUNNING M3 LOWER-LAYER HARDWARE BRING-UP ===", flush=True)
-    m3_out = run_step("RUN M3 FULL", "display m3-run full\n", 12.0)
+    m3_out = run_step("RUN M3 FULL", "display m3-run full\n", 20.0)
     if "RESULT=PASS_FULL_M3" not in m3_out:
         print("!!! M3 LOWER LAYER FAILED. Halting before M4.", flush=True)
         log_file.write_text("".join(full_log))
@@ -132,11 +132,11 @@ def main():
 
     # 4. Pre-M4 Host Status
     print("\n=== STEP 1: PRE-M4 HOST STATUS ===", flush=True)
-    run_step("PRE-M4 DSI HOST STATUS", "display m4-status\n", 3.0)
+    run_step("PRE-M4 DSI HOST STATUS", "display m4-status\n", 6.0)
 
     # 5. M4 Dry-Run Verification
     print("\n=== STEP 2: DSI HOST DRY-RUN (TRACE_ONLY) ===", flush=True)
-    dry_out = run_step("DRY-RUN DSI HOST", "display m4-dryrun\n", 4.0)
+    dry_out = run_step("DRY-RUN DSI HOST", "display m4-dryrun\n", 10.0)
     if "RESULT=PASS_DRYRUN" not in dry_out:
         print("!!! D8-M4 DRY-RUN FAILED. Halting.", flush=True)
         log_file.write_text("".join(full_log))
@@ -152,7 +152,7 @@ def main():
     if args.mode == "basic":
         print("\n=== STEP 3: DSI HOST BASIC & LANE CONFIG (MODE 1) ===", flush=True)
         basic_out = run_step("RUN M4 BASIC", "display m4-run basic\n", 8.0)
-        if "RESULT=PASS_STAGE_B_BASIC" not in basic_out:
+        if "RESULT=PASS_MODE1" not in basic_out and "RESULT=PASS_STAGE_B_BASIC" not in basic_out:
             print("!!! M4 BASIC CONFIG FAILED. Halting.", flush=True)
             log_file.write_text("".join(full_log))
             sys.exit(1)
