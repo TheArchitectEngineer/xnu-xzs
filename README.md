@@ -81,10 +81,11 @@ D8-M4      DSI host/controller               COMPLETE
 D8-P1      TLMM GPIO prerequisite            COMPLETE
 D8-P2      SPMI + LAB/IBB power rails        COMPLETE
 D8-M5      Panel power/reset sequence        COMPLETE
-D8-M6      Panel vendor/DCS init sequence    NEXT
+D8-M6      Panel vendor/DCS init sequence    COMPLETE
+D8-P3      PMIC WLED backlight prerequisite  NEXT
 ```
 
-Tags that name durable milestones: `xzs-d7t1-complete`, `xzs-d7t2-full-complete`, `xzs-d8-m1-complete`, `xzs-d8-m2-complete`, `xzs-d8m3-display-pll-phy-complete`, `xzs-d8m4-dsi-host-complete`, `xzs-d8p1-gpio-complete`, `xzs-d8p2-power-rails-complete`, `xzs-d8m5-panel-power-reset-complete`.
+Tags that name durable milestones: `xzs-d7t1-complete`, `xzs-d7t2-full-complete`, `xzs-d8-m1-complete`, `xzs-d8-m2-complete`, `xzs-d8m3-display-pll-phy-complete`, `xzs-d8m4-dsi-host-complete`, `xzs-d8p1-gpio-complete`, `xzs-d8p2-power-rails-complete`, `xzs-d8m5-panel-power-reset-complete`, `xzs-d8m6-panel-dcs-complete`.
 
 ## Generic Native Mach-O Execution (Phase D7-T2)
 
@@ -136,7 +137,8 @@ D8-M4     = PASS (COMPLETE / SEALED / HARDWARE_PROVEN)
 D8-P1     = PASS (COMPLETE / SEALED / HARDWARE_PROVEN)
 D8-P2     = PASS (COMPLETE / SEALED / HARDWARE_PROVEN)
 D8-M5     = PASS (COMPLETE / SEALED / HARDWARE_PROVEN)
-D8-M6     = NEXT
+D8-M6     = PASS (COMPLETE / SEALED / HARDWARE_PROVEN)
+D8-P3     = NEXT
 ```
 
 D8-M1, tag `xzs-d8-m1-complete` at `861032cb7b137096edeb1aa5caa04aef6737533a`, read the clock controller only. MMAGIC_MDSS_GDSC was `0xa0222000` (on). MDSS_GDSC was `0x00222001` (collapsed).
@@ -198,9 +200,17 @@ D8-M5, tag `xzs-d8m5-panel-power-reset-complete`, completed Keyaki panel power-o
 
 > Native XNU now deterministically powers on, resets, verifies regulation of, and cleanly shuts down the physical Sharp + Synaptics command-mode panel on Sony Xperia XZs hardware.
 
-D8-M6 (Panel vendor/DCS initialization sequence) is the NEXT active milestone.
+D8-M6, tag `xzs-d8m6-panel-dcs-complete`, completed panel vendor/DCS command transmission, TE monitoring, and safe shutdown on physical hardware across two independent fresh boots:
+- Canonical DCS Packets: Transmitted `SLPOUT (0x11)`, `TEON (0x35 0x00)`, `DISPON (0x29)`, `DISPOFF (0x28)`, and `SLPIN (0x10)` in command mode via 64-byte aligned DMA buffers.
+- Zero Timeouts & ACK Errors: 5/5 DMA triggers and completions with `DMA_TIMEOUTS=0` and `ACK_ERRORS=0` across both runs.
+- TE Monitoring: Sampled GPIO10 (TE/mdp_vsync) over ~33 ms (19,921 samples) verifying 0 transitions (stable LOW, scanout inactive).
+- Graceful Shutdown: Fully reversed DCS sequence (`DISPOFF -> SLPIN -> M5 physical power-down`) returning to stable zero-power idle state.
+- Strict Scope Locks: `WLED_WRITES=0` (backlight strictly off), `MDP_KICKOFFS=0` (MDP scanout untouched).
+- Reproducibility: 2/2 independent physical cold/fresh boots passed 100% with identical pre- and post-register snapshots.
 
-Details: [`docs/XZS_DISPLAY_BRINGUP.md`](docs/XZS_DISPLAY_BRINGUP.md), [`docs/XZS_D8_M3_SEAL_REPORT.md`](docs/XZS_D8_M3_SEAL_REPORT.md), [`docs/XZS_D8_M4_SEAL_REPORT.md`](docs/XZS_D8_M4_SEAL_REPORT.md), [`docs/XZS_D8_P1_SEAL_REPORT.md`](docs/XZS_D8_P1_SEAL_REPORT.md), [`docs/XZS_D8_P2_SEAL_REPORT.md`](docs/XZS_D8_P2_SEAL_REPORT.md), [`docs/XZS_D8_M5_SEAL_REPORT.md`](docs/XZS_D8_M5_SEAL_REPORT.md). Bypassed work: [`docs/XZS_BLOCKERS_AND_DEFERRED.md`](docs/XZS_BLOCKERS_AND_DEFERRED.md). Status: [`docs/XZS_PORT_STATUS.md`](docs/XZS_PORT_STATUS.md).
+D8-P3 (PMIC WLED backlight prerequisite) is the NEXT active milestone.
+
+Details: [`docs/XZS_DISPLAY_BRINGUP.md`](docs/XZS_DISPLAY_BRINGUP.md), [`docs/XZS_D8_M3_SEAL_REPORT.md`](docs/XZS_D8_M3_SEAL_REPORT.md), [`docs/XZS_D8_M4_SEAL_REPORT.md`](docs/XZS_D8_M4_SEAL_REPORT.md), [`docs/XZS_D8_P1_SEAL_REPORT.md`](docs/XZS_D8_P1_SEAL_REPORT.md), [`docs/XZS_D8_P2_SEAL_REPORT.md`](docs/XZS_D8_P2_SEAL_REPORT.md), [`docs/XZS_D8_M5_SEAL_REPORT.md`](docs/XZS_D8_M5_SEAL_REPORT.md), [`docs/XZS_D8_M6_SEAL_REPORT.md`](docs/XZS_D8_M6_SEAL_REPORT.md). Bypassed work: [`docs/XZS_BLOCKERS_AND_DEFERRED.md`](docs/XZS_BLOCKERS_AND_DEFERRED.md). Status: [`docs/XZS_PORT_STATUS.md`](docs/XZS_PORT_STATUS.md).
 
 ### Verified Milestone Capabilities
 
