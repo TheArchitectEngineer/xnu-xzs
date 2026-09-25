@@ -192,6 +192,31 @@ display_which(int argc, char **argv)
 	if (argc >= 2 && seq(argv[1], "p1-run")) {
 		return 34;
 	}
+	if (argc == 3 && seq(argv[1], "spmi") && seq(argv[2], "status")) {
+		return 35;
+	}
+	if (argc == 2 && seq(argv[1], "spmi-status")) {
+		return 35;
+	}
+	if ((argc == 4 && seq(argv[1], "pmic") && seq(argv[2], "lab") && seq(argv[3], "status")) ||
+	    (argc == 3 && seq(argv[1], "lab") && seq(argv[2], "status")) ||
+	    (argc == 2 && seq(argv[1], "lab-status"))) {
+		return 36;
+	}
+	if ((argc == 4 && seq(argv[1], "pmic") && seq(argv[2], "ibb") && seq(argv[3], "status")) ||
+	    (argc == 3 && seq(argv[1], "ibb") && seq(argv[2], "status")) ||
+	    (argc == 2 && seq(argv[1], "ibb-status"))) {
+		return 37;
+	}
+	if (argc == 2 && seq(argv[1], "p2-dryrun")) {
+		return 38;
+	}
+	if (argc >= 2 && (seq(argv[1], "p2-config") || seq(argv[1], "p2-config-only"))) {
+		return 39;
+	}
+	if (argc >= 2 && seq(argv[1], "p2-run")) {
+		return 40;
+	}
 	if (argc == 3 && seq(argv[1], "power")) {
 		if (seq(argv[2], "status")) {
 			return 7;
