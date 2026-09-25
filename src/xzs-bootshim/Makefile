@@ -8,7 +8,7 @@ ASFLAGS := -target aarch64-none-elf -ffreestanding
 LDFLAGS := -T linker.ld -nostdlib
 
 ROOTFS_IMG := ../../artifacts/builds/xzs-rootfs.img
-ROOTFS_EXPECTED_SHA256 := ff832b289e6280c1e54d604cd08d2f390b258a9ea71847d5efe29c90b1ea9bdb
+ROOTFS_EXPECTED_SHA256 := d3ba20dcdebfc87ed1b5aa7e413dc3ae4d639be5e7085c45d08cdd67f839bf95
 
 OBJS := start.o main.o uart.o adt.o fb.o rootfs_blob.o
 TARGET := bootshim

@@ -180,6 +180,18 @@ display_which(int argc, char **argv)
 			return 31;
 		}
 	}
+	if (argc == 2 && (seq(argv[1], "p1-status") || seq(argv[1], "gpio-status"))) {
+		return 32;
+	}
+	if (argc == 3 && seq(argv[1], "gpio") && seq(argv[2], "status")) {
+		return 32;
+	}
+	if (argc == 2 && seq(argv[1], "p1-dryrun")) {
+		return 33;
+	}
+	if (argc >= 2 && seq(argv[1], "p1-run")) {
+		return 34;
+	}
 	if (argc == 3 && seq(argv[1], "power")) {
 		if (seq(argv[2], "status")) {
 			return 7;
