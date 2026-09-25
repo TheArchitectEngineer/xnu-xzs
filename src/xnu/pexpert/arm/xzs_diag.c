@@ -117,7 +117,7 @@ xzs_diag_boot_args(void)
 extern uint64_t g_xzs_ttbr0;
 extern void delay(int usec);
 
-static uint32_t
+static __attribute__((noinline)) uint32_t
 xzs_mmcc_read32(uint32_t offset)
 {
 	uint64_t saved = 0;
@@ -125,17 +125,17 @@ xzs_mmcc_read32(uint32_t offset)
 
 	__asm__ volatile("mrs %0, TTBR0_EL1" : "=r"(saved));
 	if (g_xzs_ttbr0 != 0) {
-		__asm__ volatile("msr TTBR0_EL1, %0; isb sy" :: "r"(g_xzs_ttbr0) : "memory");
+		__asm__ volatile("msr TTBR0_EL1, %0\n\tisb sy" :: "r"(g_xzs_ttbr0) : "memory");
 	}
 	value = *(volatile uint32_t *)(XZS_MMCC_BASE + offset);
-	__asm__ volatile("dsb sy" ::: "memory");
+	__asm__ volatile("dsb sy\n\tisb sy" ::: "memory");
 	if (g_xzs_ttbr0 != 0) {
-		__asm__ volatile("msr TTBR0_EL1, %0; isb sy" :: "r"(saved) : "memory");
+		__asm__ volatile("msr TTBR0_EL1, %0\n\tisb sy" :: "r"(saved) : "memory");
 	}
 	return value;
 }
 
-static uint32_t
+static __attribute__((noinline)) uint32_t
 xzs_phys_read32(uint32_t phys)
 {
 	uint64_t saved = 0;
@@ -146,12 +146,12 @@ xzs_phys_read32(uint32_t phys)
 	}
 	__asm__ volatile("mrs %0, TTBR0_EL1" : "=r"(saved));
 	if (g_xzs_ttbr0 != 0) {
-		__asm__ volatile("msr TTBR0_EL1, %0; isb sy" :: "r"(g_xzs_ttbr0) : "memory");
+		__asm__ volatile("msr TTBR0_EL1, %0\n\tisb sy" :: "r"(g_xzs_ttbr0) : "memory");
 	}
 	value = *(volatile uint32_t *)(uintptr_t)phys;
-	__asm__ volatile("dsb sy" ::: "memory");
+	__asm__ volatile("dsb sy\n\tisb sy" ::: "memory");
 	if (g_xzs_ttbr0 != 0) {
-		__asm__ volatile("msr TTBR0_EL1, %0; isb sy" :: "r"(saved) : "memory");
+		__asm__ volatile("msr TTBR0_EL1, %0\n\tisb sy" :: "r"(saved) : "memory");
 	}
 	return value;
 }
@@ -294,21 +294,21 @@ xzs_d8m2_u32(const char *label, uint32_t value)
 	xzs_diag_emit(line);
 }
 
-static void
+static __attribute__((noinline)) void
 xzs_mmcc_map_begin(uint64_t *saved)
 {
 	__asm__ volatile("mrs %0, TTBR0_EL1" : "=r"(*saved));
 	if (g_xzs_ttbr0 != 0) {
-		__asm__ volatile("msr TTBR0_EL1, %0; isb sy" :: "r"(g_xzs_ttbr0) : "memory");
+		__asm__ volatile("msr TTBR0_EL1, %0\n\tisb sy" :: "r"(g_xzs_ttbr0) : "memory");
 	}
 }
 
-static void
+static __attribute__((noinline)) void
 xzs_mmcc_map_end(uint64_t saved)
 {
-	__asm__ volatile("dsb sy" ::: "memory");
+	__asm__ volatile("dsb sy\n\tisb sy" ::: "memory");
 	if (g_xzs_ttbr0 != 0) {
-		__asm__ volatile("msr TTBR0_EL1, %0; isb sy" :: "r"(saved) : "memory");
+		__asm__ volatile("msr TTBR0_EL1, %0\n\tisb sy" :: "r"(saved) : "memory");
 	}
 }
 
@@ -775,6 +775,7 @@ xzs_d8m2_critical_on(const char *action, uint32_t offset, int parent)
 }
 
 #include "xzs_d8m3.h"
+#include "xzs_d8m4.h"
 
 void
 xzs_diag_dispatch(uint64_t which, uint64_t arg1, uint64_t arg2, uint64_t arg3)
@@ -864,6 +865,18 @@ xzs_diag_dispatch(uint64_t which, uint64_t arg1, uint64_t arg2, uint64_t arg3)
 		break;
 	case 27:
 		xzs_d8m3_dump_phy();
+		break;
+	case 28:
+		xzs_d8m4_dump_status();
+		break;
+	case 29:
+		xzs_d8m4_run(0);
+		break;
+	case 30:
+		xzs_d8m4_run(1);
+		break;
+	case 31:
+		xzs_d8m4_run(2);
 		break;
 	default:
 		xzs_diag_emit("[XZS-D8M1] unknown diag\n");

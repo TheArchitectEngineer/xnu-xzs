@@ -66,7 +66,7 @@ xzs_d8m3_print_reg(uint32_t addr, uint32_t val)
 	xzs_diag_emit(line);
 }
 
-static int
+static __attribute__((noinline)) int
 display_write32(uint32_t phys, uint32_t val, int is_dryrun)
 {
 	if (!display_is_allowed(phys)) {
@@ -82,16 +82,17 @@ display_write32(uint32_t phys, uint32_t val, int is_dryrun)
 	uint64_t saved = 0;
 	__asm__ volatile("mrs %0, TTBR0_EL1" : "=r"(saved));
 	if (g_xzs_ttbr0 != 0) {
-		__asm__ volatile("msr TTBR0_EL1, %0; isb sy" :: "r"(g_xzs_ttbr0) : "memory");
+		__asm__ volatile("msr TTBR0_EL1, %0\n\tisb sy" :: "r"(g_xzs_ttbr0) : "memory");
 	}
 	*(volatile uint32_t *)(uintptr_t)phys = val;
-	__asm__ volatile("dsb sy" ::: "memory");
+	__asm__ volatile("dsb sy\n\tisb sy" ::: "memory");
 	uint32_t rb = 0;
 	if (phys >= 0x00994800u && phys <= 0x00994904u) {
 		rb = *(volatile uint32_t *)(uintptr_t)phys;
+		__asm__ volatile("dsb sy\n\tisb sy" ::: "memory");
 	}
 	if (g_xzs_ttbr0 != 0) {
-		__asm__ volatile("msr TTBR0_EL1, %0; isb sy" :: "r"(saved) : "memory");
+		__asm__ volatile("msr TTBR0_EL1, %0\n\tisb sy" :: "r"(saved) : "memory");
 	}
 
 	/* Diagnostic readback check for PLL configuration registers */

@@ -32,6 +32,8 @@ src/xzs-*/*.bin*
 src/xzs-*/*.dis
 src/xzs-userland/launchd
 src/xzs-userland/sh
+src/xzs-userland/hello
+src/xzs-userland/args
 
 # Test binaries
 tests/test_xzsfs_host

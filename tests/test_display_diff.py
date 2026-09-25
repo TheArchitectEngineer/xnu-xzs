@@ -17,13 +17,13 @@ class TestDisplayDiff(unittest.TestCase):
         """Test exact match on deterministic registers."""
         golden = {
             0x00994000: 0x10040001,  # DSI_HW_VERSION
-            0x009940f0: 0x00000001,  # DSI_CTRL
-            0x009941f4: 0x03000104,  # DSI_LANE_CTRL
+            0x00994004: 0x000001f5,  # DSI_CTRL
+            0x009940ac: 0x00000000,  # DSI_LANE_CTRL
         }
         actual = {
             0x00994000: 0x10040001,
-            0x009940f0: 0x00000001,
-            0x009941f4: 0x03000104,
+            0x00994004: 0x000001f5,
+            0x009940ac: 0x00000000,
         }
         report = compare_snapshots(golden, actual)
         self.assertEqual(report["verdict"], "PASS")
@@ -33,9 +33,9 @@ class TestDisplayDiff(unittest.TestCase):
 
     def test_masked_match(self):
         """Test that registers match when masked bits match despite irrelevant bit noise."""
-        # DSI_CTRL mask is 0x1. Upper bits in actual should be ignored.
-        golden = {0x009940f0: 0x00000001}
-        actual = {0x009940f0: 0x12340001}  # bit 0 matches, upper bits differ
+        # DSI_CTRL mask is 0x1ff. Upper bits in actual should be ignored.
+        golden = {0x00994004: 0x000001f5}
+        actual = {0x00994004: 0x123401f5}  # bits [8:0] match, upper bits differ
         report = compare_snapshots(golden, actual)
         self.assertEqual(report["verdict"], "PASS")
         self.assertEqual(report["summary"]["MATCH"], 1)
@@ -43,8 +43,8 @@ class TestDisplayDiff(unittest.TestCase):
 
     def test_masked_mismatch(self):
         """Test that difference on masked bit triggers a DIFF failure."""
-        golden = {0x009940f0: 0x00000001}
-        actual = {0x009940f0: 0x00000000}  # bit 0 differs
+        golden = {0x00994004: 0x000001f5}
+        actual = {0x00994004: 0x00000000}  # bits differ
         report = compare_snapshots(golden, actual)
         self.assertEqual(report["verdict"], "FAIL")
         self.assertEqual(report["summary"]["DIFF"], 1)
@@ -54,7 +54,7 @@ class TestDisplayDiff(unittest.TestCase):
         """Test that missing register in actual snapshot triggers MISSING failure."""
         golden = {
             0x00994000: 0x10040001,
-            0x009941f4: 0x03000104,
+            0x009940ac: 0x00000000,
         }
         actual = {
             0x00994000: 0x10040001,
@@ -66,14 +66,14 @@ class TestDisplayDiff(unittest.TestCase):
 
     def test_volatile_skipped(self):
         """Test that volatile registers are skipped and do not fail the comparison."""
-        # 0x00994014 (DSI_FIFO_STATUS) is volatile
+        # 0x0099400c (DSI_FIFO_STATUS) is volatile
         golden = {
             0x00994000: 0x10040001,
-            0x00994014: 0x00000000,
+            0x0099400c: 0x00000000,
         }
         actual = {
             0x00994000: 0x10040001,
-            0x00994014: 0x31211101,  # different value from live FIFO
+            0x0099400c: 0x11111000,  # live FIFO empty status
         }
         report = compare_snapshots(golden, actual, include_volatile=False)
         self.assertEqual(report["verdict"], "PASS")
@@ -83,8 +83,8 @@ class TestDisplayDiff(unittest.TestCase):
 
     def test_include_volatile_flag(self):
         """Test that volatile registers are evaluated when requested."""
-        golden = {0x00994014: 0x00000000}
-        actual = {0x00994014: 0x31211101}
+        golden = {0x0099400c: 0x00000000}
+        actual = {0x0099400c: 0x11111000}
         report = compare_snapshots(golden, actual, include_volatile=True)
         self.assertEqual(report["verdict"], "FAIL")
         self.assertEqual(report["summary"]["DIFF"], 1)

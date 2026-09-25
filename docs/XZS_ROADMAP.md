@@ -407,9 +407,9 @@ Progress is strictly gated by physical hardware verification. Speculative percen
   - **D8-A2**: Register comparison tooling & test suite — **PASS**
   - **D8-A3**: TRACE_ONLY state machine & dry-run validation — **PASS**
   - **D8-M3**: DSI PLL + clocks (BYTE0/PCLK0/ESC0) + 14nm PHY Stage B — **COMPLETE / SEALED** (tag `xzs-d8m3-display-pll-phy-complete`)
-  - **D8-M4**: DSI host/controller configuration (Command Mode, 4-lane) — **NEXT**
-  - **D8-P1**: TLMM GPIO prerequisite — **PENDING**
-  - **D8-P2**: SPMI + LAB/IBB power rail driver — **PENDING**
+  - **D8-M4**: DSI host/controller configuration (Command Mode, 4-lane) — **COMPLETE / SEALED** (tag `xzs-d8m4-dsi-host-complete`)
+  - **D8-P1**: TLMM GPIO prerequisite — **NEXT**
+  - **D8-P2**: SPMI + LAB/IBB power rail driver — **NEXT**
   - **D8-M5**: Panel power/reset sequence — **PENDING**
   - **D8-M6**: Panel vendor/DCS initialization sequence — **PENDING**
   - **D8-P3**: PMIC WLED backlight prerequisite — **PENDING**

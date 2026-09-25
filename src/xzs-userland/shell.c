@@ -163,6 +163,23 @@ display_which(int argc, char **argv)
 			return 24;
 		}
 	}
+	if (argc == 2 && seq(argv[1], "m4-status")) {
+		return 28;
+	}
+	if (argc == 2 && seq(argv[1], "m4-dryrun")) {
+		return 29;
+	}
+	if (argc == 3 && seq(argv[1], "m4-run")) {
+		if (seq(argv[2], "dryrun")) {
+			return 29;
+		}
+		if (seq(argv[2], "basic")) {
+			return 30;
+		}
+		if (seq(argv[2], "full")) {
+			return 31;
+		}
+	}
 	if (argc == 3 && seq(argv[1], "power")) {
 		if (seq(argv[2], "status")) {
 			return 7;
