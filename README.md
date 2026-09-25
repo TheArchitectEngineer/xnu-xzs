@@ -79,10 +79,11 @@ D8-A0..A3  Display audit/tooling             COMPLETE
 D8-M3      DSI PLL/clocks/14nm PHY           COMPLETE
 D8-M4      DSI host/controller               COMPLETE
 D8-P1      TLMM GPIO prerequisite            COMPLETE
-D8-P2      SPMI + LAB/IBB power rails        NEXT
+D8-P2      SPMI + LAB/IBB power rails        COMPLETE
+D8-M5      Panel power/reset sequence        NEXT
 ```
 
-Tags that name durable milestones: `xzs-d7t1-complete`, `xzs-d7t2-full-complete`, `xzs-d8-m1-complete`, `xzs-d8-m2-complete`, `xzs-d8m3-display-pll-phy-complete`, `xzs-d8m4-dsi-host-complete`, `xzs-d8p1-gpio-complete`.
+Tags that name durable milestones: `xzs-d7t1-complete`, `xzs-d7t2-full-complete`, `xzs-d8-m1-complete`, `xzs-d8-m2-complete`, `xzs-d8m3-display-pll-phy-complete`, `xzs-d8m4-dsi-host-complete`, `xzs-d8p1-gpio-complete`, `xzs-d8p2-power-rails-complete`.
 
 ## Generic Native Mach-O Execution (Phase D7-T2)
 
@@ -132,7 +133,8 @@ D8-A0..A3 = PASS
 D8-M3     = PASS (COMPLETE / SEALED / HARDWARE_PROVEN)
 D8-M4     = PASS (COMPLETE / SEALED / HARDWARE_PROVEN)
 D8-P1     = PASS (COMPLETE / SEALED / HARDWARE_PROVEN)
-D8-P2     = NEXT
+D8-P2     = PASS (COMPLETE / SEALED / HARDWARE_PROVEN)
+D8-M5     = NEXT
 ```
 
 D8-M1, tag `xzs-d8-m1-complete` at `861032cb7b137096edeb1aa5caa04aef6737533a`, read the clock controller only. MMAGIC_MDSS_GDSC was `0xa0222000` (on). MDSS_GDSC was `0x00222001` (collapsed).
@@ -174,12 +176,22 @@ D8-P1, tag `xzs-d8p1-gpio-complete`, completed TLMM GPIO configuration for the K
 - M3/M4 display engine health verified post-GPIO configuration (`PLL = 0x2f`, `DSI_CTRL = 0x1f5`, `DSI_LANE_STATUS = 0x1f1f`)
 - Safety invariants: 0 LAB/IBB writes, 0 WLED writes, 0 DCS packets sent, 0 bus aborts, 0 SError, 0 panics, 0 resets; USB console and shell remained 100% responsive.
 
-> Native XNU now configures and hardware-proves all display TLMM GPIOs (reset, TE sync, VDDIO control) in safe, inactive non-panel-activating states on physical Xperia XZs hardware.
-> *(Note: panel power rails LAB/IBB, DCS initialization packets, backlight, and pixel scanout remain subsequent milestones).*
+D8-P2, tag `xzs-d8p2-power-rails-complete`, completed SPMI Arbiter v2 communication and PMIC (PMI8996) LAB (+5.60V) / IBB (-5.60V) display panel bias regulator bring-up and safe disable across two independent cold/fresh boots:
+- SPMI Transport: Arbiter v2 core `0x0400F000`, write channels `0x04400000`, observer read channels `0x04C00000`. Peripheral APID mapping verified for SID 2 REVID (`0x0100`), SID 3 LAB (`0xDE00`), and SID 3 IBB (`0xDC00`).
+- Stage 1 Configuration: LAB programmed to +5.60V (`0x8a`), MODULE_RDY (`0x80`), ENABLE (`0x00`); IBB programmed to -5.60V (`0xaa`), MODULE_RDY (`0x80`), ENABLE (`0x00`). Verified safely inactive.
+- Stage 2A LAB Enable: `LAB_ENABLE_CTL = 0x80` written -> `LAB_STATUS1 = 0xa0` (`VREG_OK=1`, positive bias rail active).
+- Stage 2B IBB Enable: `IBB_ENABLE_CTL = 0x80` written -> `IBB_STATUS1 = 0x80` (`VREG_OK=1`, negative bias rail active).
+- Stage 2C Mandatory Safe Disable: IBB disabled first (`0xDC46 = 0x00`), `STATUS1 = 0x00` (OFF PASS) -> 8ms inter-rail delay -> LAB disabled (`0xDE46 = 0x00`), `STATUS1 = 0x00` (OFF PASS).
+- Display Engine Integrity: `PLL = 0x2f`, `DSI_CTRL = 0x000001f5`, `LANE_STATUS = 0x00001f1f` intact.
+- Reproducibility: 2/2 independent physical cold/fresh boots passed 100%.
+- Safety invariants: 0 DCS packets sent, 0 WLED writes, panel reset held asserted LOW (GPIO 8 = 0), 0 bus aborts, 0 SError, 0 panics, 0 resets; shell and USB console remained 100% responsive.
 
-D8-P2 (SPMI + PMIC LAB/IBB power rail prerequisite) is the NEXT active milestone.
+> Native XNU now controls, verifies regulation of, and cleanly powers down both LCD panel bias power rails (+5.6V LAB, -5.6V IBB) via SPMI on physical Xperia XZs hardware.
+> *(Note: Panel reset release, DCS initialization, and backlight enable remain subsequent milestones).*
 
-Details: [`docs/XZS_DISPLAY_BRINGUP.md`](docs/XZS_DISPLAY_BRINGUP.md), [`docs/XZS_D8_M3_SEAL_REPORT.md`](docs/XZS_D8_M3_SEAL_REPORT.md), [`docs/XZS_D8_M4_SEAL_REPORT.md`](docs/XZS_D8_M4_SEAL_REPORT.md), [`docs/XZS_D8_P1_SEAL_REPORT.md`](docs/XZS_D8_P1_SEAL_REPORT.md). Bypassed work: [`docs/XZS_BLOCKERS_AND_DEFERRED.md`](docs/XZS_BLOCKERS_AND_DEFERRED.md). Status: [`docs/XZS_PORT_STATUS.md`](docs/XZS_PORT_STATUS.md).
+D8-M5 (Panel power/reset sequence) is the NEXT active milestone.
+
+Details: [`docs/XZS_DISPLAY_BRINGUP.md`](docs/XZS_DISPLAY_BRINGUP.md), [`docs/XZS_D8_M3_SEAL_REPORT.md`](docs/XZS_D8_M3_SEAL_REPORT.md), [`docs/XZS_D8_M4_SEAL_REPORT.md`](docs/XZS_D8_M4_SEAL_REPORT.md), [`docs/XZS_D8_P1_SEAL_REPORT.md`](docs/XZS_D8_P1_SEAL_REPORT.md), [`docs/XZS_D8_P2_SEAL_REPORT.md`](docs/XZS_D8_P2_SEAL_REPORT.md). Bypassed work: [`docs/XZS_BLOCKERS_AND_DEFERRED.md`](docs/XZS_BLOCKERS_AND_DEFERRED.md). Status: [`docs/XZS_PORT_STATUS.md`](docs/XZS_PORT_STATUS.md).
 
 ### Verified Milestone Capabilities
 
