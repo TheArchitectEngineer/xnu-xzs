@@ -1,0 +1,31 @@
+{
+  "comparison_summary": "Comparison between working Linux/TWRP display state and planned XNU D8-M8 scanout state",
+  "total_registers_compared": 30,
+  "match_count": 27,
+  "intentional_deviations": [
+    {
+      "register": "MDP_INTR_EN",
+      "address": "0x00901010",
+      "linux_value": "0x00000100",
+      "planned_xnu_value": "0x00000000",
+      "reason": "XNU uses bounded polling on INTR_STATUS rather than hardware interrupt delivery for bringup simplicity."
+    },
+    {
+      "register": "PP0_TEAR_CHECK_EN",
+      "address": "0x00971000",
+      "linux_value": "0x00000001",
+      "planned_xnu_value": "0x00000000",
+      "reason": "Disabling tear-check eliminates dependency on GPIO10 external TE pulse synchronization during initial single-frame scanout."
+    },
+    {
+      "register": "PP0_SYNC_CONFIG_VSYNC",
+      "address": "0x00971004",
+      "linux_value": "0x00080000",
+      "planned_xnu_value": "0x00000000",
+      "reason": "Not required when tear-check is disabled."
+    }
+  ],
+  "unexpected_deviations": 0,
+  "unknown_registers": 0,
+  "inference_registers": 0
+}

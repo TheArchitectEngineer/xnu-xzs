@@ -414,7 +414,7 @@ Progress is strictly gated by physical hardware verification. Speculative percen
   - **D8-M6**: Panel vendor/DCS initialization sequence — **COMPLETE / SEALED** (tag `xzs-d8m6-panel-dcs-complete`)
   - **D8-P3**: PMIC WLED backlight prerequisite — **NEXT**
   - **D8-M7**: Backlight control driver — **PENDING**
-  - **D8-M8**: MDP framebuffer scanout configuration — **PENDING**
+  - **D8-M8**: MDP framebuffer scanout configuration — **PRE-AUDIT COMPLETE / IMPLEMENTATION PENDING**
   - **D8-M9**: Physical first pixels on screen — **PENDING**
   - **D8-M10**: Framebuffer text console (`/dev/tty0`) — **PENDING**
   - **D8-M11**: Boot splash/logo — **PENDING**

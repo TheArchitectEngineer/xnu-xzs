@@ -1,0 +1,222 @@
+{
+  "topology": {
+    "target_device": "Sony Xperia XZs (G8231 / keyaki / MSM8996 v3.0)",
+    "panel": "somc,sharp_synaptics_cmd_9_panel (1080x1920 command mode)",
+    "primary_pipe": "RGB0 (0x00915000)",
+    "alternative_pipe": "VIG0 (0x00905000)",
+    "layer_mixer": "LM0 (0x00945000)",
+    "control_path": "CTL0 (0x00902000)",
+    "pingpong": "PP0 (0x00971000)",
+    "interface": "INTF1 (0x0096b800)",
+    "dsi_controller": "DSI0 (0x00994000)",
+    "address_mode": "PHYSICAL (SMMU not required)"
+  },
+  "planned_registers": [
+    {
+      "step": 1,
+      "block": "MDP",
+      "name": "DISP_INTF_SEL",
+      "address": "0x00901004",
+      "mask": "0x0000ff00",
+      "value": "0x00000100",
+      "evidence": "SOURCE_PROVEN (mdss_mdp_ctl.c:2525)"
+    },
+    {
+      "step": 2,
+      "block": "SSPP",
+      "name": "RGB0_SRC_SIZE",
+      "address": "0x00915000",
+      "mask": "0xffffffff",
+      "value": "0x07800438",
+      "evidence": "SOURCE_PROVEN (mdss_mdp_pipe.c)"
+    },
+    {
+      "step": 3,
+      "block": "SSPP",
+      "name": "RGB0_SRC_IMG_SIZE",
+      "address": "0x00915004",
+      "mask": "0xffffffff",
+      "value": "0x07800438",
+      "evidence": "SOURCE_PROVEN (mdss_mdp_pipe.c)"
+    },
+    {
+      "step": 4,
+      "block": "SSPP",
+      "name": "RGB0_SRC_XY",
+      "address": "0x00915008",
+      "mask": "0xffffffff",
+      "value": "0x00000000",
+      "evidence": "SOURCE_PROVEN (mdss_mdp_pipe.c)"
+    },
+    {
+      "step": 5,
+      "block": "SSPP",
+      "name": "RGB0_OUT_SIZE",
+      "address": "0x0091500C",
+      "mask": "0xffffffff",
+      "value": "0x07800438",
+      "evidence": "SOURCE_PROVEN (mdss_mdp_pipe.c)"
+    },
+    {
+      "step": 6,
+      "block": "SSPP",
+      "name": "RGB0_OUT_XY",
+      "address": "0x00915010",
+      "mask": "0xffffffff",
+      "value": "0x00000000",
+      "evidence": "SOURCE_PROVEN (mdss_mdp_pipe.c)"
+    },
+    {
+      "step": 7,
+      "block": "SSPP",
+      "name": "RGB0_SRC0_ADDR",
+      "address": "0x00915014",
+      "mask": "0xffffffff",
+      "value": "0x83401000",
+      "evidence": "SOURCE_PROVEN (mdss_mdp_splash_logo.c)"
+    },
+    {
+      "step": 8,
+      "block": "SSPP",
+      "name": "RGB0_SRC_YSTRIDE0",
+      "address": "0x00915024",
+      "mask": "0xffffffff",
+      "value": "0x00001100",
+      "evidence": "GOLDEN_HW_PROVEN (/sys/class/graphics/fb0/stride = 4352, 128-byte aligned)"
+    },
+    {
+      "step": 9,
+      "block": "SSPP",
+      "name": "RGB0_SRC_FORMAT",
+      "address": "0x00915030",
+      "mask": "0xffffffff",
+      "value": "0x000236aa",
+      "evidence": "SOURCE_PROVEN (mdss_mdp_formats.h)"
+    },
+    {
+      "step": 10,
+      "block": "SSPP",
+      "name": "RGB0_SRC_UNPACK_PATTERN",
+      "address": "0x00915034",
+      "mask": "0xffffffff",
+      "value": "0x03010002",
+      "evidence": "SOURCE_PROVEN (mdss_mdp_formats.h)"
+    },
+    {
+      "step": 11,
+      "block": "SSPP",
+      "name": "RGB0_SRC_OP_MODE",
+      "address": "0x00915038",
+      "mask": "0xffffffff",
+      "value": "0x00000000",
+      "evidence": "SOURCE_PROVEN (mdss_mdp_pipe.c)"
+    },
+    {
+      "step": 12,
+      "block": "LM0",
+      "name": "LM0_OUT_SIZE",
+      "address": "0x00945004",
+      "mask": "0xffffffff",
+      "value": "0x07800438",
+      "evidence": "SOURCE_PROVEN (mdss_mdp_ctl.c)"
+    },
+    {
+      "step": 13,
+      "block": "LM0",
+      "name": "LM0_BORDER_COLOR_0",
+      "address": "0x00945008",
+      "mask": "0xffffffff",
+      "value": "0x00000000",
+      "evidence": "SOURCE_PROVEN (mdss_mdp_ctl.c)"
+    },
+    {
+      "step": 14,
+      "block": "PP0",
+      "name": "PP0_TEAR_CHECK_EN",
+      "address": "0x00971000",
+      "mask": "0x00000001",
+      "value": "0x00000000",
+      "evidence": "SOURCE_PROVEN (mdss_mdp_intf_cmd.c:138)"
+    },
+    {
+      "step": 15,
+      "block": "DSI0",
+      "name": "DSI_COMMAND_MODE_MDP_CTRL",
+      "address": "0x00994040",
+      "mask": "0x0000000f",
+      "value": "0x00000008",
+      "evidence": "SOURCE_PROVEN (mdss_dsi_host.c:334)"
+    },
+    {
+      "step": 16,
+      "block": "DSI0",
+      "name": "DSI_COMMAND_MODE_MDP_DCS_CMD_CTRL",
+      "address": "0x00994044",
+      "mask": "0x0001ffff",
+      "value": "0x00013c2c",
+      "evidence": "SOURCE_PROVEN (mdss_dsi_host.c:340)"
+    },
+    {
+      "step": 17,
+      "block": "DSI0",
+      "name": "DSI_COMMAND_MODE_MDP_STREAM0_CTRL",
+      "address": "0x00994058",
+      "mask": "0xffffffff",
+      "value": "0x0ca90039",
+      "evidence": "SOURCE_PROVEN (mdss_dsi_host.c:1152)"
+    },
+    {
+      "step": 18,
+      "block": "DSI0",
+      "name": "DSI_COMMAND_MODE_MDP_STREAM0_TOTAL",
+      "address": "0x0099405c",
+      "mask": "0xffffffff",
+      "value": "0x07800438",
+      "evidence": "SOURCE_PROVEN (mdss_dsi_host.c:1154)"
+    },
+    {
+      "step": 19,
+      "block": "CTL0",
+      "name": "CTL_LAYER_0",
+      "address": "0x00902000",
+      "mask": "0x000003ff",
+      "value": "0x00000200",
+      "evidence": "SOURCE_PROVEN (mdss_mdp_ctl.c)"
+    },
+    {
+      "step": 20,
+      "block": "CTL0",
+      "name": "CTL_TOP",
+      "address": "0x00902014",
+      "mask": "0x000200f0",
+      "value": "0x00020010",
+      "evidence": "SOURCE_PROVEN (mdss_mdp_ctl.c:3757)"
+    },
+    {
+      "step": 21,
+      "block": "CTL0",
+      "name": "CTL_FLUSH",
+      "address": "0x00902018",
+      "mask": "0xffffffff",
+      "value": "0x00020048",
+      "evidence": "SOURCE_PROVEN (mdss_mdp_ctl.c:3893)"
+    },
+    {
+      "step": 22,
+      "block": "CTL0",
+      "name": "CTL_START",
+      "address": "0x0090201C",
+      "mask": "0x00000001",
+      "value": "0x00000001",
+      "evidence": "SOURCE_PROVEN (mdss_mdp_intf_cmd.c:640)"
+    }
+  ],
+  "completion": {
+    "status_register": "0x00901014",
+    "completion_bit": "0x00000100 (BIT 8: MDSS_MDP_INTR_PING_PONG_0_DONE)",
+    "clear_register": "0x00901018",
+    "clear_value": "0x00000100",
+    "timeout_ms": 100,
+    "evidence": "SOURCE_PROVEN (mdss_mdp_hwio.h:52, mdss_mdp_intf_cmd.c:699)"
+  }
+}

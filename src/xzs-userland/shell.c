@@ -241,6 +241,12 @@ display_which(int argc, char **argv)
 	if (argc >= 2 && (seq(argv[1], "m6-run") || (argc >= 3 && seq(argv[1], "m6") && seq(argv[2], "run")))) {
 		return 48;
 	}
+	if (argc >= 2 && (seq(argv[1], "m8-status") || (argc >= 3 && seq(argv[1], "m8") && seq(argv[2], "status")))) {
+		return 50;
+	}
+	if (argc >= 2 && (seq(argv[1], "m8-dryrun") || (argc >= 3 && seq(argv[1], "m8") && seq(argv[2], "dryrun")))) {
+		return 51;
+	}
 	if (argc == 3 && seq(argv[1], "power")) {
 		if (seq(argv[2], "status")) {
 			return 7;
