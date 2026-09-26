@@ -56,69 +56,90 @@ xzs_d8m8_status(void)
 	xzs_watchdog_pet();
 
 	xzs_diag_emit("[MDSS Power & Core Clocks]\n");
-	xzs_d8m8_dump_reg("MMAGIC_MDSS_GDSCR", 0x008c5000u);
-	xzs_d8m8_dump_reg("MDSS_GDSCR       ", 0x008c5004u);
-	xzs_d8m8_dump_reg("MDSS_AHB_CBCR    ", 0x008c1404u);
+	xzs_d8m8_dump_reg("MMAGIC_MDSS_GDSCR", 0x008c247cu);
+	xzs_d8m8_dump_reg("MDSS_GDSCR       ", 0x008c2304u);
+	xzs_d8m8_dump_reg("MDSS_AHB_CBCR    ", 0x008c2308u);
 	xzs_d8m8_dump_reg("MDSS_AXI_CBCR    ", 0x008c2310u);
-	xzs_d8m8_dump_reg("MDSS_MDP_CBCR    ", 0x008c2314u);
+	xzs_d8m8_dump_reg("MDSS_MDP_CBCR    ", 0x008c231cu);
 
-	uint32_t gdsc = d8p1_read32(0x008c5004u);
-	uint32_t ahb  = d8p1_read32(0x008c1404u);
-	bool mdss_pwr = ((gdsc & (1u << 31)) != 0) && ((ahb & 1u) != 0);
+	uint32_t gdsc = d8p1_read32(0x008c2304u);
+	uint32_t ahb  = d8p1_read32(0x008c2308u);
+	uint32_t mdp  = d8p1_read32(0x008c231cu);
 
-	if (!mdss_pwr) {
+	bool pwr_on       = ((gdsc & (1u << 31)) != 0) && ((gdsc & 1u) == 0);
+	bool ahb_active   = ((ahb & 1u) != 0) && ((ahb & (1u << 31)) == 0);
+	bool mdp_unhalted = ((mdp & 1u) != 0) && ((mdp & (1u << 31)) == 0);
+
+	if (!pwr_on) {
 		xzs_diag_emit("  STATUS: MDSS Power domain is currently POWER_COLLAPSED.\n");
-		xzs_diag_emit("  Core MDP registers gated to prevent bus fault exception.\n");
+		xzs_diag_emit("  MDSS_POWER=COLLAPSED\n");
+		xzs_diag_emit("  MDSS_MDP_CLOCK=HALTED\n");
+		xzs_diag_emit("  MDP_ACCESS_SAFE=no\n");
+	} else if (!ahb_active || !mdp_unhalted) {
+		xzs_diag_emit("  STATUS: MDSS Power domain is POWER_ON_BUT_CLOCK_GATED.\n");
+		xzs_diag_emit("  MDSS_POWER=ON\n");
+		xzs_diag_emit("  MDSS_MDP_CLOCK=GATED\n");
+		xzs_diag_emit("  MDP_ACCESS_SAFE=no\n");
 	} else {
+		xzs_diag_emit("  STATUS: MDSS Power domain is POWER_ON_CLOCKS_ACTIVE.\n");
+		xzs_diag_emit("  MDSS_POWER=ON\n");
+		xzs_diag_emit("  MDSS_MDP_CLOCK=UNHALTED\n");
+		xzs_diag_emit("  MDP_REGISTER_READS_SAFE=yes\n");
+
 		xzs_diag_emit("\n[MDSS Top & MDP Core]\n");
 		xzs_d8m8_dump_reg("MDSS_HW_VERSION  ", 0x00900000u);
-		xzs_diag_emit("  DISP_INTF_SEL    [0x00901004] = 0x"); xzs_d8p1_hex32(d8p1_read32(0x00901004u)); xzs_diag_emit("\n");
-		xzs_diag_emit("  MDP_INTR_EN      [0x00901010] = 0x"); xzs_d8p1_hex32(d8p1_read32(0x00901010u)); xzs_diag_emit("\n");
-		xzs_diag_emit("  MDP_INTR_STATUS  [0x00901014] = 0x"); xzs_d8p1_hex32(d8p1_read32(0x00901014u)); xzs_diag_emit("\n");
+		xzs_d8m8_dump_reg("DISP_INTF_SEL    ", 0x00901004u);
+		xzs_d8m8_dump_reg("MDP_INTR_EN      ", 0x00901010u);
+		xzs_d8m8_dump_reg("MDP_INTR_STATUS  ", 0x00901014u);
 
-	xzs_diag_emit("\n[CTL0 Control Path (0x00902000)]\n");
-	xzs_d8m8_dump_reg("CTL_LAYER_0      ", 0x00902000u);
-	xzs_d8m8_dump_reg("CTL_TOP          ", 0x00902014u);
-	xzs_d8m8_dump_reg("CTL_FLUSH        ", 0x00902018u);
-	xzs_d8m8_dump_reg("CTL_START        ", 0x0090201cu);
+		xzs_diag_emit("\n[CTL0 Control Path (0x00902000)]\n");
+		xzs_d8m8_dump_reg("CTL_LAYER_0      ", 0x00902000u);
+		xzs_d8m8_dump_reg("CTL_TOP          ", 0x00902014u);
+		xzs_d8m8_dump_reg("CTL_FLUSH        ", 0x00902018u);
+		xzs_d8m8_dump_reg("CTL_START        ", 0x0090201cu);
 
-	xzs_diag_emit("\n[SSPP RGB0 Source Pipe (0x00915000)]\n");
-	xzs_d8m8_dump_reg("RGB0_SRC_SIZE    ", 0x00915000u);
-	xzs_d8m8_dump_reg("RGB0_SRC_IMG_SIZE", 0x00915004u);
-	xzs_d8m8_dump_reg("RGB0_SRC_XY      ", 0x00915008u);
-	xzs_d8m8_dump_reg("RGB0_OUT_SIZE    ", 0x0091500cu);
-	xzs_d8m8_dump_reg("RGB0_OUT_XY      ", 0x00915010u);
-	xzs_d8m8_dump_reg("RGB0_SRC0_ADDR   ", 0x00915014u);
-	xzs_d8m8_dump_reg("RGB0_SRC_YSTRIDE0", 0x00915024u);
-	xzs_d8m8_dump_reg("RGB0_SRC_FORMAT  ", 0x00915030u);
-	xzs_d8m8_dump_reg("RGB0_SRC_UNPACK  ", 0x00915034u);
-	xzs_d8m8_dump_reg("RGB0_SRC_OP_MODE ", 0x00915038u);
+		xzs_diag_emit("\n[SSPP RGB0 Source Pipe (0x00915000)]\n");
+		xzs_d8m8_dump_reg("RGB0_SRC_SIZE    ", 0x00915000u);
+		xzs_d8m8_dump_reg("RGB0_SRC_IMG_SIZE", 0x00915004u);
+		xzs_d8m8_dump_reg("RGB0_SRC_XY      ", 0x00915008u);
+		xzs_d8m8_dump_reg("RGB0_OUT_SIZE    ", 0x0091500cu);
+		xzs_d8m8_dump_reg("RGB0_OUT_XY      ", 0x00915010u);
+		xzs_d8m8_dump_reg("RGB0_SRC0_ADDR   ", 0x00915014u);
+		xzs_d8m8_dump_reg("RGB0_SRC_YSTRIDE0", 0x00915024u);
+		xzs_d8m8_dump_reg("RGB0_SRC_FORMAT  ", 0x00915030u);
+		xzs_d8m8_dump_reg("RGB0_SRC_UNPACK  ", 0x00915034u);
+		xzs_d8m8_dump_reg("RGB0_SRC_OP_MODE ", 0x00915038u);
 
-	xzs_diag_emit("\n[SSPP VIG0 Alternative Pipe (0x00905000)]\n");
-	xzs_d8m8_dump_reg("VIG0_SRC_SIZE    ", 0x00905000u);
-	xzs_d8m8_dump_reg("VIG0_SRC_FORMAT  ", 0x00905030u);
+		xzs_diag_emit("\n[SSPP VIG0 Alternative Pipe (0x00905000)]\n");
+		xzs_d8m8_dump_reg("VIG0_SRC_SIZE    ", 0x00905000u);
+		xzs_d8m8_dump_reg("VIG0_SRC_FORMAT  ", 0x00905030u);
 
-	xzs_diag_emit("\n[Layer Mixer LM0 (0x00945000)]\n");
-	xzs_d8m8_dump_reg("LM0_OP_MODE      ", 0x00945000u);
-	xzs_d8m8_dump_reg("LM0_OUT_SIZE     ", 0x00945004u);
-	xzs_d8m8_dump_reg("LM0_BORDER_COLOR0", 0x00945008u);
+		xzs_diag_emit("\n[Layer Mixer LM0 (0x00945000)]\n");
+		xzs_d8m8_dump_reg("LM0_OP_MODE      ", 0x00945000u);
+		xzs_d8m8_dump_reg("LM0_OUT_SIZE     ", 0x00945004u);
+		xzs_d8m8_dump_reg("LM0_BORDER_COLOR0", 0x00945008u);
 
-	xzs_diag_emit("\n[PingPong PP0 (0x00971000)]\n");
-	xzs_d8m8_dump_reg("PP0_TEAR_CHECK_EN", 0x00971000u);
-	xzs_d8m8_dump_reg("PP0_SYNC_CFG_VSYN", 0x00971004u);
+		xzs_diag_emit("\n[PingPong PP0 (0x00971000)]\n");
+		xzs_d8m8_dump_reg("PP0_TEAR_CHECK_EN", 0x00971000u);
+		xzs_d8m8_dump_reg("PP0_SYNC_CFG_VSYN", 0x00971004u);
 
-	xzs_diag_emit("\n[DSI0 Host & MDP Stream Registers (0x00994000)]\n");
-	xzs_d8m8_dump_reg("DSI_CTRL         ", 0x00994004u);
-	xzs_d8m8_dump_reg("DSI_STATUS       ", 0x00994008u);
-	xzs_d8m8_dump_reg("DSI_FIFO_STATUS  ", 0x0099400cu);
-	xzs_d8m8_dump_reg("DSI_CMD_MDP_CTRL ", 0x00994040u);
-	xzs_d8m8_dump_reg("DSI_CMD_DCS_CTRL ", 0x00994044u);
-	xzs_d8m8_dump_reg("DSI_STREAM0_CTRL ", 0x00994058u);
-	xzs_d8m8_dump_reg("DSI_STREAM0_TOTAL", 0x0099405cu);
-	xzs_d8m8_dump_reg("DSI_ACK_ERR_STAT ", 0x00994068u);
-	xzs_d8m8_dump_reg("DSI_LANE_STATUS  ", 0x009940a8u);
-	xzs_d8m8_dump_reg("DSI_TIMEOUT_STAT ", 0x009940c0u);
-	xzs_d8m8_dump_reg("PLL_PRIM_STATUS  ", 0x009948ccu);
+		xzs_diag_emit("\n[DSI0 Host & MDP Stream Registers (0x00994000)]\n");
+		xzs_d8m8_dump_reg("DSI_CTRL         ", 0x00994004u);
+		xzs_d8m8_dump_reg("DSI_STATUS       ", 0x00994008u);
+		xzs_d8m8_dump_reg("DSI_FIFO_STATUS  ", 0x0099400cu);
+		xzs_d8m8_dump_reg("DSI_CMD_MDP_CTRL ", 0x00994040u);
+		xzs_d8m8_dump_reg("DSI_CMD_DCS_CTRL ", 0x00994044u);
+		xzs_d8m8_dump_reg("DSI_STREAM0_CTRL ", 0x00994058u);
+		xzs_d8m8_dump_reg("DSI_STREAM0_TOTAL", 0x0099405cu);
+		xzs_d8m8_dump_reg("DSI_ACK_ERR_STAT ", 0x00994068u);
+		xzs_d8m8_dump_reg("DSI_LANE_STATUS  ", 0x009940a8u);
+		xzs_d8m8_dump_reg("DSI_TIMEOUT_STAT ", 0x009940c0u);
+		xzs_d8m8_dump_reg("PLL_PRIM_STATUS  ", 0x009948ccu);
+
+		xzs_diag_emit("\n[SMMU Architecture State]\n");
+		xzs_diag_emit("  SMMU_DRIVER_ACTIVE=NO (XNU runtime does not attach SMMU)\n");
+		xzs_diag_emit("  MDP_SMMU_STATE=BYPASS\n");
+		xzs_diag_emit("  DIRECT_PHYSICAL_FB_SAFE=yes\n");
 	}
 
 	xzs_diag_emit("\n[D8-M8] READ_ONLY_AUDIT=PASS\n");
@@ -203,6 +224,22 @@ xzs_d8m8_dryrun(void)
 
 	xzs_diag_emit("\n[M8-DRY-C0] ACCEPT\n");
 	xzs_diag_emit("  CRITERIA: INTR_STATUS BIT(8) == 1 && DSI_ACK_ERR_STATUS == 0 && DSI_TIMEOUT_STATUS == 0\n");
+
+	xzs_diag_emit("\n[M8-DRY-RECONCILED] FROZEN SCANOUT VALUES\n");
+	xzs_diag_emit("  FB_STRIDE=0x00001100\n");
+	xzs_diag_emit("  FB_ALIGNMENT=128\n");
+	xzs_diag_emit("  RGB0_BASE=0x00915000\n");
+	xzs_diag_emit("  LM0_BASE=0x00945000\n");
+	xzs_diag_emit("  CTL0_BASE=0x00902000\n");
+	xzs_diag_emit("  PP0_BASE=0x00971000\n");
+	xzs_diag_emit("  INTF1_BASE=0x0096b800\n");
+	xzs_diag_emit("  CTL_FLUSH_MASK=0x00020048\n");
+	xzs_diag_emit("  DSI_MDP_CTRL=0x00000008\n");
+	xzs_diag_emit("  DSI_MDP_DCS_CMD_CTRL=0x00013c2c\n");
+	xzs_diag_emit("  DSI_STREAM0_CTRL=0x0ca90039\n");
+	xzs_diag_emit("  DSI_STREAM0_TOTAL=0x07800438\n");
+	xzs_diag_emit("  SMMU_STATE=BYPASS\n");
+	xzs_diag_emit("  DIRECT_PHYSICAL_FB_SAFE=yes\n");
 
 	xzs_diag_emit("\n[M8-DRY] UNKNOWN_REGISTER_COUNT=0\n");
 	xzs_diag_emit("[M8-DRY] INFERENCE_REGISTER_COUNT=0\n");

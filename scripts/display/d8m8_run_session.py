@@ -26,34 +26,38 @@ xzs_console = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(xzs_console)
 
 
-def collect(dev, seconds=2.0, required_substr=None):
+def collect(dev, seconds=5.0, required_substr=None):
     end = time.time() + seconds
     buf = b""
-    quiet = 0
     while time.time() < end:
-        chunk, kind = xzs_console.bulk_read(dev, timeout_ms=1000)
+        chunk, kind = xzs_console.bulk_read(dev, timeout_ms=300)
         if chunk:
             buf += chunk
-            quiet = 0
-        else:
-            quiet += 1
             tail = buf[max(0, len(buf)-200):]
             has_prompt = (b"xzs#" in tail or b"code=3" in tail)
             if required_substr:
                 req_bytes = required_substr.encode("utf-8") if isinstance(required_substr, str) else required_substr
-                if (req_bytes in buf or b"ALREADY" in buf) and has_prompt and quiet >= 1:
+                if (req_bytes in buf or b"ALREADY" in buf) and has_prompt:
+                    time.sleep(0.1)
+                    extra, _ = xzs_console.bulk_read(dev, timeout_ms=100)
+                    if extra:
+                        buf += extra
                     break
             else:
-                if has_prompt and quiet >= 1:
+                if has_prompt:
+                    time.sleep(0.1)
+                    extra, _ = xzs_console.bulk_read(dev, timeout_ms=100)
+                    if extra:
+                        buf += extra
                     break
-            time.sleep(0.05)
+        time.sleep(0.05)
     return buf
 
 
-def send_cmd(dev, cmd_str, wait_sec=2.0, required_substr=None):
+def send_cmd(dev, cmd_str, wait_sec=5.0, required_substr=None):
     print(f"\n>>> SEND: {cmd_str.strip()}", flush=True)
-    while True:
-        pre_drain, _ = xzs_console.bulk_read(dev, timeout_ms=50)
+    for _ in range(5):
+        pre_drain, _ = xzs_console.bulk_read(dev, timeout_ms=100)
         if not pre_drain:
             break
     payload = cmd_str.encode("utf-8") if isinstance(cmd_str, str) else cmd_str
@@ -107,19 +111,19 @@ def main():
         print("ERROR: could not open stable XNU USB device", flush=True)
         sys.exit(1)
 
-    print("=== STEP 0: TRANSPORT HANDSHAKE (Z1-Z4) ===", flush=True)
-    if not xzs_console.transport_handshake(dev):
-        print("ERROR: transport handshake failed", flush=True)
-        sys.exit(1)
-
-    # Allow shell to settle
-    time.sleep(0.5)
-    initial_drain = collect(dev, seconds=1.5)
-    if initial_drain:
-        print(initial_drain.decode("utf-8", errors="replace"), end="", flush=True)
+    print("=== STEP 0: SYNC SHELL PROMPT ===", flush=True)
+    start_t = time.time()
+    while time.time() - start_t < 10.0:
+        xzs_console.bulk_write(dev, b"\n", timeout_ms=1000)
+        time.sleep(0.5)
+        initial_drain = collect(dev, seconds=1.0)
+        if initial_drain:
+            print(initial_drain.decode("utf-8", errors="replace"), end="", flush=True)
+            if b"xzs#" in initial_drain:
+                break
     full_log = []
 
-    def run_step(name, cmd, wait_s=2.0, required_substr=None):
+    def run_step(name, cmd, wait_s=5.0, required_substr=None):
         print(f"\n--- {name} ---", flush=True)
         out = send_cmd(dev, cmd, wait_sec=wait_s, required_substr=required_substr)
         full_log.append(f"\n# {name}\n> {cmd}\n{out}")
@@ -148,19 +152,19 @@ def main():
 
     # 4. Safe Power and Clock Bring-up (D8-M2 prerequisite)
     print("\n=== POWERING DISPLAY GDSC & CORE CLOCKS (M2) ===", flush=True)
-    run_step("ENABLE MMSS_MMAGIC_AHB", "clocks mmagic-ahb-on\n", 2.0, required_substr="PASS")
-    run_step("ENABLE MMSS_MMAGIC_CFG_AHB", "clocks mmagic-cfg-ahb-on\n", 2.0, required_substr="PASS")
-    run_step("ENABLE MMAGIC_MDSS_NOC", "clocks mmagic-mdss-noc-on\n", 2.0, required_substr="PASS")
-    run_step("ENABLE MMAGIC_MDSS_AXI", "clocks mmagic-mdss-axi-on\n", 2.0, required_substr="PASS")
-    run_step("POWER ON MDSS GDSC", "display power mdss-on\n", 2.0, required_substr="PASS")
-    run_step("ENABLE MDSS_AHB", "clocks mdss-ahb-on\n", 2.0, required_substr="PASS")
-    run_step("ENABLE MDSS_AXI", "clocks mdss-axi-on\n", 2.0, required_substr="PASS")
-    run_step("ENABLE MDSS_MDP", "clocks mdp-on\n", 2.0, required_substr="PASS")
-    run_step("VERIFY CORE CLOCKS", "clocks mdss-critical-status\n", 2.0, required_substr="PASS")
+    run_step("ENABLE MMSS_MMAGIC_AHB", "clocks mmagic-ahb-on\n", 3.0, required_substr="PASS")
+    run_step("ENABLE MMSS_MMAGIC_CFG_AHB", "clocks mmagic-cfg-ahb-on\n", 3.0, required_substr="PASS")
+    run_step("ENABLE MMAGIC_MDSS_NOC", "clocks mmagic-mdss-noc-on\n", 3.0, required_substr="PASS")
+    run_step("ENABLE MMAGIC_MDSS_AXI", "clocks mmagic-mdss-axi-on\n", 3.0, required_substr="PASS")
+    run_step("POWER ON MDSS GDSC", "display power mdss-on\n", 4.0, required_substr="PASS")
+    run_step("ENABLE MDSS_AHB", "clocks mdss-ahb-on\n", 3.0, required_substr="PASS")
+    run_step("ENABLE MDSS_AXI", "clocks mdss-axi-on\n", 3.0, required_substr="PASS")
+    run_step("ENABLE MDSS_MDP", "clocks mdp-on\n", 3.0, required_substr="PASS")
+    run_step("VERIFY CORE CLOCKS", "clocks mdss-critical-status\n", 3.0, required_substr="PASS")
 
     # 5. Execute Read-Only Status Diagnostic (Powered State)
     print("\n=== STEP 2B: D8-M8 READ-ONLY STATUS (POWERED ACTIVE) ===", flush=True)
-    status_out = run_step("M8 STATUS POWERED", "display m8-status\n", 5.0, required_substr="READ_ONLY_AUDIT=PASS")
+    status_out = run_step("M8 STATUS POWERED", "display m8-status\n", 6.0, required_substr="READ_ONLY_AUDIT=PASS")
     if "READ_ONLY_AUDIT=PASS" not in status_out:
         print("!!! D8-M8 READ-ONLY STATUS CHECK (POWERED) FAILED!", flush=True)
         log_file.write_text("".join(full_log))

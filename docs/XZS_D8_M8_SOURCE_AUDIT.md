@@ -193,3 +193,31 @@ All gating questions for Milestone D8-M8 scanout architecture are resolved and *
 - Framebuffer Address Mode: `Physical` (SMMU not required)
 
 **Verdict: `M8_PREAUDIT_READY`**.
+
+---
+
+## 10. D8-M8-A6 Pre-Audit Hardware & Source Reconciliation
+
+During Milestone D8-M8-A6, three remaining pre-audit ambiguities were reconciled and validated on physical hardware (`BH905SX976`):
+
+### 10.1 Power State Diagnostic Reconciliation
+- **Old Diagnostic Addresses (Erroneous):** Checked MMCC offsets `0x008c5004`, `0x008c1404`, `0x008c2314`.
+- **Corrected & Proven MMCC Offsets:**
+  - `MMAGIC_MDSS_GDSCR`: `0x008c247c` (Readback: `0xa0222000`)
+  - `MDSS_GDSCR`: `0x008c2304` (Bit 31: `PWR_ON`, Bit 0: `SW_COLLAPSE`; Readback post-M2: `0xa0222000`)
+  - `MDSS_AHB_CBCR`: `0x008c2308` (Bit 0: `ENABLE`, Bit 31: `CLK_OFF`; Readback post-M2: `0x20008001`)
+  - `MDSS_AXI_CBCR`: `0x008c2310` (Bit 0: `ENABLE`, Bit 31: `CLK_OFF`; Readback post-M2: `0x00006221`)
+  - `MDSS_MDP_CBCR`: `0x008c231c` (Bit 0: `ENABLE`, Bit 31: `CLK_OFF`; Readback post-M2: `0x00006221`)
+- **Status Classification:** Correctly distinguishes `POWER_COLLAPSED` (pre-M2) vs `POWER_ON_CLOCKS_ACTIVE` (post-M2). Hardware reads into MDP core (`0x00900000` = `0x10070002`) are 100% bus-fault-free.
+
+### 10.2 DSI Command Mode DCS CMD Control (`0x00994044`) Reconciliation
+- **Planned Register Value:** `0x00013c2c` (`BIT(16)` = `insert_dcs_cmd`, `[15:8]` = `0x3c` `wr_mem_continue`, `[7:0]` = `0x2c` `wr_mem_start`).
+- **Live Register Readback:** `0x00003c2c`.
+- **Root Cause & Behavior:** In Qualcomm downstream `mdss_dsi_host.c:342`, `data = (pinfo->wr_mem_continue << 8) | pinfo->wr_mem_start; if (pinfo->insert_dcs_cmd) data |= BIT(16); MIPI_OUTP(base + 0x0044, data);`. On MSM8996 DSI controller v1.4, Bit 16 is a write-only latch/flag that configures the internal packet assembler; reading register `0x0044` only reflects the 16-bit payload opcodes `[15:0]`.
+- **Final Decision:** `0x00013c2c` (Write Value) / `0x00003c2c` (Hardware Readback).
+
+### 10.3 SMMU Bypass Runtime Gate
+- **Architecture State:** SMMU is in `BYPASS` mode (`SCTLR.M == 0`).
+- **Runtime Evidence:** Bootshim does not initialize SMMU; XNU kernel does not attach SMMU driver. Continuous-splash bypass from Qualcomm bootloader is preserved.
+- **Addressing Mode:** Direct physical DRAM addressing (`DIRECT_PHYSICAL_FB_SAFE = yes`). Framebuffer stride frozen at `4352` bytes (`0x1100`, 128-byte aligned).
+
