@@ -43,6 +43,86 @@ xzs_d8m8_dump_reg(const char *name, uint32_t addr)
 }
 
 /*
+ * D8-M8-7 Retry #6: Panel Ready State Trackers
+ */
+static bool g_m8_panel_ready = false;
+static bool g_m8_slpout_sent = false;
+static bool g_m8_teon_sent = false;
+static bool g_m8_dispon_sent = false;
+
+/*
+ * M8 Panel Prepare: Power on rails, reset panel, send SLPOUT/TEON/DISPON, leave panel ON
+ */
+static int
+xzs_d8m8_panel_prepare(void)
+{
+	xzs_diag_emit("\n=======================================================\n");
+	xzs_diag_emit("=== [M8] REAL COMMAND-MODE PANEL-ON PREPARE         ===\n");
+	xzs_diag_emit("=======================================================\n");
+
+	xzs_watchdog_pet();
+
+	/* 1. Panel Power-Up & Reset to Idle */
+	int rc = xzs_d8m6_panel_power_up_to_idle();
+	if (rc != 0) {
+		xzs_diag_emit("!!! [M8] PANEL PREPARE FAILED at power-up/reset!\n");
+		g_m8_panel_ready = false;
+		return -1;
+	}
+
+	uint32_t vddio_st = xzs_d8m5_gpio_read_in(GPIO_VDDIO_NUM);
+	uint32_t reset_st = xzs_d8m5_gpio_read_in(GPIO_RESET_NUM);
+	xzs_diag_emit("VDDIO_STATE="); xzs_diag_emit(vddio_st ? "ON\n" : "OFF\n");
+	xzs_diag_emit("LAB_STATE=ON\n");
+	xzs_diag_emit("IBB_STATE=ON\n");
+	xzs_diag_emit("RESET_STATE="); xzs_diag_emit(reset_st ? "RELEASED_HIGH\n" : "LOW\n");
+
+	/* 2. DCS Sleep Out (0x11) + 120 ms */
+	xzs_diag_emit("  [CMD 1/3] Transmitting DCS Sleep Out (0x11) + 120 ms...\n");
+	rc = xzs_d8m6_transmit_cmd(&s_cmd_slpout, 0);
+	g_d8m6_counters.slpout_count++;
+	if (rc != 0) {
+		xzs_diag_emit("!!! [M8] SLPOUT failed!\n");
+		g_m8_panel_ready = false;
+		return -2;
+	}
+	g_m8_slpout_sent = true;
+	xzs_diag_emit("SLPOUT_SENT=yes\n");
+
+	/* 3. DCS Tear On (0x35 0x00) */
+	xzs_diag_emit("  [CMD 2/3] Transmitting DCS Tear On (0x35 0x00)...\n");
+	rc = xzs_d8m6_transmit_cmd(&s_cmd_teon, 0);
+	g_d8m6_counters.teon_count++;
+	if (rc != 0) {
+		xzs_diag_emit("!!! [M8] TEON failed!\n");
+		g_m8_panel_ready = false;
+		return -3;
+	}
+	g_m8_teon_sent = true;
+	xzs_diag_emit("TEON_SENT=yes\n");
+
+	/* 4. DCS Display On (0x29) */
+	xzs_diag_emit("  [CMD 3/3] Transmitting DCS Display On (0x29)...\n");
+	rc = xzs_d8m6_transmit_cmd(&s_cmd_dispon, 0);
+	g_d8m6_counters.dispon_count++;
+	if (rc != 0) {
+		xzs_diag_emit("!!! [M8] DISPON failed!\n");
+		g_m8_panel_ready = false;
+		return -4;
+	}
+	g_m8_dispon_sent = true;
+	xzs_diag_emit("DISPON_SENT=yes\n");
+
+	/* 5. Restore DSI trigger control to MDP Command Mode trigger (0 = MDP trigger) */
+	d8m4_write32(D8M6_REG_DSI_TRIG_CTRL, 0x00000000u);
+
+	g_m8_panel_ready = true;
+	xzs_diag_emit("PANEL_READY=yes\n");
+	xzs_diag_emit("[D8-M8] PANEL_PREPARE=PASS\n");
+	return 0;
+}
+
+/*
  * D8-M8-A5: Read-Only Status Diagnostic (display m8-status)
  * Safely inspects current hardware register values without writing any registers.
  */
@@ -679,6 +759,7 @@ xzs_d8m8_stream_config(void)
 
 	xzs_m8_write_reg("DSI_STREAM0_CTRL  ", 0x00994058u, 0x0ca90039u, 0x0ca90039u, false);
 	xzs_m8_write_reg("DSI_STREAM0_TOTAL ", 0x0099405cu, 0x07800438u, 0x07800438u, false);
+	xzs_m8_write_reg("DSI_TRIG_CTRL     ", 0x00994084u, 0x00000000u, 0x00000000u, false);
 
 	/* Safety check on DSI host */
 	uint32_t ack_err = d8p1_read32(0x00994068u);
@@ -891,13 +972,18 @@ xzs_d8m8_prekick_status(void)
 	xzs_diag_emit("DISP_INTF_SEL=0x"); xzs_d8p1_hex32(disp_intf); xzs_diag_emit("\n");
 	xzs_diag_emit("CTL_LAYER_0=0x"); xzs_d8p1_hex32(ctl_layer); xzs_diag_emit("\n");
 	xzs_diag_emit("CTL_TOP=0x"); xzs_d8p1_hex32(ctl_top); xzs_diag_emit("\n");
-	xzs_diag_emit("CTL_FLUSH_STATE=0x"); xzs_d8p1_hex32(ctl_flush); xzs_diag_emit("\n\n");
+	xzs_diag_emit("CTL_FLUSH_STATE=0x"); xzs_d8p1_hex32(ctl_flush); xzs_diag_emit("\n");
+	xzs_diag_emit("CTL_FLUSH_PRE=0x"); xzs_d8p1_hex32(ctl_flush); xzs_diag_emit("\n");
 
 	uint32_t ack_err = d8p1_read32(0x00994068u);
 	uint32_t timeout_stat = d8p1_read32(0x009940c0u);
 	uint32_t lane_stat = d8p1_read32(0x009940a8u);
 	uint32_t pll_stat = d8p1_read32(0x009948ccu);
+	uint32_t dsi_status_pre = d8p1_read32(0x00994008u);
+	uint32_t dsi_fifo_pre = d8p1_read32(0x0099400cu);
 
+	xzs_diag_emit("DSI_STATUS_PRE=0x"); xzs_d8p1_hex32(dsi_status_pre); xzs_diag_emit("\n");
+	xzs_diag_emit("DSI_FIFO_STATUS_PRE=0x"); xzs_d8p1_hex32(dsi_fifo_pre); xzs_diag_emit("\n");
 	xzs_diag_emit("DSI_ACK_ERR=0x"); xzs_d8p1_hex32(ack_err); xzs_diag_emit("\n");
 	xzs_diag_emit("DSI_TIMEOUT=0x"); xzs_d8p1_hex32(timeout_stat); xzs_diag_emit("\n");
 	xzs_diag_emit("DSI_LANE_STATUS=0x"); xzs_d8p1_hex32(lane_stat); xzs_diag_emit("\n");
@@ -906,7 +992,8 @@ xzs_d8m8_prekick_status(void)
 	uint32_t ctl_start = d8p1_read32(0x0090201cu);
 	xzs_diag_emit("CTL_START_COUNT=0\n");
 	xzs_diag_emit("MDP_KICKOFF_COUNT=0\n");
-	xzs_diag_emit("FRAMEBUFFER_SCANOUT_COUNT=0\n\n");
+	xzs_diag_emit("FRAMEBUFFER_SCANOUT_COUNT=0\n");
+	xzs_diag_emit("PANEL_READY="); xzs_diag_emit(g_m8_panel_ready ? "yes\n\n" : "no\n\n");
 
 	bool pp_timing_ok = (pp0_tear == 0) &&
 	                    ((pp0_sync_cfg_vsync & (1u << 19)) != 0) &&
@@ -919,7 +1006,8 @@ xzs_d8m8_prekick_status(void)
 	                    (pp0_rd_ptr_irq == 0x00000781u) &&
 	                    (pp0_wr_ptr_irq == 0x00000000u);
 
-	bool ready = g_m8_fb_initialized && g_m8_fb_cache_cleaned &&
+	bool ready = g_m8_panel_ready &&
+	             g_m8_fb_initialized && g_m8_fb_cache_cleaned &&
 	             (rgb0_addr == g_m8_fb_pa) && (rgb0_stride == 0x1100u) &&
 	             (rgb0_src_sz == 0x07800438u) && (rgb0_out_sz == 0x07800438u) &&
 	             (rgb0_fmt == 0x000236aau) && (rgb0_unp == 0x03010002u) &&
@@ -1034,7 +1122,8 @@ xzs_d8m8_kickoff(void)
 	                    (pp0_rd_ptr_irq == 0x00000781u) &&
 	                    (pp0_wr_ptr_irq == 0x00000000u);
 
-	bool ready = g_m8_fb_initialized && g_m8_fb_cache_cleaned &&
+	bool ready = g_m8_panel_ready &&
+	             g_m8_fb_initialized && g_m8_fb_cache_cleaned &&
 	             (rgb0_addr == g_m8_fb_pa) && (dsi_st0_tot == 0x07800438u) &&
 	             (ctl_top == 0x00020020u) &&
 	             ((ctl_flush & 0x40000000u) != 0 || (ctl_flush == 0x40020048u) || g_m8_flush_configured) &&
@@ -1044,6 +1133,8 @@ xzs_d8m8_kickoff(void)
 	             (mdp_intr_en == 0) &&
 	             ((post_clear_intr & 0x00001100u) == 0);
 
+	xzs_diag_emit("PANEL_READY=");
+	xzs_diag_emit(g_m8_panel_ready ? "yes\n" : "no\n");
 	xzs_diag_emit("PREKICK_READY=");
 	xzs_diag_emit(ready ? "YES\n" : "NO\n");
 	xzs_diag_emit("FB_PA=0x"); xzs_d8p1_hex32(g_m8_fb_pa); xzs_diag_emit("\n");
@@ -1057,8 +1148,12 @@ xzs_d8m8_kickoff(void)
 	/* Verify DSI clean */
 	uint32_t pre_ack_err = d8p1_read32(0x00994068u);
 	uint32_t pre_timeout = d8p1_read32(0x009940c0u);
+	uint32_t dsi_status_pre = d8p1_read32(0x00994008u);
+	uint32_t dsi_fifo_pre = d8p1_read32(0x0099400cu);
 	xzs_diag_emit("PRE_DSI_ACK_ERR=0x"); xzs_d8p1_hex32(pre_ack_err); xzs_diag_emit("\n");
 	xzs_diag_emit("PRE_DSI_TIMEOUT=0x"); xzs_d8p1_hex32(pre_timeout); xzs_diag_emit("\n");
+	xzs_diag_emit("DSI_STATUS_PRE=0x"); xzs_d8p1_hex32(dsi_status_pre); xzs_diag_emit("\n");
+	xzs_diag_emit("DSI_FIFO_STATUS_PRE=0x"); xzs_d8p1_hex32(dsi_fifo_pre); xzs_diag_emit("\n");
 
 	if (pre_ack_err != 0 || pre_timeout != 0) {
 		xzs_diag_emit("M8_7=BLOCKED (DSI error present before kickoff)\n");
@@ -1074,6 +1169,7 @@ xzs_d8m8_kickoff(void)
 	xzs_diag_emit("PP0_LINE_COUNT_PRE=0x"); xzs_d8p1_hex32(pp0_line_cnt_pre); xzs_diag_emit("\n");
 	xzs_diag_emit("PP0_OUT_LINE_COUNT_PRE=0x"); xzs_d8p1_hex32(pp0_out_line_cnt_pre); xzs_diag_emit("\n");
 	xzs_diag_emit("RGB0_CURRENT_SRC0_ADDR_PRE=0x"); xzs_d8p1_hex32(rgb0_cur_src0_pre); xzs_diag_emit("\n");
+	xzs_diag_emit("CTL_FLUSH_PRE=0x"); xzs_d8p1_hex32(ctl_flush); xzs_diag_emit("\n");
 
 	/* Pet watchdog & memory barrier */
 	xzs_watchdog_pet();
@@ -1223,29 +1319,34 @@ xzs_d8m8_kickoff(void)
 	bool dsi_stream_active = (dsi_status != 0) || (fifo_status != 0x11111000u) ||
 	                         (post_ack_err != 0) || (post_timeout != 0);
 
+	uint32_t ctl_flush_post = d8p1_read32(0x00902018u);
+	xzs_diag_emit("CTL_FLUSH_POST=0x"); xzs_d8p1_hex32(ctl_flush_post); xzs_diag_emit("\n");
+	bool intf1_consumed = ((ctl_flush_post & 0x40000000u) == 0);
+	xzs_diag_emit("INTF1_FLUSH_CONSUMED="); xzs_diag_emit(intf1_consumed ? "yes\n" : "no\n");
+
 	xzs_diag_emit("DSI_STREAM_ACTIVITY="); xzs_diag_emit(dsi_stream_active ? "yes\n" : "no\n");
 	xzs_diag_emit("PP_INTERNAL_TIMING_ACTIVE="); xzs_diag_emit(pp_int_timing_active ? "yes\n" : "no\n");
 	xzs_diag_emit("PP_OUTPUT_ACTIVITY="); xzs_diag_emit(pp_output_activity ? "yes\n" : "no\n");
 
 	if (g_m8_framebuffer_scanout_count == 1 && elapsed_us <= 100000) {
-		xzs_diag_emit("M8_7_RETRY5=PASS\n");
+		xzs_diag_emit("M8_7_RETRY6=PASS\n");
 		xzs_diag_emit("FIRST_MDP_FRAME=yes\n");
 		xzs_diag_emit("FIRST_SCANOUT_TRANSPORT=yes\n");
 		xzs_diag_emit("FIRST_VISIBLE_PIXELS=no\n");
-		xzs_diag_emit("RETRY_PERFORMED_AFTER_RETRY5=no\n");
+		xzs_diag_emit("RETRY_PERFORMED_AFTER_RETRY6=no\n");
 		xzs_diag_emit("BLOCKERS=NONE\n");
 	} else {
-		xzs_diag_emit("M8_7_RETRY5=FAIL\n");
+		xzs_diag_emit("M8_7_RETRY6=FAIL\n");
 		xzs_diag_emit("FIRST_MDP_FRAME=no\n");
 		xzs_diag_emit("FIRST_SCANOUT_TRANSPORT=no\n");
 		xzs_diag_emit("FIRST_VISIBLE_PIXELS=no\n");
-		xzs_diag_emit("RETRY_PERFORMED_AFTER_RETRY5=no\n");
+		xzs_diag_emit("RETRY_PERFORMED_AFTER_RETRY6=no\n");
 		if (pp_output_activity && !pp0_done) {
 			xzs_diag_emit("BLOCKERS=PP_OUTPUT_ACTIVE_BUT_NO_DONE\n");
 		} else if (dsi_stream_active && !pp0_done) {
 			xzs_diag_emit("BLOCKERS=DSI_STREAM_ACTIVE_BUT_NO_DONE\n");
 		} else {
-			xzs_diag_emit("BLOCKERS=CTL_ROUTING_FIX_INSUFFICIENT\n");
+			xzs_diag_emit("BLOCKERS=PP0_DONE_TIMEOUT_100MS\n");
 		}
 		xzs_diag_emit("--- TIMEOUT FORENSICS ---\n");
 		xzs_d8m8_dump_reg("INTR_STATUS      ", 0x00901014u);

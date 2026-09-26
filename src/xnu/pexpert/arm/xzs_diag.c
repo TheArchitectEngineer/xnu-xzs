@@ -936,10 +936,8 @@ xzs_diag_dispatch(uint64_t which, uint64_t arg1, uint64_t arg2, uint64_t arg3)
 		xzs_d8m6_run();
 		break;
 	case 50:
-		xzs_d8m8_status();
-		break;
 	case 51:
-		xzs_d8m8_dryrun();
+		xzs_d8m8_panel_prepare();
 		break;
 	case 52:
 		xzs_d8m8_fb_init();
