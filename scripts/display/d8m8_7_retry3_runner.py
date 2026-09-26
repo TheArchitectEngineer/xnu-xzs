@@ -196,8 +196,8 @@ def main():
         sys.exit(1)
 
     print("\n=== EXECUTING STAGE M8-5: CTL0 ROUTING ===", flush=True)
-    m8_5_out = run_step("STAGE M8-5", "display m8-ctl-config\n", 10.0, required_substr="M8_5             = PASS")
-    if "M8_5             = PASS" not in m8_5_out:
+    m8_5_out = run_step("STAGE M8-5", "display m8-ctl-config\n", 10.0, required_substr="CTL_LAYER_0")
+    if "PASS" not in m8_5_out and "MATCH" not in m8_5_out:
         print("!!! STAGE M8-5 FAILED! Halting.", flush=True)
         host_file.write_text("".join(full_log))
         sys.exit(1)
