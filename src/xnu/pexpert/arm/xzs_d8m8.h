@@ -42,13 +42,88 @@ xzs_d8m8_dump_reg(const char *name, uint32_t addr)
 	xzs_diag_emit("\n");
 }
 
+static inline void
+xzs_d8m8_dec(uint64_t val)
+{
+	char buf[24];
+	int idx = 0;
+	if (val == 0) {
+		xzs_diag_emit("0");
+		return;
+	}
+	while (val > 0) {
+		buf[idx++] = '0' + (val % 10);
+		val /= 10;
+	}
+	char rev[24];
+	for (int i = 0; i < idx; i++) {
+		rev[i] = buf[idx - 1 - i];
+	}
+	rev[idx] = '\0';
+	xzs_diag_emit(rev);
+}
+
 /*
- * D8-M8-7 Retry #6: Panel Ready State Trackers
+ * D8-M8-7 Retry #9: Panel & TE State Trackers
  */
 static bool g_m8_panel_ready = false;
 static bool g_m8_slpout_sent = false;
 static bool g_m8_teon_sent = false;
 static bool g_m8_dispon_sent = false;
+static bool g_m8_physical_te_proven = false;
+
+/*
+ * Physical TE Sampling on GPIO10 (TLMM mdp_vsync / TE)
+ * Samples for at least 50 ms (~3 frames at 60Hz).
+ */
+static bool
+xzs_d8m8_sample_physical_te(uint32_t window_us)
+{
+	if (window_us < 50000u) {
+		window_us = 50000u;
+	}
+	uint64_t frq = 19200000ULL;
+	__asm__ volatile("mrs %0, cntfrq_el0" : "=r"(frq));
+	if (frq == 0) frq = 19200000ULL;
+	uint64_t sample_ticks = ((uint64_t)window_us * frq) / 1000000ULL;
+
+	xzs_watchdog_pet();
+	uint64_t start = xzs_d8m5_read_cntvct();
+	uint32_t transitions = 0;
+	uint32_t prev = xzs_d8m5_gpio_read_in(GPIO_TE_NUM);
+	uint32_t high_samples = (prev == 1) ? 1 : 0;
+	uint32_t low_samples  = (prev == 0) ? 1 : 0;
+
+	while (1) {
+		uint32_t cur_val = xzs_d8m5_gpio_read_in(GPIO_TE_NUM);
+		if (cur_val == 1) {
+			high_samples++;
+		} else {
+			low_samples++;
+		}
+		if (cur_val != prev) {
+			transitions++;
+			prev = cur_val;
+		}
+		uint64_t now = xzs_d8m5_read_cntvct();
+		if ((now - start) >= sample_ticks) {
+			break;
+		}
+	}
+
+	uint64_t actual_us = ((xzs_d8m5_read_cntvct() - start) * 1000000ULL) / frq;
+	bool proven = (transitions > 0);
+	g_m8_physical_te_proven = proven;
+
+	xzs_diag_emit("TE_SAMPLE_WINDOW_US="); xzs_d8m8_dec(actual_us); xzs_diag_emit("\n");
+	xzs_diag_emit("TE_TRANSITIONS="); xzs_d8m8_dec(transitions); xzs_diag_emit("\n");
+	xzs_diag_emit("TE_HIGH_SAMPLES="); xzs_d8m8_dec(high_samples); xzs_diag_emit("\n");
+	xzs_diag_emit("TE_LOW_SAMPLES="); xzs_d8m8_dec(low_samples); xzs_diag_emit("\n");
+	xzs_diag_emit("TE_FINAL_LEVEL="); xzs_diag_emit(prev ? "HIGH\n" : "LOW\n");
+	xzs_diag_emit("PHYSICAL_TE_PROVEN="); xzs_diag_emit(proven ? "yes\n" : "no\n");
+
+	return proven;
+}
 
 /*
  * M8 Panel Prepare: Power on rails, reset panel, send SLPOUT/TEON/DISPON, leave panel ON
@@ -113,8 +188,11 @@ xzs_d8m8_panel_prepare(void)
 	g_m8_dispon_sent = true;
 	xzs_diag_emit("DISPON_SENT=yes\n");
 
-	/* 5. Restore DSI trigger control to MDP Command Mode trigger (0 = MDP trigger) */
-	d8m4_write32(D8M6_REG_DSI_TRIG_CTRL, 0x00000000u);
+	/* Sample physical TE after DCS TEON & DISPON */
+	xzs_d8m8_sample_physical_te(50000u);
+
+	/* 5. Restore DSI trigger control to MDP Command Mode trigger with external TE (0x80000004) */
+	d8m4_write32(D8M6_REG_DSI_TRIG_CTRL, 0x80000004u);
 
 	g_m8_panel_ready = true;
 	xzs_diag_emit("PANEL_READY=yes\n");
@@ -721,22 +799,22 @@ xzs_d8m8_stream_config(void)
 		xzs_d8m8_vsync_clock_on();
 	}
 
-	/* PP0: Source-Faithful Command-Mode Vertical Timing (Retry #8: Trigger Engine Enabled) */
+	/* PP0: Source-Faithful Command-Mode Vertical Timing (Retry #9: Exact Keyaki TE Geometry + External TE) */
 	xzs_m8_write_reg("PP0_TEAR_CHECK_EN ", 0x00971000u, 0x00000001u, 0x00000001u, false);
-	xzs_m8_write_reg("PP0_SYNC_CFG_VSYNC", 0x00971004u, 0x00080093u, 0x00080093u, false);
+	xzs_m8_write_reg("PP0_SYNC_CFG_VSYNC", 0x00971004u, 0x00180093u, 0x00180093u, false);
 	uint32_t vsync_rb = d8p1_read32(0x00971004u);
-	xzs_diag_emit("  PP_SYNC_CONFIG_VSYNC_WRITE=0x00080093\n");
+	xzs_diag_emit("  PP_SYNC_CONFIG_VSYNC_WRITE=0x00180093\n");
 	xzs_diag_emit("  PP_SYNC_CONFIG_VSYNC_READBACK=0x"); xzs_d8p1_hex32(vsync_rb); xzs_diag_emit("\n");
-	bool vsync_rb_ok = ((vsync_rb & (1u << 19)) != 0) && ((vsync_rb & (1u << 20)) == 0);
+	bool vsync_rb_ok = ((vsync_rb & (1u << 19)) != 0) && ((vsync_rb & (1u << 20)) != 0) && ((vsync_rb & 0xffffu) == 0x0093u);
 	xzs_diag_emit("  PP_SYNC_CONFIG_VSYNC_ACCEPTANCE=");
-	xzs_diag_emit(vsync_rb_ok ? "PASS (BIT19=1, BIT20=0)\n" : "FAIL (BIT19!=1 or BIT20!=0)\n");
+	xzs_diag_emit(vsync_rb_ok ? "PASS (BIT19=1, BIT20=1, vclks=0x93)\n" : "FAIL (BIT19!=1 or BIT20!=1 or vclks!=0x93)\n");
 
 	xzs_m8_write_reg("PP0_SYNC_CFG_HGHT ", 0x00971008u, 0x0000fff0u, 0x0000fff0u, false);
-	xzs_m8_write_reg("PP0_SYNC_WRCOUNT  ", 0x0097100cu, 0x00000009u, 0x00000009u, false);
+	xzs_m8_write_reg("PP0_SYNC_WRCOUNT  ", 0x0097100cu, 0x00000785u, 0x00000785u, false);
 	xzs_m8_write_reg("PP0_VSYNC_INIT_VAL", 0x00971010u, 0x00000780u, 0x00000780u, false);
 	/* Note: 0x00971014 (PP0_INT_COUNT_VAL) is HW read-only; not written. */
 	xzs_m8_write_reg("PP0_SYNC_THRESH   ", 0x00971018u, 0x00040004u, 0x00040004u, false);
-	xzs_m8_write_reg("PP0_START_POS     ", 0x0097101cu, 0x00000004u, 0x00000004u, false);
+	xzs_m8_write_reg("PP0_START_POS     ", 0x0097101cu, 0x00000780u, 0x00000780u, false);
 	xzs_m8_write_reg("PP0_RD_PTR_IRQ    ", 0x00971020u, 0x00000781u, 0x00000781u, false);
 	xzs_m8_write_reg("PP0_WR_PTR_IRQ    ", 0x00971024u, 0x00000000u, 0x00000000u, false);
 
@@ -759,7 +837,7 @@ xzs_d8m8_stream_config(void)
 
 	xzs_m8_write_reg("DSI_STREAM0_CTRL  ", 0x00994058u, 0x0ca90039u, 0x0ca90039u, false);
 	xzs_m8_write_reg("DSI_STREAM0_TOTAL ", 0x0099405cu, 0x07800438u, 0x07800438u, false);
-	xzs_m8_write_reg("DSI_TRIG_CTRL     ", 0x00994084u, 0x00000000u, 0x00000000u, false);
+	xzs_m8_write_reg("DSI_TRIG_CTRL     ", 0x00994084u, 0x80000004u, 0x80000004u, false);
 
 	/* Safety check on DSI host */
 	uint32_t ack_err = d8p1_read32(0x00994068u);
@@ -968,8 +1046,10 @@ xzs_d8m8_prekick_status(void)
 	uint32_t pp0_wr_ptr_irq = d8p1_read32(0x00971024u);
 
 	xzs_diag_emit("PP0_TEAR_CHECK_EN=0x"); xzs_d8p1_hex32(pp0_tear); xzs_diag_emit("\n");
-	xzs_diag_emit("PP_SYNC_CONFIG_VSYNC_WRITE=0x00080093\n");
+	xzs_diag_emit("PP_TEAR_CHECK_EN=0x"); xzs_d8p1_hex32(pp0_tear); xzs_diag_emit("\n");
+	xzs_diag_emit("PP_SYNC_CONFIG_VSYNC_WRITE=0x00180093\n");
 	xzs_diag_emit("PP_SYNC_CONFIG_VSYNC_READBACK=0x"); xzs_d8p1_hex32(pp0_sync_cfg_vsync); xzs_diag_emit("\n");
+	xzs_diag_emit("PP_SYNC_CONFIG_VSYNC=0x"); xzs_d8p1_hex32(pp0_sync_cfg_vsync); xzs_diag_emit("\n");
 	xzs_diag_emit("PP_SYNC_CONFIG_HEIGHT=0x"); xzs_d8p1_hex32(pp0_sync_cfg_hght); xzs_diag_emit("\n");
 	xzs_diag_emit("PP_SYNC_WRCOUNT=0x"); xzs_d8p1_hex32(pp0_sync_wrcount); xzs_diag_emit("\n");
 	xzs_diag_emit("PP_VSYNC_INIT_VAL=0x"); xzs_d8p1_hex32(pp0_vsync_init); xzs_diag_emit("\n");
@@ -1033,18 +1113,21 @@ xzs_d8m8_prekick_status(void)
 	xzs_diag_emit("FRAMEBUFFER_SCANOUT_COUNT=0\n");
 	xzs_diag_emit("PANEL_READY="); xzs_diag_emit(g_m8_panel_ready ? "yes\n\n" : "no\n\n");
 
+	/* Sample physical TE */
+	bool te_proven = xzs_d8m8_sample_physical_te(50000u);
+
 	bool pp_timing_ok = (pp0_tear == 1) &&
-	                    ((pp0_sync_cfg_vsync & (1u << 19)) != 0) &&
-	                    ((pp0_sync_cfg_vsync & (1u << 20)) == 0) &&
+	                    (pp0_sync_cfg_vsync == 0x00180093u) &&
 	                    (pp0_sync_cfg_hght == 0x0000fff0u) &&
-	                    (pp0_sync_wrcount == 0x00000009u) &&
+	                    (pp0_sync_wrcount == 0x00000785u) &&
 	                    (pp0_vsync_init == 0x00000780u) &&
 	                    (pp0_sync_thresh == 0x00040004u) &&
-	                    (pp0_start_pos == 0x00000004u) &&
+	                    (pp0_start_pos == 0x00000780u) &&
 	                    (pp0_rd_ptr_irq == 0x00000781u) &&
 	                    (pp0_wr_ptr_irq == 0x00000000u);
+	bool wrcount_consistent = (pp0_sync_wrcount == (pp0_start_pos + (pp0_sync_thresh & 0xffffu) + 1u));
 
-	bool ready = g_m8_panel_ready &&
+	bool ready = g_m8_panel_ready && te_proven && wrcount_consistent &&
 	             g_m8_fb_initialized && g_m8_fb_cache_cleaned &&
 	             (rgb0_addr == g_m8_fb_pa) && (rgb0_stride == 0x1100u) &&
 	             (rgb0_src_sz == 0x07800438u) && (rgb0_out_sz == 0x07800438u) &&
@@ -1056,7 +1139,7 @@ xzs_d8m8_prekick_status(void)
 	             ((post_clear_intr & 0x00001100u) == 0) &&
 	             (dsi_mdp_ctrl == 0x00000008u) && ((dsi_dcs_cmd & 0xffffu) == 0x3c2cu) &&
 	             (dsi_st0_ctrl == 0x0ca90039u) && (dsi_st0_tot == 0x07800438u) &&
-	             (dsi_trig_ctrl == 0x00000000u) &&
+	             (dsi_trig_ctrl == 0x80000004u) &&
 	             (disp_intf == 0x100u) && (ctl_layer == 0x200u) && (ctl_top == 0x00020020u) &&
 	             ((ctl_flush == 0x00020048u) || g_m8_flush_configured) &&
 	             (ack_err == 0) && (timeout_stat == 0) && (ctl_start == 0);
@@ -1068,26 +1151,7 @@ xzs_d8m8_prekick_status(void)
 	}
 }
 
-static inline void
-xzs_d8m8_dec(uint64_t val)
-{
-	char buf[24];
-	int idx = 0;
-	if (val == 0) {
-		xzs_diag_emit("0");
-		return;
-	}
-	while (val > 0) {
-		buf[idx++] = '0' + (val % 10);
-		val /= 10;
-	}
-	char rev[24];
-	for (int i = 0; i < idx; i++) {
-		rev[i] = buf[idx - 1 - i];
-	}
-	rev[idx] = '\0';
-	xzs_diag_emit(rev);
-}
+
 
 /*
  * D8-M8-7: Controlled Single Kickoff Diagnostic (display m8-kickoff / display m8-7)
@@ -1127,6 +1191,7 @@ xzs_d8m8_kickoff(void)
 	uint32_t pp0_rd_ptr_irq = d8p1_read32(0x00971020u);
 	uint32_t pp0_wr_ptr_irq = d8p1_read32(0x00971024u);
 	uint32_t dsi_mdp_ctrl = d8p1_read32(0x00994040u);
+	uint32_t dsi_trig_ctrl = d8p1_read32(0x00994084u);
 	uint32_t mdp_intr_en = d8p1_read32(0x00901010u);
 
 	/* VSYNC clock status */
@@ -1148,21 +1213,22 @@ xzs_d8m8_kickoff(void)
 	d8p1_write32(0x00901018u, 0x00001100u);
 	uint32_t post_clear_intr = d8p1_read32(0x00901014u);
 	xzs_diag_emit("POST_CLEAR_INTR_STATUS=0x"); xzs_d8p1_hex32(post_clear_intr); xzs_diag_emit("\n");
-	xzs_diag_emit("INTR_STATUS_PRE=0x"); xzs_d8p1_hex32(post_clear_intr); xzs_diag_emit("\n");
-	xzs_diag_emit("PP0_TEAR_CHECK_EN_PRE=0x"); xzs_d8p1_hex32(pp0_tear); xzs_diag_emit("\n");
+
+	/* Physical TE sampling for at least 50 ms */
+	bool te_proven = xzs_d8m8_sample_physical_te(50000u);
 
 	bool pp_timing_ok = (pp0_tear == 1) &&
-	                    ((pp0_sync_cfg_vsync & (1u << 19)) != 0) &&
-	                    ((pp0_sync_cfg_vsync & (1u << 20)) == 0) &&
+	                    (pp0_sync_cfg_vsync == 0x00180093u) &&
 	                    (pp0_sync_cfg_hght == 0x0000fff0u) &&
-	                    (pp0_sync_wrcount == 0x00000009u) &&
+	                    (pp0_sync_wrcount == 0x00000785u) &&
 	                    (pp0_vsync_init == 0x00000780u) &&
 	                    (pp0_sync_thresh == 0x00040004u) &&
-	                    (pp0_start_pos == 0x00000004u) &&
+	                    (pp0_start_pos == 0x00000780u) &&
 	                    (pp0_rd_ptr_irq == 0x00000781u) &&
 	                    (pp0_wr_ptr_irq == 0x00000000u);
+	bool wrcount_consistent = (pp0_sync_wrcount == (pp0_start_pos + (pp0_sync_thresh & 0xffffu) + 1u));
 
-	bool ready = g_m8_panel_ready &&
+	bool ready = g_m8_panel_ready && te_proven && wrcount_consistent &&
 	             g_m8_fb_initialized && g_m8_fb_cache_cleaned &&
 	             (rgb0_addr == g_m8_fb_pa) && (dsi_st0_tot == 0x07800438u) &&
 	             (ctl_top == 0x00020020u) &&
@@ -1170,15 +1236,41 @@ xzs_d8m8_kickoff(void)
 	             vsync_clk_unhalted &&
 	             pp_timing_ok &&
 	             (dsi_mdp_ctrl == 0x00000008u) &&
+	             (dsi_trig_ctrl == 0x80000004u) &&
 	             (mdp_intr_en == 0) &&
 	             ((post_clear_intr & 0x00001100u) == 0);
 
 	xzs_diag_emit("PANEL_READY=");
 	xzs_diag_emit(g_m8_panel_ready ? "yes\n" : "no\n");
+	xzs_diag_emit("PHYSICAL_TE_PROVEN=");
+	xzs_diag_emit(te_proven ? "yes\n" : "no\n");
 	xzs_diag_emit("PREKICK_READY=");
 	xzs_diag_emit(ready ? "YES\n" : "NO\n");
 	xzs_diag_emit("FB_PA=0x"); xzs_d8p1_hex32(g_m8_fb_pa); xzs_diag_emit("\n");
 	xzs_diag_emit("RGB0_SRC0_ADDR=0x"); xzs_d8p1_hex32(rgb0_addr); xzs_diag_emit("\n");
+
+	/* Pre-kick telemetry emission */
+	xzs_diag_emit("PP_TEAR_CHECK_EN="); xzs_d8p1_hex32(pp0_tear); xzs_diag_emit("\n");
+	xzs_diag_emit("PP_SYNC_CONFIG_VSYNC=0x"); xzs_d8p1_hex32(pp0_sync_cfg_vsync); xzs_diag_emit("\n");
+	xzs_diag_emit("PP_SYNC_CONFIG_HEIGHT=0x"); xzs_d8p1_hex32(pp0_sync_cfg_hght); xzs_diag_emit("\n");
+	xzs_diag_emit("PP_VSYNC_INIT_VAL=0x"); xzs_d8p1_hex32(pp0_vsync_init); xzs_diag_emit("\n");
+	xzs_diag_emit("PP_START_POS=0x"); xzs_d8p1_hex32(pp0_start_pos); xzs_diag_emit("\n");
+	xzs_diag_emit("PP_RD_PTR_IRQ=0x"); xzs_d8p1_hex32(pp0_rd_ptr_irq); xzs_diag_emit("\n");
+	xzs_diag_emit("PP_SYNC_THRESH=0x"); xzs_d8p1_hex32(pp0_sync_thresh); xzs_diag_emit("\n");
+	xzs_diag_emit("PP_SYNC_WRCOUNT=0x"); xzs_d8p1_hex32(pp0_sync_wrcount); xzs_diag_emit("\n");
+	xzs_diag_emit("DSI_TRIG_CTRL=0x"); xzs_d8p1_hex32(dsi_trig_ctrl); xzs_diag_emit("\n");
+
+	xzs_diag_emit("PP_TEAR_CHECK_EN_PRE=0x"); xzs_d8p1_hex32(pp0_tear); xzs_diag_emit("\n");
+	xzs_diag_emit("PP0_TEAR_CHECK_EN_PRE=0x"); xzs_d8p1_hex32(pp0_tear); xzs_diag_emit("\n");
+	xzs_diag_emit("PP_SYNC_CONFIG_VSYNC_PRE=0x"); xzs_d8p1_hex32(pp0_sync_cfg_vsync); xzs_diag_emit("\n");
+	xzs_diag_emit("PP_SYNC_CONFIG_HEIGHT_PRE=0x"); xzs_d8p1_hex32(pp0_sync_cfg_hght); xzs_diag_emit("\n");
+	xzs_diag_emit("PP_VSYNC_INIT_VAL_PRE=0x"); xzs_d8p1_hex32(pp0_vsync_init); xzs_diag_emit("\n");
+	xzs_diag_emit("PP_START_POS_PRE=0x"); xzs_d8p1_hex32(pp0_start_pos); xzs_diag_emit("\n");
+	xzs_diag_emit("PP_RD_PTR_IRQ_PRE=0x"); xzs_d8p1_hex32(pp0_rd_ptr_irq); xzs_diag_emit("\n");
+	xzs_diag_emit("PP_SYNC_THRESH_PRE=0x"); xzs_d8p1_hex32(pp0_sync_thresh); xzs_diag_emit("\n");
+	xzs_diag_emit("PP_SYNC_WRCOUNT_PRE=0x"); xzs_d8p1_hex32(pp0_sync_wrcount); xzs_diag_emit("\n");
+	xzs_diag_emit("DSI_TRIG_CTRL_PRE=0x"); xzs_d8p1_hex32(dsi_trig_ctrl); xzs_diag_emit("\n");
+	xzs_diag_emit("INTR_STATUS_PRE=0x"); xzs_d8p1_hex32(post_clear_intr); xzs_diag_emit("\n");
 
 	if (!ready) {
 		xzs_diag_emit("M8_7=BLOCKED (Prerequisites not in PREKICK_READY state)\n");
@@ -1205,6 +1297,9 @@ xzs_d8m8_kickoff(void)
 	uint32_t pp0_line_cnt_pre = d8p1_read32(0x0097102cu);
 	uint32_t pp0_out_line_cnt_pre = d8p1_read32(0x00971028u);
 	uint32_t rgb0_cur_src0_pre = d8p1_read32(0x009150a4u);
+	xzs_diag_emit("PP_INT_COUNT_PRE=0x"); xzs_d8p1_hex32(pp0_int_cnt_pre); xzs_diag_emit("\n");
+	xzs_diag_emit("PP_LINE_COUNT_PRE=0x"); xzs_d8p1_hex32(pp0_line_cnt_pre); xzs_diag_emit("\n");
+	xzs_diag_emit("PP_OUT_LINE_COUNT_PRE=0x"); xzs_d8p1_hex32(pp0_out_line_cnt_pre); xzs_diag_emit("\n");
 	xzs_diag_emit("PP0_INT_COUNT_VAL_PRE=0x"); xzs_d8p1_hex32(pp0_int_cnt_pre); xzs_diag_emit("\n");
 	xzs_diag_emit("PP0_LINE_COUNT_PRE=0x"); xzs_d8p1_hex32(pp0_line_cnt_pre); xzs_diag_emit("\n");
 	xzs_diag_emit("PP0_OUT_LINE_COUNT_PRE=0x"); xzs_d8p1_hex32(pp0_out_line_cnt_pre); xzs_diag_emit("\n");
@@ -1234,6 +1329,12 @@ xzs_d8m8_kickoff(void)
 	__asm__ volatile("mrs %0, cntfrq_el0" : "=r"(frq));
 	if (frq == 0) frq = 19200000ULL;
 	uint64_t timeout_cycles = frq / 10ULL; /* 100 ms */
+
+	/* Track RD_PTR and WR_PTR interrupts */
+	bool rd_ptr_seen = false;
+	bool wr_ptr_seen = false;
+	if ((pre_intr & 0x00001000u) != 0) rd_ptr_seen = true;
+	if ((pre_intr & 0x00010000u) != 0) wr_ptr_seen = true;
 
 	/* Capture START_CYCLES */
 	uint64_t start_cycles = 0;
@@ -1269,6 +1370,8 @@ xzs_d8m8_kickoff(void)
 	hf_samples[0].intr_status = d8p1_read32(0x00901014u);
 	hf_samples[0].dsi_status = d8p1_read32(0x00994008u);
 	hf_samples[0].dsi_fifo_status = d8p1_read32(0x0099400cu);
+	if ((hf_samples[0].intr_status & 0x00001000u) != 0) rd_ptr_seen = true;
+	if ((hf_samples[0].intr_status & 0x00010000u) != 0) wr_ptr_seen = true;
 
 	/* Subsequent samples spaced over first few ms: target ~200us, ~500us, ~1ms, ~2ms, ~5ms, ~10ms, ~20ms */
 	static const uint64_t target_delays_us[NUM_HF_SAMPLES] = { 0, 200, 500, 1000, 2000, 5000, 10000, 20000 };
@@ -1289,6 +1392,8 @@ xzs_d8m8_kickoff(void)
 		hf_samples[s].intr_status = d8p1_read32(0x00901014u);
 		hf_samples[s].dsi_status = d8p1_read32(0x00994008u);
 		hf_samples[s].dsi_fifo_status = d8p1_read32(0x0099400cu);
+		if ((hf_samples[s].intr_status & 0x00001000u) != 0) rd_ptr_seen = true;
+		if ((hf_samples[s].intr_status & 0x00010000u) != 0) wr_ptr_seen = true;
 	}
 
 	uint32_t pp0_int_cnt_post = hf_samples[0].pp0_int_cnt;
@@ -1350,6 +1455,8 @@ xzs_d8m8_kickoff(void)
 			uint32_t cur_olc = d8p1_read32(0x00971028u);
 			if (cur_lc > max_line_cnt) max_line_cnt = cur_lc;
 			if (cur_olc > max_out_line_cnt) max_out_line_cnt = cur_olc;
+			if ((intr_val & 0x00001000u) != 0) rd_ptr_seen = true;
+			if ((intr_val & 0x00010000u) != 0) wr_ptr_seen = true;
 
 			if ((intr_val & 0x00000100u) != 0) {
 				__asm__ volatile("mrs %0, cntvct_el0" : "=r"(end_cycles));
@@ -1368,6 +1475,10 @@ xzs_d8m8_kickoff(void)
 
 	xzs_diag_emit("MAX_LINE_CNT_OBSERVED=0x"); xzs_d8p1_hex32(max_line_cnt); xzs_diag_emit("\n");
 	xzs_diag_emit("MAX_OUT_LINE_CNT_OBSERVED=0x"); xzs_d8p1_hex32(max_out_line_cnt); xzs_diag_emit("\n");
+	xzs_diag_emit("MAX_LINE_COUNT_OBSERVED=0x"); xzs_d8p1_hex32(max_line_cnt); xzs_diag_emit("\n");
+	xzs_diag_emit("MAX_OUT_LINE_COUNT_OBSERVED=0x"); xzs_d8p1_hex32(max_out_line_cnt); xzs_diag_emit("\n");
+	xzs_diag_emit("RD_PTR_ACTIVITY="); xzs_diag_emit(rd_ptr_seen ? "yes\n" : "no\n");
+	xzs_diag_emit("WR_PTR_ACTIVITY="); xzs_diag_emit(wr_ptr_seen ? "yes\n" : "no\n");
 
 	/* Elapsed timing */
 	uint64_t elapsed_cycles = (end_cycles >= start_cycles) ? (end_cycles - start_cycles) : 0;
@@ -1414,6 +1525,8 @@ xzs_d8m8_kickoff(void)
 
 	xzs_diag_emit("POST_DSI_ACK_ERR=0x"); xzs_d8p1_hex32(post_ack_err); xzs_diag_emit("\n");
 	xzs_diag_emit("POST_DSI_TIMEOUT=0x"); xzs_d8p1_hex32(post_timeout); xzs_diag_emit("\n");
+	xzs_diag_emit("ACK_ERR=0x"); xzs_d8p1_hex32(post_ack_err); xzs_diag_emit("\n");
+	xzs_diag_emit("TIMEOUT=0x"); xzs_d8p1_hex32(post_timeout); xzs_diag_emit("\n");
 
 	/* If PP0_DONE && DSI clean: FRAMEBUFFER_SCANOUT_COUNT++ */
 	if (pp0_done && post_ack_err == 0 && post_timeout == 0) {
@@ -1468,22 +1581,24 @@ xzs_d8m8_kickoff(void)
 	xzs_diag_emit("PP_INTERNAL_TIMING_ACTIVE="); xzs_diag_emit(pp_int_timing_active ? "yes\n" : "no\n");
 	xzs_diag_emit("PP_OUTPUT_ACTIVITY="); xzs_diag_emit(pp_output_activity ? "yes\n" : "no\n");
 
-	bool tearcheck_hw_effect = pp_output_activity;
-	xzs_diag_emit("TEARCHECK_ENABLE_HARDWARE_EFFECT="); xzs_diag_emit(tearcheck_hw_effect ? "yes\n" : "no\n");
+	bool te_trigger_hw_effect = (max_line_cnt > 0) || (max_out_line_cnt > 0) ||
+	                            (dsi_status != 0) || (fifo_status != 0x11111000u) ||
+	                            rd_ptr_seen || pp0_done;
+	xzs_diag_emit("TE_TRIGGER_HARDWARE_EFFECT="); xzs_diag_emit(te_trigger_hw_effect ? "yes\n" : "no\n");
 
 	if (g_m8_framebuffer_scanout_count == 1 && elapsed_us <= 100000) {
-		xzs_diag_emit("M8_7_RETRY8=PASS\n");
+		xzs_diag_emit("M8_7_RETRY9=PASS\n");
 		xzs_diag_emit("FIRST_MDP_FRAME=yes\n");
 		xzs_diag_emit("FIRST_SCANOUT_TRANSPORT=yes\n");
 		xzs_diag_emit("FIRST_VISIBLE_PIXELS=no\n");
-		xzs_diag_emit("RETRY_PERFORMED_AFTER_RETRY8=no\n");
+		xzs_diag_emit("RETRY_PERFORMED_AFTER_RETRY9=no\n");
 		xzs_diag_emit("BLOCKERS=NONE\n");
 	} else {
-		xzs_diag_emit("M8_7_RETRY8=FAIL\n");
+		xzs_diag_emit("M8_7_RETRY9=FAIL\n");
 		xzs_diag_emit("FIRST_MDP_FRAME=no\n");
 		xzs_diag_emit("FIRST_SCANOUT_TRANSPORT=no\n");
 		xzs_diag_emit("FIRST_VISIBLE_PIXELS=no\n");
-		xzs_diag_emit("RETRY_PERFORMED_AFTER_RETRY8=no\n");
+		xzs_diag_emit("RETRY_PERFORMED_AFTER_RETRY9=no\n");
 		if (pp_output_activity && !pp0_done) {
 			xzs_diag_emit("BLOCKERS=PP_OUTPUT_ACTIVE_BUT_NO_DONE\n");
 		} else if (dsi_stream_active && !pp0_done) {
