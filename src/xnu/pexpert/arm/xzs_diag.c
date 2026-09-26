@@ -941,6 +941,27 @@ xzs_diag_dispatch(uint64_t which, uint64_t arg1, uint64_t arg2, uint64_t arg3)
 	case 51:
 		xzs_d8m8_dryrun();
 		break;
+	case 52:
+		xzs_d8m8_fb_init();
+		break;
+	case 53:
+		xzs_d8m8_rgb0_config();
+		break;
+	case 54:
+		xzs_d8m8_lm0_config();
+		break;
+	case 55:
+		xzs_d8m8_stream_config();
+		break;
+	case 56:
+		xzs_d8m8_ctl_config();
+		break;
+	case 57:
+		xzs_d8m8_flush_config();
+		break;
+	case 58:
+		xzs_d8m8_prekick_status();
+		break;
 	default:
 		xzs_diag_emit("[XZS-D8M1] unknown diag\n");
 		break;

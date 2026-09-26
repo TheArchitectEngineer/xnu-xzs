@@ -2857,11 +2857,11 @@ xzs_d5m2_r8_seal(dev_t root_dev, const char *root_name)
 	xzs_early_puts("  70_SECTORS_READ_COMPLETE:                yes\n");
 	xzs_early_puts("  COMPUTED_LOGICAL_IMAGE_CRC32:            0x");
 	xzs_early_puthex64((uint64_t)full_img_crc);
-	xzs_early_puts(" (expected: 0xb9a0a0f8)\n");
+	xzs_early_puts(" (expected: 0x1b00a218)\n");
 
 	xzs_breadcrumb(0xD510, 0x55);
 
-	if (full_img_crc != 0xb9a0a0f8) {
+	if (full_img_crc != 0x1b00a218) {
 		xzs_early_puts("[XZS-RAMDISK] FATAL: Logical image CRC32 mismatch!\n");
 		xzs_breadcrumb(0xD510, 0xF4);
 		xzs_spin_halt();
