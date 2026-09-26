@@ -1,6 +1,6 @@
 # Sony Xperia XZs (MSM8996) — Port Status
 
-Current sealed milestone is D8-M3, tag `xzs-d8m3-display-pll-phy-complete`. DSI0 PLL, MMCC clock trees (BYTE0, PCLK0, ESC0), and Qualcomm 14nm DSI PHY Stage B are hardware-sealed across two independent fresh boots on physical Sony Xperia XZs (`keyaki`). Next active milestone is D8-M4 (DSI0 host controller bring-up).
+Current sealed display milestones are D8-M1..M6, D8-P1, and D8-P2. Milestone D8-M8 (MDP command-mode scanout) is DEFERRED / INCOMPLETE / UNSEALED (tag `xzs-d8m8-deferred`; report `docs/XZS_D8_M8_DEFERRED.md`). Phase D8 overall remains INCOMPLETE.
 
 ```text
 D7-T1 = PASS (USB transport)
@@ -8,7 +8,13 @@ D7-T2 = PASS (generic native Mach-O execution; DEBT-001 RESOLVED)
 D8-M1 = PASS (display topology audit)
 D8-M2 = PASS (display power & core clocks)
 D8-M3 = PASS (DSI PLL / clocks / 14nm PHY Stage B; COMPLETE & SEALED)
-D8-M4 = NEXT (DSI0 host controller in command mode)
+D8-M4 = PASS (DSI0 host controller in command mode; COMPLETE & SEALED)
+D8-P1 = PASS (TLMM GPIO prerequisite; COMPLETE & SEALED)
+D8-P2 = PASS (SPMI + LAB/IBB display bias rails; COMPLETE & SEALED)
+D8-M5 = PASS (Panel power & reset lifecycle; COMPLETE & SEALED)
+D8-M6 = PASS (Panel vendor/DCS initialization sequence; COMPLETE & SEALED)
+D8-M8 = DEFERRED (MDP scanout / command transport; INCOMPLETE / UNSEALED)
+D8-P3 = PENDING (PMIC WLED backlight)
 ```
 
 D8-M3 hardware verification summary:

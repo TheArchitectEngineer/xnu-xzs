@@ -406,19 +406,20 @@ Progress is strictly gated by physical hardware verification. Speculative percen
   - **D8-A1**: Linux/TWRP golden state trace — **PASS**
   - **D8-A2**: Register comparison tooling & test suite — **PASS**
   - **D8-A3**: TRACE_ONLY state machine & dry-run validation — **PASS**
-  - **D8-M3**: DSI PLL + clocks (BYTE0/PCLK0/ESC0) + 14nm PHY Stage B — **COMPLETE / SEALED** (tag `xzs-d8m3-display-pll-phy-complete`)
-  - **D8-M4**: DSI host/controller configuration (Command Mode, 4-lane) — **COMPLETE / SEALED** (tag `xzs-d8m4-dsi-host-complete`)
-  - **D8-P1**: TLMM GPIO prerequisite — **COMPLETE / SEALED** (tag `xzs-d8p1-gpio-complete`)
-  - **D8-P2**: SPMI + LAB/IBB power rail driver — **COMPLETE / SEALED** (tag `xzs-d8p2-power-rails-complete`)
-  - **D8-M5**: Panel power/reset sequence — **COMPLETE / SEALED** (tag `xzs-d8m5-panel-power-reset-complete`)
-  - **D8-M6**: Panel vendor/DCS initialization sequence — **COMPLETE / SEALED** (tag `xzs-d8m6-panel-dcs-complete`)
-  - **D8-P3**: PMIC WLED backlight prerequisite — **NEXT**
+  - **D8-M3**: DSI PLL + clocks (BYTE0/PCLK0/ESC0) + 14nm PHY Stage B — **COMPLETE / SEALED / HW_PROVEN** (tag `xzs-d8m3-display-pll-phy-complete`)
+  - **D8-M4**: DSI host/controller configuration (Command Mode, 4-lane) — **COMPLETE / SEALED / HW_PROVEN** (tag `xzs-d8m4-dsi-host-complete`)
+  - **D8-P1**: TLMM GPIO prerequisite — **COMPLETE / SEALED / HW_PROVEN** (tag `xzs-d8p1-gpio-complete`)
+  - **D8-P2**: SPMI + LAB/IBB power rail driver — **COMPLETE / SEALED / HW_PROVEN** (tag `xzs-d8p2-power-rails-complete`)
+  - **D8-M5**: Panel power/reset sequence — **COMPLETE / SEALED / HW_PROVEN** (tag `xzs-d8m5-panel-power-reset-complete`)
+  - **D8-M6**: Panel vendor/DCS initialization sequence — **COMPLETE / SEALED / HW_PROVEN** (tag `xzs-d8m6-panel-dcs-complete`)
+  - **D8-M8**: MDP framebuffer scanout configuration — **DEFERRED / INCOMPLETE / UNSEALED** (tag `xzs-d8m8-deferred`; report `docs/XZS_D8_M8_DEFERRED.md`)
+  - **D8-P3**: PMIC WLED backlight prerequisite — **PENDING**
   - **D8-M7**: Backlight control driver — **PENDING**
-  - **D8-M8**: MDP framebuffer scanout configuration — **PRE-AUDIT COMPLETE / IMPLEMENTATION PENDING**
-  - **D8-M9**: Physical first pixels on screen — **PENDING**
+  - **D8-M9**: Physical first pixels on screen — **BLOCKED BY D8-M8**
   - **D8-M10**: Framebuffer text console (`/dev/tty0`) — **PENDING**
   - **D8-M11**: Boot splash/logo — **PENDING**
   - **D8-M12**: Display regression suite and final seal — **PENDING**
+* **Phase D8 Status**: **Phase D8 overall remains INCOMPLETE.** First pixels (`FIRST_VISIBLE_PIXELS=no`) and MDP frame scanout (`FIRST_MDP_FRAME=no`) remain unsealed.
 * **Hardware Targets**:
   `TEST_PATTERN_VISIBLE=yes` -> XNU-XZS text visible -> shell output visible -> interactive recovery.
 
