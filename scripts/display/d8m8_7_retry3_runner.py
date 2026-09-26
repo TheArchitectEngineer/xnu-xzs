@@ -168,42 +168,42 @@ def main():
     # =========================================================================
 
     print("\n=== EXECUTING STAGE M8-1: FRAMEBUFFER ALLOCATION & CPU PATTERN ===", flush=True)
-    m8_1_out = run_step("STAGE M8-1", "display m8-fb-init\n", 10.0, required_substr="M8_1             = PASS")
+    m8_1_out = run_step("STAGE M8-1", "display m8-fb-init\n", 30.0, required_substr="M8_1             = PASS")
     if "M8_1             = PASS" not in m8_1_out:
         print("!!! STAGE M8-1 FAILED! Halting.", flush=True)
         host_file.write_text("".join(full_log))
         sys.exit(1)
 
     print("\n=== EXECUTING STAGE M8-2: RGB0 SSPP PROGRAMMING ===", flush=True)
-    m8_2_out = run_step("STAGE M8-2", "display m8-rgb0-config\n", 10.0, required_substr="M8_2             = PASS")
+    m8_2_out = run_step("STAGE M8-2", "display m8-rgb0-config\n", 15.0, required_substr="M8_2             = PASS")
     if "M8_2             = PASS" not in m8_2_out:
         print("!!! STAGE M8-2 FAILED! Halting.", flush=True)
         host_file.write_text("".join(full_log))
         sys.exit(1)
 
     print("\n=== EXECUTING STAGE M8-3: LM0 LAYER MIXER PROGRAMMING ===", flush=True)
-    m8_3_out = run_step("STAGE M8-3", "display m8-lm0-config\n", 10.0, required_substr="M8_3             = PASS")
+    m8_3_out = run_step("STAGE M8-3", "display m8-lm0-config\n", 15.0, required_substr="M8_3             = PASS")
     if "M8_3             = PASS" not in m8_3_out:
         print("!!! STAGE M8-3 FAILED! Halting.", flush=True)
         host_file.write_text("".join(full_log))
         sys.exit(1)
 
     print("\n=== EXECUTING STAGE M8-4: PP0 & DSI MDP STREAM PROGRAMMING ===", flush=True)
-    m8_4_out = run_step("STAGE M8-4", "display m8-stream-config\n", 10.0, required_substr="M8_4             = PASS")
+    m8_4_out = run_step("STAGE M8-4", "display m8-stream-config\n", 15.0, required_substr="M8_4             = PASS")
     if "M8_4             = PASS" not in m8_4_out:
         print("!!! STAGE M8-4 FAILED! Halting.", flush=True)
         host_file.write_text("".join(full_log))
         sys.exit(1)
 
     print("\n=== EXECUTING STAGE M8-5: CTL0 ROUTING ===", flush=True)
-    m8_5_out = run_step("STAGE M8-5", "display m8-ctl-config\n", 10.0, required_substr="CTL_LAYER_0")
+    m8_5_out = run_step("STAGE M8-5", "display m8-ctl-config\n", 15.0, required_substr="CTL_LAYER_0")
     if "PASS" not in m8_5_out and "MATCH" not in m8_5_out:
         print("!!! STAGE M8-5 FAILED! Halting.", flush=True)
         host_file.write_text("".join(full_log))
         sys.exit(1)
 
     print("\n=== EXECUTING STAGE M8-6: CTL FLUSH PROGRAMMING ===", flush=True)
-    m8_6_out = run_step("STAGE M8-6", "display m8-flush-config\n", 10.0, required_substr="PASS")
+    m8_6_out = run_step("STAGE M8-6", "display m8-flush-config\n", 15.0, required_substr="PASS")
     if "M8_6" not in m8_6_out or "PASS" not in m8_6_out:
         print("!!! STAGE M8-6 FAILED! Halting.", flush=True)
         host_file.write_text("".join(full_log))
@@ -211,7 +211,7 @@ def main():
 
     # Pre-Kick Status Diagnostic
     print("\n=== EXECUTING PRE-KICK STATUS DIAGNOSTIC ===", flush=True)
-    prekick_out = run_step("PREKICK STATUS", "display m8-prekick-status\n", 10.0, required_substr="=== M8 PRE-KICK STATUS ===")
+    prekick_out = run_step("PREKICK STATUS", "display m8-prekick-status\n", 20.0, required_substr="=== M8 PRE-KICK STATUS ===")
     (log_dir / "pre-kick.txt").write_text(prekick_out)
 
     assert "CTL_START_COUNT=0" in prekick_out, "CTL_START_COUNT must be 0"
@@ -226,7 +226,7 @@ def main():
     print("=== EXECUTING M8-7 RETRY #3: CONTROLLED SINGLE KICKOFF ===", flush=True)
     print("=======================================================", flush=True)
 
-    kickoff_out = run_step("M8-7 RETRY #3 KICKOFF", "display m8-kickoff\n", 15.0, required_substr="M8_7_RETRY3=")
+    kickoff_out = run_step("M8-7 RETRY #3 KICKOFF", "display m8-kickoff\n", 25.0, required_substr="M8_7_RETRY3=")
     (log_dir / "kickoff.txt").write_text(kickoff_out)
 
     # Extract completion and post-frame blocks
