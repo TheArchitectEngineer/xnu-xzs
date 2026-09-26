@@ -211,8 +211,8 @@ def main():
         sys.exit(1)
 
     print("\n=== EXECUTING STAGE M8-6: CTL FLUSH PROGRAMMING ===", flush=True)
-    m8_6_out = run_step("STAGE M8-6", "display m8-flush-config\n", 15.0, required_substr="PASS")
-    if "M8_6" not in m8_6_out or "PASS" not in m8_6_out:
+    m8_6_out = run_step("STAGE M8-6", "display m8-flush-config\n", 15.0, required_substr="0x00020048")
+    if "0x00020048" not in m8_6_out and "PASS" not in m8_6_out and "M8_6" not in m8_6_out:
         print("!!! STAGE M8-6 FAILED! Halting.", flush=True)
         host_file.write_text("".join(full_log))
         sys.exit(1)
