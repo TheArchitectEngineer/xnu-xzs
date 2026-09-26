@@ -962,6 +962,9 @@ xzs_diag_dispatch(uint64_t which, uint64_t arg1, uint64_t arg2, uint64_t arg3)
 	case 58:
 		xzs_d8m8_prekick_status();
 		break;
+	case 59:
+		xzs_d8m8_kickoff();
+		break;
 	default:
 		xzs_diag_emit("[XZS-D8M1] unknown diag\n");
 		break;

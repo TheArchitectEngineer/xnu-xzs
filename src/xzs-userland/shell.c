@@ -241,32 +241,18 @@ display_which(int argc, char **argv)
 	if (argc >= 2 && (seq(argv[1], "m6-run") || (argc >= 3 && seq(argv[1], "m6") && seq(argv[2], "run")))) {
 		return 48;
 	}
-	if (argc >= 2 && (seq(argv[1], "m8-status") || (argc >= 3 && seq(argv[1], "m8") && seq(argv[2], "status")))) {
-		return 50;
-	}
-	if (argc >= 2 && (seq(argv[1], "m8-dryrun") || (argc >= 3 && seq(argv[1], "m8") && seq(argv[2], "dryrun")))) {
-		return 51;
-	}
-	if (argc >= 2 && (seq(argv[1], "m8-fb-init") || (argc >= 3 && seq(argv[1], "m8") && seq(argv[2], "fb-init")))) {
-		return 52;
-	}
-	if (argc >= 2 && (seq(argv[1], "m8-rgb0-config") || (argc >= 3 && seq(argv[1], "m8") && seq(argv[2], "rgb0-config")))) {
-		return 53;
-	}
-	if (argc >= 2 && (seq(argv[1], "m8-lm0-config") || (argc >= 3 && seq(argv[1], "m8") && seq(argv[2], "lm0-config")))) {
-		return 54;
-	}
-	if (argc >= 2 && (seq(argv[1], "m8-stream-config") || (argc >= 3 && seq(argv[1], "m8") && seq(argv[2], "stream-config")))) {
-		return 55;
-	}
-	if (argc >= 2 && (seq(argv[1], "m8-ctl-config") || (argc >= 3 && seq(argv[1], "m8") && seq(argv[2], "ctl-config")))) {
-		return 56;
-	}
-	if (argc >= 2 && (seq(argv[1], "m8-flush-config") || (argc >= 3 && seq(argv[1], "m8") && seq(argv[2], "flush-config")))) {
-		return 57;
-	}
-	if (argc >= 2 && (seq(argv[1], "m8-prekick-status") || (argc >= 3 && seq(argv[1], "m8") && seq(argv[2], "prekick-status")))) {
-		return 58;
+	if (argc >= 2 && argv[1][0] == 'm' && argv[1][1] == '8') {
+		const char *sub = (argv[1][2] == '-') ? &argv[1][3] : ((argc >= 3) ? argv[2] : "");
+		if (seq(sub, "status")) return 50;
+		if (seq(sub, "dryrun")) return 51;
+		if (seq(sub, "fb-init")) return 52;
+		if (seq(sub, "rgb0-config")) return 53;
+		if (seq(sub, "lm0-config")) return 54;
+		if (seq(sub, "stream-config")) return 55;
+		if (seq(sub, "ctl-config")) return 56;
+		if (seq(sub, "flush-config")) return 57;
+		if (seq(sub, "prekick-status")) return 58;
+		if (seq(sub, "kickoff") || seq(sub, "7")) return 59;
 	}
 	if (argc == 3 && seq(argv[1], "power")) {
 		if (seq(argv[2], "status")) {

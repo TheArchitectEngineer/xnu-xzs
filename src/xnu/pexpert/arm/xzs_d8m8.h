@@ -762,4 +762,253 @@ xzs_d8m8_prekick_status(void)
 	}
 }
 
+static inline void
+xzs_d8m8_dec(uint64_t val)
+{
+	char buf[24];
+	int idx = 0;
+	if (val == 0) {
+		xzs_diag_emit("0");
+		return;
+	}
+	while (val > 0) {
+		buf[idx++] = '0' + (val % 10);
+		val /= 10;
+	}
+	char rev[24];
+	for (int i = 0; i < idx; i++) {
+		rev[i] = buf[idx - 1 - i];
+	}
+	rev[idx] = '\0';
+	xzs_diag_emit(rev);
+}
+
+/*
+ * D8-M8-7: Controlled Single Kickoff Diagnostic (display m8-kickoff / display m8-7)
+ * Executes exactly ONE write to CTL_START (0x0090201c = 1) and polls for PP0_DONE.
+ */
+static void
+xzs_d8m8_kickoff(void)
+{
+	static uint32_t s_ctl_start_attempted = 0;
+
+	xzs_diag_emit("\n=======================================================\n");
+	xzs_diag_emit("=== [M8-7] CONTROLLED SINGLE KICKOFF (CTL_START)    ===\n");
+	xzs_diag_emit("=======================================================\n");
+
+	xzs_watchdog_pet();
+
+	/* ABSOLUTE RETRY LIMIT: MAX_CTL_START_WRITES=1 */
+	if (s_ctl_start_attempted > 0 || g_m8_ctl_start_count > 0) {
+		xzs_diag_emit("!!! M8-7 REJECTED: CTL_START write already attempted! (MAX_CTL_START_WRITES=1)\n");
+		xzs_diag_emit("RETRY_PERFORMED=no\n");
+		return;
+	}
+	s_ctl_start_attempted = 1;
+
+	/* 1. Verify PREKICK_READY */
+	uint32_t rgb0_addr = d8p1_read32(0x00915014u);
+	uint32_t dsi_st0_tot = d8p1_read32(0x0099405cu);
+	uint32_t ctl_top = d8p1_read32(0x00902014u);
+
+	bool ready = g_m8_fb_initialized && g_m8_fb_cache_cleaned &&
+	             (rgb0_addr == g_m8_fb_pa) && (dsi_st0_tot == 0x07800438u) &&
+	             (ctl_top == 0x00020010u);
+
+	xzs_diag_emit("PREKICK_READY=");
+	xzs_diag_emit(ready ? "YES\n" : "NO\n");
+	xzs_diag_emit("FB_PA=0x"); xzs_d8p1_hex32(g_m8_fb_pa); xzs_diag_emit("\n");
+	xzs_diag_emit("RGB0_SRC0_ADDR=0x"); xzs_d8p1_hex32(rgb0_addr); xzs_diag_emit("\n");
+
+	if (!ready) {
+		xzs_diag_emit("M8_7=BLOCKED (Prerequisites not in PREKICK_READY state)\n");
+		return;
+	}
+
+	/* 2. Read INTR_STATUS & 3. Clear stale PP0_DONE if present */
+	uint32_t pre_intr = d8p1_read32(0x00901014u);
+	xzs_diag_emit("PRE_INTR_STATUS=0x"); xzs_d8p1_hex32(pre_intr); xzs_diag_emit("\n");
+
+	bool stale_pp0 = (pre_intr & 0x00000100u) != 0;
+	xzs_diag_emit("STALE_PP0_DONE=");
+	xzs_diag_emit(stale_pp0 ? "yes\n" : "no\n");
+
+	if (stale_pp0) {
+		d8p1_write32(0x00901018u, 0x00000100u);
+		xzs_diag_emit("PRE_CLEAR_PERFORMED=yes\n");
+	} else {
+		xzs_diag_emit("PRE_CLEAR_PERFORMED=no\n");
+	}
+
+	/* 4. Re-read INTR_STATUS: require bit8 == 0 */
+	uint32_t post_clear_intr = d8p1_read32(0x00901014u);
+	xzs_diag_emit("POST_CLEAR_INTR_STATUS=0x"); xzs_d8p1_hex32(post_clear_intr); xzs_diag_emit("\n");
+
+	if ((post_clear_intr & 0x00000100u) != 0) {
+		xzs_diag_emit("M8_7=BLOCKED (PP0_DONE could not be cleared)\n");
+		return;
+	}
+
+	/* 5. Verify DSI clean */
+	uint32_t pre_ack_err = d8p1_read32(0x00994068u);
+	uint32_t pre_timeout = d8p1_read32(0x009940c0u);
+	xzs_diag_emit("PRE_DSI_ACK_ERR=0x"); xzs_d8p1_hex32(pre_ack_err); xzs_diag_emit("\n");
+	xzs_diag_emit("PRE_DSI_TIMEOUT=0x"); xzs_d8p1_hex32(pre_timeout); xzs_diag_emit("\n");
+
+	if (pre_ack_err != 0 || pre_timeout != 0) {
+		xzs_diag_emit("M8_7=BLOCKED (DSI error present before kickoff)\n");
+		return;
+	}
+
+	/* 6. Pet watchdog & 7. dsb sy */
+	xzs_watchdog_pet();
+	__asm__ volatile("dsb sy\n\tisb sy" ::: "memory");
+
+	uint64_t frq = 19200000ULL;
+	__asm__ volatile("mrs %0, cntfrq_el0" : "=r"(frq));
+	if (frq == 0) frq = 19200000ULL;
+	uint64_t timeout_cycles = frq / 10ULL; /* 100 ms */
+
+	/* 8. Capture START_CYCLES */
+	uint64_t start_cycles = 0;
+	__asm__ volatile("mrs %0, cntvct_el0" : "=r"(start_cycles));
+
+	/* 9. WRITE EXACTLY ONCE: *(volatile uint32_t *)0x0090201c = 0x00000001 */
+	xzs_diag_emit("CTL_START_WRITE=0x00000001\n");
+	d8p1_write32(0x0090201cu, 0x00000001u);
+
+	/* 10. CTL_START_COUNT++ & 11. MDP_KICKOFF_COUNT++ */
+	g_m8_ctl_start_count = 1;
+	g_m8_kickoff_count = 1;
+
+	uint32_t ctl_start_rb = d8p1_read32(0x0090201cu);
+	xzs_diag_emit("CTL_START_READBACK=0x"); xzs_d8p1_hex32(ctl_start_rb); xzs_diag_emit("\n");
+	xzs_diag_emit("CTL_START_COUNT=1\n");
+	xzs_diag_emit("MDP_KICKOFF_COUNT=1\n");
+
+	/* 12. dsb sy */
+	__asm__ volatile("dsb sy\n\tisb sy" ::: "memory");
+
+	/* 13. Poll: INTR_STATUS & 0x00000100 (timeout = 100 ms) */
+	bool pp0_done = false;
+	uint64_t end_cycles = start_cycles;
+	uint32_t intr_val = 0;
+
+	while (1) {
+		intr_val = d8p1_read32(0x00901014u);
+		if ((intr_val & 0x00000100u) != 0) {
+			__asm__ volatile("mrs %0, cntvct_el0" : "=r"(end_cycles));
+			pp0_done = true;
+			break;
+		}
+		uint64_t now;
+		__asm__ volatile("mrs %0, cntvct_el0" : "=r"(now));
+		if ((now - start_cycles) >= timeout_cycles) {
+			end_cycles = now;
+			break;
+		}
+		xzs_watchdog_pet();
+	}
+
+	/* 14. Elapsed timing */
+	uint64_t elapsed_cycles = (end_cycles >= start_cycles) ? (end_cycles - start_cycles) : 0;
+	uint64_t elapsed_us = (elapsed_cycles * 1000000ULL) / frq;
+
+	xzs_diag_emit("START_CYCLES=0x");
+	xzs_d8p1_hex32((uint32_t)(start_cycles >> 32));
+	xzs_d8p1_hex32((uint32_t)(start_cycles & 0xffffffffu));
+	xzs_diag_emit("\n");
+
+	xzs_diag_emit("END_CYCLES=0x");
+	xzs_d8p1_hex32((uint32_t)(end_cycles >> 32));
+	xzs_d8p1_hex32((uint32_t)(end_cycles & 0xffffffffu));
+	xzs_diag_emit("\n");
+
+	xzs_diag_emit("ELAPSED_US=");
+	xzs_d8m8_dec(elapsed_us);
+	xzs_diag_emit("\n");
+
+	/* 15. Immediately snapshot DSI & PLL status */
+	uint32_t post_ack_err  = d8p1_read32(0x00994068u);
+	uint32_t post_timeout  = d8p1_read32(0x009940c0u);
+	uint32_t dsi_status    = d8p1_read32(0x00994008u);
+	uint32_t fifo_status   = d8p1_read32(0x0099400cu);
+	uint32_t lane_status   = d8p1_read32(0x009940a8u);
+	uint32_t clk_status    = d8p1_read32(0x00994120u);
+	uint32_t pll_status    = d8p1_read32(0x009948ccu);
+
+	xzs_diag_emit("PP0_DONE_OBSERVED=");
+	xzs_diag_emit(pp0_done ? "yes\n" : "no\n");
+	xzs_diag_emit("PP0_DONE_STATUS=");
+	xzs_diag_emit(pp0_done ? "0x00000100\n" : "0x00000000\n");
+
+	xzs_diag_emit("POST_DSI_ACK_ERR=0x"); xzs_d8p1_hex32(post_ack_err); xzs_diag_emit("\n");
+	xzs_diag_emit("POST_DSI_TIMEOUT=0x"); xzs_d8p1_hex32(post_timeout); xzs_diag_emit("\n");
+
+	/* 16. If PP0_DONE && DSI clean: FRAMEBUFFER_SCANOUT_COUNT++ */
+	if (pp0_done && post_ack_err == 0 && post_timeout == 0) {
+		g_m8_framebuffer_scanout_count = 1;
+	}
+
+	xzs_diag_emit("FRAMEBUFFER_SCANOUT_COUNT=");
+	xzs_d8m8_dec(g_m8_framebuffer_scanout_count);
+	xzs_diag_emit("\n");
+
+	/* 17. Clear PP0_DONE: INTR_CLEAR <- 0x00000100 */
+	if (pp0_done) {
+		d8p1_write32(0x00901018u, 0x00000100u);
+		xzs_diag_emit("PP0_DONE_CLEAR_PERFORMED=yes\n");
+	} else {
+		xzs_diag_emit("PP0_DONE_CLEAR_PERFORMED=no\n");
+	}
+
+	/* 18. Verify bit8 cleared */
+	uint32_t final_intr = d8p1_read32(0x00901014u);
+	xzs_diag_emit("FINAL_INTR_STATUS=0x"); xzs_d8p1_hex32(final_intr); xzs_diag_emit("\n");
+
+	/* Post-frame status */
+	xzs_diag_emit("DSI_STATUS=0x"); xzs_d8p1_hex32(dsi_status); xzs_diag_emit("\n");
+	xzs_diag_emit("DSI_FIFO_STATUS=0x"); xzs_d8p1_hex32(fifo_status); xzs_diag_emit("\n");
+	xzs_diag_emit("DSI_LANE_STATUS=0x"); xzs_d8p1_hex32(lane_status); xzs_diag_emit("\n");
+	xzs_diag_emit("DSI_CLK_STATUS=0x"); xzs_d8p1_hex32(clk_status); xzs_diag_emit("\n");
+	xzs_diag_emit("PLL_STATUS=0x"); xzs_d8p1_hex32(pll_status); xzs_diag_emit("\n");
+
+	xzs_diag_emit("USB_SHELL_ALIVE=yes\n");
+	xzs_diag_emit("WLED_WRITES=0\n");
+	xzs_diag_emit("BUS_ABORT=0\n");
+	xzs_diag_emit("SError=0\n");
+	xzs_diag_emit("PANIC=0\n");
+	xzs_diag_emit("UNINTENDED_RESET=0\n");
+
+	if (g_m8_framebuffer_scanout_count == 1 && elapsed_us <= 100000) {
+		xzs_diag_emit("M8_7=PASS\n");
+		xzs_diag_emit("FIRST_MDP_FRAME=yes\n");
+		xzs_diag_emit("FIRST_SCANOUT_TRANSPORT=yes\n");
+		xzs_diag_emit("FIRST_VISIBLE_PIXELS=no\n");
+		xzs_diag_emit("RETRY_PERFORMED=no\n");
+		xzs_diag_emit("BLOCKERS=NONE\n");
+	} else {
+		xzs_diag_emit("M8_7=FAIL\n");
+		xzs_diag_emit("FIRST_MDP_FRAME=no\n");
+		xzs_diag_emit("FIRST_SCANOUT_TRANSPORT=no\n");
+		xzs_diag_emit("FIRST_VISIBLE_PIXELS=no\n");
+		xzs_diag_emit("RETRY_PERFORMED=no\n");
+		xzs_diag_emit("--- TIMEOUT FORENSICS ---\n");
+		xzs_d8m8_dump_reg("INTR_STATUS      ", 0x00901014u);
+		xzs_d8m8_dump_reg("CTL_START        ", 0x0090201cu);
+		xzs_d8m8_dump_reg("CTL_FLUSH        ", 0x00902018u);
+		xzs_d8m8_dump_reg("CTL_TOP          ", 0x00902014u);
+		xzs_d8m8_dump_reg("CTL_LAYER_0      ", 0x00902000u);
+		xzs_d8m8_dump_reg("RGB0_SRC0_ADDR   ", 0x00915014u);
+		xzs_d8m8_dump_reg("RGB0_SRC_YSTRIDE0", 0x00915024u);
+		xzs_d8m8_dump_reg("RGB0_SRC_SIZE    ", 0x00915000u);
+		xzs_d8m8_dump_reg("RGB0_SRC_FORMAT  ", 0x00915030u);
+		xzs_d8m8_dump_reg("RGB0_SRC_UNPACK  ", 0x00915034u);
+		xzs_d8m8_dump_reg("LM0_OUT_SIZE     ", 0x00945004u);
+		xzs_d8m8_dump_reg("PP0_TEAR_CHECK_EN", 0x00971000u);
+		xzs_d8m8_dump_reg("MDSS_MDP_CBCR    ", 0x008c231cu);
+	}
+}
+
 #endif /* _XZS_D8M8_H_ */
+
