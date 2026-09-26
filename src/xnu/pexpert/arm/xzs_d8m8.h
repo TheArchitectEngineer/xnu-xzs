@@ -835,11 +835,11 @@ xzs_d8m8_flush_config(void)
 
 	xzs_watchdog_pet();
 
-	/* Program CTL_FLUSH (0x00902018) = 0x40020048 (BIT30 INTF1, BIT17 CTL0, BIT6 LM0, BIT3 RGB0) */
-	xzs_m8_write_reg("CTL_FLUSH        ", 0x00902018u, 0x40020048u, 0x00000000u, true);
+	/* Program CTL_FLUSH (0x00902018) = 0x00020048 (BIT17 CTL0, BIT6 LM0, BIT3 RGB0; BIT30 INTF1 omitted for command mode) */
+	xzs_m8_write_reg("CTL_FLUSH        ", 0x00902018u, 0x00020048u, 0x00000000u, true);
 	uint32_t flush_rb = d8p1_read32(0x00902018u);
 
-	xzs_diag_emit("  CTL_FLUSH_WRITE   = 0x40020048\n");
+	xzs_diag_emit("  CTL_FLUSH_WRITE   = 0x00020048\n");
 	xzs_diag_emit("  CTL_FLUSH_READBACK= 0x"); xzs_d8p1_hex32(flush_rb); xzs_diag_emit("\n");
 	xzs_diag_emit("  CTL_FLUSH_BEHAVIOR= SHADOW_COMMIT_TRIGGER\n");
 
@@ -850,7 +850,7 @@ xzs_d8m8_flush_config(void)
 
 	g_m8_flush_configured = true;
 
-	xzs_diag_emit("  CTL_FLUSH_MASK    = 0x40020048\n");
+	xzs_diag_emit("  CTL_FLUSH_MASK    = 0x00020048\n");
 	xzs_diag_emit("  M8_6              = PASS\n");
 	xzs_diag_emit("[D8-M8] CTL_START_COUNT=0\n");
 	xzs_diag_emit("[D8-M8] MDP_KICKOFF_COUNT=0\n");
@@ -883,22 +883,60 @@ xzs_d8m8_prekick_status(void)
 	xzs_diag_emit("FB_PATTERN=RED\n");
 	xzs_diag_emit("FB_CACHE_STATE=POC_CLEAN\n\n");
 
-	uint32_t rgb0_addr = d8p1_read32(0x00915014u);
-	uint32_t rgb0_stride = d8p1_read32(0x00915024u);
 	uint32_t rgb0_src_sz = d8p1_read32(0x00915000u);
+	uint32_t rgb0_src_img_sz = d8p1_read32(0x00915004u);
+	uint32_t rgb0_src_xy = d8p1_read32(0x00915008u);
 	uint32_t rgb0_out_sz = d8p1_read32(0x0091500cu);
+	uint32_t rgb0_out_xy = d8p1_read32(0x00915010u);
+	uint32_t rgb0_addr = d8p1_read32(0x00915014u);
+	uint32_t rgb0_src1 = d8p1_read32(0x00915018u);
+	uint32_t rgb0_src2 = d8p1_read32(0x0091501cu);
+	uint32_t rgb0_src3 = d8p1_read32(0x00915020u);
+	uint32_t rgb0_stride = d8p1_read32(0x00915024u);
+	uint32_t rgb0_stride1 = d8p1_read32(0x00915028u);
 	uint32_t rgb0_fmt = d8p1_read32(0x00915030u);
 	uint32_t rgb0_unp = d8p1_read32(0x00915034u);
+	uint32_t rgb0_opmode = d8p1_read32(0x00915038u);
+	uint32_t rgb0_fetch_cfg = d8p1_read32(0x00915048u);
+	uint32_t rgb0_wm0 = d8p1_read32(0x00915050u);
+	uint32_t rgb0_wm1 = d8p1_read32(0x00915054u);
+	uint32_t rgb0_wm2 = d8p1_read32(0x00915058u);
+	uint32_t rgb0_danger = d8p1_read32(0x00915060u);
+	uint32_t rgb0_safe = d8p1_read32(0x00915064u);
+	uint32_t rgb0_creq = d8p1_read32(0x00915068u);
+	uint32_t rgb0_qos_ctrl = d8p1_read32(0x0091506cu);
+	uint32_t rgb0_cur_src0 = d8p1_read32(0x009150a4u);
 
-	xzs_diag_emit("RGB0_SRC0_ADDR=0x"); xzs_d8p1_hex32(rgb0_addr); xzs_diag_emit("\n");
-	xzs_diag_emit("RGB0_STRIDE=0x"); xzs_d8p1_hex32(rgb0_stride); xzs_diag_emit("\n");
 	xzs_diag_emit("RGB0_SRC_SIZE=0x"); xzs_d8p1_hex32(rgb0_src_sz); xzs_diag_emit("\n");
+	xzs_diag_emit("RGB0_SRC_IMG_SIZE=0x"); xzs_d8p1_hex32(rgb0_src_img_sz); xzs_diag_emit("\n");
+	xzs_diag_emit("RGB0_SRC_XY=0x"); xzs_d8p1_hex32(rgb0_src_xy); xzs_diag_emit("\n");
 	xzs_diag_emit("RGB0_OUT_SIZE=0x"); xzs_d8p1_hex32(rgb0_out_sz); xzs_diag_emit("\n");
+	xzs_diag_emit("RGB0_OUT_XY=0x"); xzs_d8p1_hex32(rgb0_out_xy); xzs_diag_emit("\n");
+	xzs_diag_emit("RGB0_SRC0_ADDR=0x"); xzs_d8p1_hex32(rgb0_addr); xzs_diag_emit("\n");
+	xzs_diag_emit("RGB0_SRC1_ADDR=0x"); xzs_d8p1_hex32(rgb0_src1); xzs_diag_emit("\n");
+	xzs_diag_emit("RGB0_SRC2_ADDR=0x"); xzs_d8p1_hex32(rgb0_src2); xzs_diag_emit("\n");
+	xzs_diag_emit("RGB0_SRC3_ADDR=0x"); xzs_d8p1_hex32(rgb0_src3); xzs_diag_emit("\n");
+	xzs_diag_emit("RGB0_YSTRIDE0=0x"); xzs_d8p1_hex32(rgb0_stride); xzs_diag_emit("\n");
+	xzs_diag_emit("RGB0_YSTRIDE1=0x"); xzs_d8p1_hex32(rgb0_stride1); xzs_diag_emit("\n");
 	xzs_diag_emit("RGB0_FORMAT=0x"); xzs_d8p1_hex32(rgb0_fmt); xzs_diag_emit("\n");
-	xzs_diag_emit("RGB0_UNPACK=0x"); xzs_d8p1_hex32(rgb0_unp); xzs_diag_emit("\n\n");
+	xzs_diag_emit("RGB0_UNPACK=0x"); xzs_d8p1_hex32(rgb0_unp); xzs_diag_emit("\n");
+	xzs_diag_emit("RGB0_SRC_OP_MODE=0x"); xzs_d8p1_hex32(rgb0_opmode); xzs_diag_emit("\n");
+	xzs_diag_emit("RGB0_FETCH_CONFIG=0x"); xzs_d8p1_hex32(rgb0_fetch_cfg); xzs_diag_emit("\n");
+	xzs_diag_emit("RGB0_FIFO_WM0=0x"); xzs_d8p1_hex32(rgb0_wm0); xzs_diag_emit("\n");
+	xzs_diag_emit("RGB0_FIFO_WM1=0x"); xzs_d8p1_hex32(rgb0_wm1); xzs_diag_emit("\n");
+	xzs_diag_emit("RGB0_FIFO_WM2=0x"); xzs_d8p1_hex32(rgb0_wm2); xzs_diag_emit("\n");
+	xzs_diag_emit("RGB0_DANGER_LUT=0x"); xzs_d8p1_hex32(rgb0_danger); xzs_diag_emit("\n");
+	xzs_diag_emit("RGB0_SAFE_LUT=0x"); xzs_d8p1_hex32(rgb0_safe); xzs_diag_emit("\n");
+	xzs_diag_emit("RGB0_CREQ_LUT=0x"); xzs_d8p1_hex32(rgb0_creq); xzs_diag_emit("\n");
+	xzs_diag_emit("RGB0_QOS_CTRL=0x"); xzs_d8p1_hex32(rgb0_qos_ctrl); xzs_diag_emit("\n");
+	xzs_diag_emit("RGB0_CURRENT_SRC0_ADDR=0x"); xzs_d8p1_hex32(rgb0_cur_src0); xzs_diag_emit("\n\n");
 
+	uint32_t lm0_op_mode = d8p1_read32(0x00945000u);
 	uint32_t lm0_out_sz = d8p1_read32(0x00945004u);
-	xzs_diag_emit("LM0_OUT_SIZE=0x"); xzs_d8p1_hex32(lm0_out_sz); xzs_diag_emit("\n\n");
+	uint32_t lm0_border_col = d8p1_read32(0x00945008u);
+	xzs_diag_emit("LM0_OP_MODE=0x"); xzs_d8p1_hex32(lm0_op_mode); xzs_diag_emit("\n");
+	xzs_diag_emit("LM0_OUT_SIZE=0x"); xzs_d8p1_hex32(lm0_out_sz); xzs_diag_emit("\n");
+	xzs_diag_emit("LM0_BORDER_COLOR0=0x"); xzs_d8p1_hex32(lm0_border_col); xzs_diag_emit("\n\n");
 
 	/* Pre-kick interrupt cleanup: read, clear 0x1100, re-read */
 	uint32_t pre_intr = d8p1_read32(0x00901014u);
@@ -1020,7 +1058,7 @@ xzs_d8m8_prekick_status(void)
 	             (dsi_st0_ctrl == 0x0ca90039u) && (dsi_st0_tot == 0x07800438u) &&
 	             (dsi_trig_ctrl == 0x00000000u) &&
 	             (disp_intf == 0x100u) && (ctl_layer == 0x200u) && (ctl_top == 0x00020020u) &&
-	             ((ctl_flush & 0x40000000u) != 0 || (ctl_flush == 0x40020048u) || g_m8_flush_configured) &&
+	             ((ctl_flush == 0x00020048u) || g_m8_flush_configured) &&
 	             (ack_err == 0) && (timeout_stat == 0) && (ctl_start == 0);
 
 	if (ready) {
@@ -1126,7 +1164,7 @@ xzs_d8m8_kickoff(void)
 	             g_m8_fb_initialized && g_m8_fb_cache_cleaned &&
 	             (rgb0_addr == g_m8_fb_pa) && (dsi_st0_tot == 0x07800438u) &&
 	             (ctl_top == 0x00020020u) &&
-	             ((ctl_flush & 0x40000000u) != 0 || (ctl_flush == 0x40020048u) || g_m8_flush_configured) &&
+	             ((ctl_flush == 0x00020048u) || g_m8_flush_configured) &&
 	             vsync_clk_unhalted &&
 	             pp_timing_ok &&
 	             (dsi_mdp_ctrl == 0x00000008u) &&
@@ -1160,7 +1198,7 @@ xzs_d8m8_kickoff(void)
 		return;
 	}
 
-	/* Activity diagnostics: PRE sample */
+	/* Activity diagnostics: PRE sample (All Phase A2 SSPP registers) */
 	uint32_t pp0_int_cnt_pre = d8p1_read32(0x00971014u);
 	uint32_t pp0_line_cnt_pre = d8p1_read32(0x0097102cu);
 	uint32_t pp0_out_line_cnt_pre = d8p1_read32(0x00971028u);
@@ -1169,6 +1207,21 @@ xzs_d8m8_kickoff(void)
 	xzs_diag_emit("PP0_LINE_COUNT_PRE=0x"); xzs_d8p1_hex32(pp0_line_cnt_pre); xzs_diag_emit("\n");
 	xzs_diag_emit("PP0_OUT_LINE_COUNT_PRE=0x"); xzs_d8p1_hex32(pp0_out_line_cnt_pre); xzs_diag_emit("\n");
 	xzs_diag_emit("RGB0_CURRENT_SRC0_ADDR_PRE=0x"); xzs_d8p1_hex32(rgb0_cur_src0_pre); xzs_diag_emit("\n");
+	xzs_diag_emit("RGB0_SRC_SIZE_PRE=0x"); xzs_d8p1_hex32(d8p1_read32(0x00915000u)); xzs_diag_emit("\n");
+	xzs_diag_emit("RGB0_SRC_IMG_SIZE_PRE=0x"); xzs_d8p1_hex32(d8p1_read32(0x00915004u)); xzs_diag_emit("\n");
+	xzs_diag_emit("RGB0_SRC_XY_PRE=0x"); xzs_d8p1_hex32(d8p1_read32(0x00915008u)); xzs_diag_emit("\n");
+	xzs_diag_emit("RGB0_OUT_SIZE_PRE=0x"); xzs_d8p1_hex32(d8p1_read32(0x0091500cu)); xzs_diag_emit("\n");
+	xzs_diag_emit("RGB0_OUT_XY_PRE=0x"); xzs_d8p1_hex32(d8p1_read32(0x00915010u)); xzs_diag_emit("\n");
+	xzs_diag_emit("RGB0_SRC0_ADDR_PRE=0x"); xzs_d8p1_hex32(d8p1_read32(0x00915014u)); xzs_diag_emit("\n");
+	xzs_diag_emit("RGB0_YSTRIDE0_PRE=0x"); xzs_d8p1_hex32(d8p1_read32(0x00915024u)); xzs_diag_emit("\n");
+	xzs_diag_emit("RGB0_SRC_FORMAT_PRE=0x"); xzs_d8p1_hex32(d8p1_read32(0x00915030u)); xzs_diag_emit("\n");
+	xzs_diag_emit("RGB0_SRC_UNPACK_PRE=0x"); xzs_d8p1_hex32(d8p1_read32(0x00915034u)); xzs_diag_emit("\n");
+	xzs_diag_emit("RGB0_SRC_OP_MODE_PRE=0x"); xzs_d8p1_hex32(d8p1_read32(0x00915038u)); xzs_diag_emit("\n");
+	xzs_diag_emit("RGB0_FETCH_CONFIG_PRE=0x"); xzs_d8p1_hex32(d8p1_read32(0x00915048u)); xzs_diag_emit("\n");
+	xzs_diag_emit("RGB0_QOS_CTRL_PRE=0x"); xzs_d8p1_hex32(d8p1_read32(0x0091506cu)); xzs_diag_emit("\n");
+	xzs_diag_emit("LM0_OP_MODE_PRE=0x"); xzs_d8p1_hex32(d8p1_read32(0x00945000u)); xzs_diag_emit("\n");
+	xzs_diag_emit("LM0_OUT_SIZE_PRE=0x"); xzs_d8p1_hex32(d8p1_read32(0x00945004u)); xzs_diag_emit("\n");
+	xzs_diag_emit("CTL_LAYER_0_PRE=0x"); xzs_d8p1_hex32(d8p1_read32(0x00902000u)); xzs_diag_emit("\n");
 	xzs_diag_emit("CTL_FLUSH_PRE=0x"); xzs_d8p1_hex32(ctl_flush); xzs_diag_emit("\n");
 
 	/* Pet watchdog & memory barrier */
@@ -1329,18 +1382,18 @@ xzs_d8m8_kickoff(void)
 	xzs_diag_emit("PP_OUTPUT_ACTIVITY="); xzs_diag_emit(pp_output_activity ? "yes\n" : "no\n");
 
 	if (g_m8_framebuffer_scanout_count == 1 && elapsed_us <= 100000) {
-		xzs_diag_emit("M8_7_RETRY6=PASS\n");
+		xzs_diag_emit("M8_7_RETRY7=PASS\n");
 		xzs_diag_emit("FIRST_MDP_FRAME=yes\n");
 		xzs_diag_emit("FIRST_SCANOUT_TRANSPORT=yes\n");
 		xzs_diag_emit("FIRST_VISIBLE_PIXELS=no\n");
-		xzs_diag_emit("RETRY_PERFORMED_AFTER_RETRY6=no\n");
+		xzs_diag_emit("RETRY_PERFORMED_AFTER_RETRY7=no\n");
 		xzs_diag_emit("BLOCKERS=NONE\n");
 	} else {
-		xzs_diag_emit("M8_7_RETRY6=FAIL\n");
+		xzs_diag_emit("M8_7_RETRY7=FAIL\n");
 		xzs_diag_emit("FIRST_MDP_FRAME=no\n");
 		xzs_diag_emit("FIRST_SCANOUT_TRANSPORT=no\n");
 		xzs_diag_emit("FIRST_VISIBLE_PIXELS=no\n");
-		xzs_diag_emit("RETRY_PERFORMED_AFTER_RETRY6=no\n");
+		xzs_diag_emit("RETRY_PERFORMED_AFTER_RETRY7=no\n");
 		if (pp_output_activity && !pp0_done) {
 			xzs_diag_emit("BLOCKERS=PP_OUTPUT_ACTIVE_BUT_NO_DONE\n");
 		} else if (dsi_stream_active && !pp0_done) {
@@ -1357,14 +1410,31 @@ xzs_d8m8_kickoff(void)
 		xzs_d8m8_dump_reg("CTL_LAYER_0      ", 0x00902000u);
 		xzs_d8m8_dump_reg("DISP_INTF_SEL    ", 0x00901004u);
 		xzs_diag_emit("  FB_PA            = 0x"); xzs_d8p1_hex32(g_m8_fb_pa); xzs_diag_emit("\n");
-		xzs_d8m8_dump_reg("RGB0_SRC0_ADDR   ", 0x00915014u);
-		xzs_d8m8_dump_reg("RGB0_CURRENT_SRC0", 0x009150a4u);
-		xzs_d8m8_dump_reg("RGB0_SRC_YSTRIDE0", 0x00915024u);
 		xzs_d8m8_dump_reg("RGB0_SRC_SIZE    ", 0x00915000u);
+		xzs_d8m8_dump_reg("RGB0_SRC_IMG_SIZE", 0x00915004u);
+		xzs_d8m8_dump_reg("RGB0_SRC_XY      ", 0x00915008u);
+		xzs_d8m8_dump_reg("RGB0_OUT_SIZE    ", 0x0091500cu);
+		xzs_d8m8_dump_reg("RGB0_OUT_XY      ", 0x00915010u);
+		xzs_d8m8_dump_reg("RGB0_SRC0_ADDR   ", 0x00915014u);
+		xzs_d8m8_dump_reg("RGB0_SRC1_ADDR   ", 0x00915018u);
+		xzs_d8m8_dump_reg("RGB0_SRC2_ADDR   ", 0x0091501cu);
+		xzs_d8m8_dump_reg("RGB0_SRC3_ADDR   ", 0x00915020u);
+		xzs_d8m8_dump_reg("RGB0_SRC_YSTRIDE0", 0x00915024u);
+		xzs_d8m8_dump_reg("RGB0_SRC_YSTRIDE1", 0x00915028u);
 		xzs_d8m8_dump_reg("RGB0_SRC_FORMAT  ", 0x00915030u);
 		xzs_d8m8_dump_reg("RGB0_SRC_UNPACK  ", 0x00915034u);
-		xzs_d8m8_dump_reg("LM0_OUT_SIZE     ", 0x00945004u);
+		xzs_d8m8_dump_reg("RGB0_SRC_OP_MODE ", 0x00915038u);
+		xzs_d8m8_dump_reg("RGB0_FETCH_CONFIG", 0x00915048u);
+		xzs_d8m8_dump_reg("RGB0_FIFO_WM0    ", 0x00915050u);
+		xzs_d8m8_dump_reg("RGB0_FIFO_WM1    ", 0x00915054u);
+		xzs_d8m8_dump_reg("RGB0_FIFO_WM2    ", 0x00915058u);
+		xzs_d8m8_dump_reg("RGB0_DANGER_LUT  ", 0x00915060u);
+		xzs_d8m8_dump_reg("RGB0_SAFE_LUT    ", 0x00915064u);
+		xzs_d8m8_dump_reg("RGB0_CREQ_LUT    ", 0x00915068u);
+		xzs_d8m8_dump_reg("RGB0_QOS_CTRL    ", 0x0091506cu);
+		xzs_d8m8_dump_reg("RGB0_CURRENT_SRC0", 0x009150a4u);
 		xzs_d8m8_dump_reg("LM0_OP_MODE      ", 0x00945000u);
+		xzs_d8m8_dump_reg("LM0_OUT_SIZE     ", 0x00945004u);
 		xzs_d8m8_dump_reg("LM0_BORDER_COLOR0", 0x00945008u);
 		xzs_d8m8_dump_reg("PP0_TEAR_CHECK_EN", 0x00971000u);
 		xzs_d8m8_dump_reg("PP0_SYNC_CFG_VSYNC",0x00971004u);
