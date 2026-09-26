@@ -965,6 +965,9 @@ xzs_diag_dispatch(uint64_t which, uint64_t arg1, uint64_t arg2, uint64_t arg3)
 	case 59:
 		xzs_d8m8_kickoff();
 		break;
+	case 60:
+		xzs_d8m8_vsync_clock_on();
+		break;
 	default:
 		xzs_diag_emit("[XZS-D8M1] unknown diag\n");
 		break;

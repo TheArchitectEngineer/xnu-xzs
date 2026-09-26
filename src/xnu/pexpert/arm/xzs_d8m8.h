@@ -535,7 +535,96 @@ xzs_d8m8_lm0_config(void)
 }
 
 /*
- * M8-4: PingPong PP0 + DSI MDP Stream Configuration
+ * MDSS VSYNC Clock Enable (Section 3):
+ * MMCC_BASE                    = 0x008c0000
+ * VSYNC_CLK_SRC_CMD_RCGR       = 0x008c2080
+ * VSYNC_CLK_SRC_CFG_RCGR       = 0x008c2084
+ * MDSS_VSYNC_CBCR              = 0x008c2328
+ * Rate: 19.2 MHz (XO parent, div 1)
+ */
+static bool
+xzs_d8m8_vsync_clock_on(void)
+{
+	xzs_diag_emit("\n=======================================================\n");
+	xzs_diag_emit("=== [MDSS VSYNC CLOCK] 19.2 MHz XO ENABLE           ===\n");
+	xzs_diag_emit("=======================================================\n");
+	xzs_watchdog_pet();
+
+	/* 1. write32(0x008c2084, 0x00000000) */
+	d8p1_write32(0x008c2084u, 0x00000000u);
+	__asm__ volatile("dsb sy\n\tisb sy" ::: "memory");
+
+	/* 2. write32(0x008c2080, 0x00000001) */
+	d8p1_write32(0x008c2080u, 0x00000001u);
+	__asm__ volatile("dsb sy" ::: "memory");
+
+	/* 3. poll <= 1000 us: (read32(0x008c2080) & BIT(0)) == 0 */
+	uint64_t frq = 19200000ULL;
+	__asm__ volatile("mrs %0, cntfrq_el0" : "=r"(frq));
+	if (frq == 0) frq = 19200000ULL;
+	uint64_t poll_cmd_cycles = (frq * 1000ULL) / 1000000ULL; /* 1000 us */
+	uint64_t start_cycles = 0;
+	__asm__ volatile("mrs %0, cntvct_el0" : "=r"(start_cycles));
+
+	bool cmd_done = false;
+	while (1) {
+		uint32_t c = d8p1_read32(0x008c2080u);
+		if ((c & 1u) == 0) {
+			cmd_done = true;
+			break;
+		}
+		uint64_t now;
+		__asm__ volatile("mrs %0, cntvct_el0" : "=r"(now));
+		if ((now - start_cycles) >= poll_cmd_cycles) {
+			break;
+		}
+	}
+
+	/* 4. write32(0x008c2328, 0x00000001) */
+	d8p1_write32(0x008c2328u, 0x00000001u);
+	__asm__ volatile("dsb sy" ::: "memory");
+
+	/* 5. poll <= 2000 us: (read32(0x008c2328) & BIT(31)) == 0 */
+	uint64_t poll_cbcr_cycles = (frq * 2000ULL) / 1000000ULL; /* 2000 us */
+	__asm__ volatile("mrs %0, cntvct_el0" : "=r"(start_cycles));
+
+	bool cbcr_unhalted = false;
+	while (1) {
+		uint32_t b = d8p1_read32(0x008c2328u);
+		if ((b & (1u << 31)) == 0) {
+			cbcr_unhalted = true;
+			break;
+		}
+		uint64_t now;
+		__asm__ volatile("mrs %0, cntvct_el0" : "=r"(now));
+		if ((now - start_cycles) >= poll_cbcr_cycles) {
+			break;
+		}
+	}
+
+	uint32_t cfg_val = d8p1_read32(0x008c2084u);
+	uint32_t cmd_val = d8p1_read32(0x008c2080u);
+	uint32_t cbcr_val = d8p1_read32(0x008c2328u);
+
+	xzs_diag_emit("VSYNC_CFG_RCGR=0x"); xzs_d8p1_hex32(cfg_val); xzs_diag_emit("\n");
+	xzs_diag_emit("VSYNC_CMD_RCGR=0x"); xzs_d8p1_hex32(cmd_val); xzs_diag_emit("\n");
+	xzs_diag_emit("VSYNC_CBCR=0x"); xzs_d8p1_hex32(cbcr_val); xzs_diag_emit("\n");
+	xzs_diag_emit("VSYNC_CLOCK_UNHALTED=");
+	xzs_diag_emit(cbcr_unhalted ? "yes\n" : "no\n");
+
+	bool ok = cmd_done && cbcr_unhalted && ((cbcr_val & 1u) != 0);
+	if (ok) {
+		xzs_diag_emit("MDSS_VSYNC_CLOCK=ACTIVE\n");
+		xzs_diag_emit("VSYNC_CLOCK_ENABLE=PASS\n");
+	} else {
+		xzs_diag_emit("MDSS_VSYNC_CLOCK=FAILED\n");
+		xzs_diag_emit("VSYNC_CLOCK_ENABLE=FAIL\n");
+	}
+	return ok;
+}
+
+/*
+ * M8-4: PingPong PP0 + DSI MDP Stream Configuration (Source-Faithful Timing)
  */
 static void
 xzs_d8m8_stream_config(void)
@@ -546,17 +635,30 @@ xzs_d8m8_stream_config(void)
 
 	xzs_watchdog_pet();
 
-	/* PP0: Free-Run Command-Mode Scanout Configuration (Zero Timing / No External TE) */
+	/* Ensure MDSS VSYNC clock is enabled */
+	uint32_t vsync_cbcr_check = d8p1_read32(0x008c2328u);
+	if ((vsync_cbcr_check & 1u) == 0 || (vsync_cbcr_check & (1u << 31)) != 0) {
+		xzs_d8m8_vsync_clock_on();
+	}
+
+	/* PP0: Source-Faithful Command-Mode Vertical Timing (Retry #4) */
 	xzs_m8_write_reg("PP0_TEAR_CHECK_EN ", 0x00971000u, 0x00000000u, 0x00000000u, false);
-	xzs_m8_write_reg("PP0_SYNC_CFG_VSYNC", 0x00971004u, 0x00000000u, 0x00000000u, false);
-	xzs_m8_write_reg("PP0_SYNC_CFG_HGHT ", 0x00971008u, 0x00000000u, 0x00000000u, false);
-	xzs_m8_write_reg("PP0_SYNC_WRCOUNT  ", 0x0097100cu, 0x00000000u, 0x00000000u, false);
-	xzs_m8_write_reg("PP0_VSYNC_INIT_VAL", 0x00971010u, 0x00000000u, 0x00000000u, false);
-	xzs_m8_write_reg("PP0_SYNC_THRESH   ", 0x00971018u, 0x00000000u, 0x00000000u, false);
-	xzs_m8_write_reg("PP0_START_POS     ", 0x0097101cu, 0x00000000u, 0x00000000u, false);
-	xzs_m8_write_reg("PP0_RD_PTR_IRQ    ", 0x00971020u, 0x00000000u, 0x00000000u, false);
-	xzs_m8_write_reg("PP0_WR_PTR_IRQ    ", 0x00971024u, 0x00000000u, 0x00000000u, false);
+	xzs_m8_write_reg("PP0_SYNC_CFG_VSYNC", 0x00971004u, 0x00080093u, 0x00080093u, false);
+	uint32_t vsync_rb = d8p1_read32(0x00971004u);
+	xzs_diag_emit("  PP_SYNC_CONFIG_VSYNC_WRITE=0x00080093\n");
+	xzs_diag_emit("  PP_SYNC_CONFIG_VSYNC_READBACK=0x"); xzs_d8p1_hex32(vsync_rb); xzs_diag_emit("\n");
+	bool vsync_rb_ok = ((vsync_rb & (1u << 19)) != 0) && ((vsync_rb & (1u << 20)) == 0);
+	xzs_diag_emit("  PP_SYNC_CONFIG_VSYNC_ACCEPTANCE=");
+	xzs_diag_emit(vsync_rb_ok ? "PASS (BIT19=1, BIT20=0)\n" : "FAIL (BIT19!=1 or BIT20!=0)\n");
+
+	xzs_m8_write_reg("PP0_SYNC_CFG_HGHT ", 0x00971008u, 0x0000fff0u, 0x0000fff0u, false);
+	xzs_m8_write_reg("PP0_SYNC_WRCOUNT  ", 0x0097100cu, 0x00000009u, 0x00000009u, false);
+	xzs_m8_write_reg("PP0_VSYNC_INIT_VAL", 0x00971010u, 0x00000780u, 0x00000780u, false);
 	/* Note: 0x00971014 (PP0_INT_COUNT_VAL) is HW read-only; not written. */
+	xzs_m8_write_reg("PP0_SYNC_THRESH   ", 0x00971018u, 0x00040004u, 0x00040004u, false);
+	xzs_m8_write_reg("PP0_START_POS     ", 0x0097101cu, 0x00000004u, 0x00000004u, false);
+	xzs_m8_write_reg("PP0_RD_PTR_IRQ    ", 0x00971020u, 0x00000781u, 0x00000781u, false);
+	xzs_m8_write_reg("PP0_WR_PTR_IRQ    ", 0x00971024u, 0x00000000u, 0x00000000u, false);
 
 	/* DSI0 Host MDP Stream: Restored to 0x00000008 (MSM8996 MDP command mode stream enable) */
 	xzs_m8_write_reg("DSI_CMD_MDP_CTRL  ", 0x00994040u, 0x00000008u, 0x00000008u, false);
@@ -723,6 +825,18 @@ xzs_d8m8_prekick_status(void)
 	uint32_t post_clear_intr = d8p1_read32(0x00901014u);
 	xzs_diag_emit("POST_CLEAR_INTR_STATUS=0x"); xzs_d8p1_hex32(post_clear_intr); xzs_diag_emit("\n\n");
 
+	/* VSYNC clock status */
+	uint32_t vsync_cfg = d8p1_read32(0x008c2084u);
+	uint32_t vsync_cmd = d8p1_read32(0x008c2080u);
+	uint32_t vsync_cbcr = d8p1_read32(0x008c2328u);
+	bool vsync_clk_unhalted = ((vsync_cmd & 1u) == 0) &&
+	                          ((vsync_cbcr & 1u) != 0) &&
+	                          ((vsync_cbcr & (1u << 31)) == 0);
+	xzs_diag_emit("VSYNC_CFG_RCGR=0x"); xzs_d8p1_hex32(vsync_cfg); xzs_diag_emit("\n");
+	xzs_diag_emit("VSYNC_CMD_RCGR=0x"); xzs_d8p1_hex32(vsync_cmd); xzs_diag_emit("\n");
+	xzs_diag_emit("VSYNC_CBCR=0x"); xzs_d8p1_hex32(vsync_cbcr); xzs_diag_emit("\n");
+	xzs_diag_emit("VSYNC_CLOCK_UNHALTED="); xzs_diag_emit(vsync_clk_unhalted ? "yes\n\n" : "no\n\n");
+
 	uint32_t pp0_tear = d8p1_read32(0x00971000u);
 	uint32_t pp0_sync_cfg_vsync = d8p1_read32(0x00971004u);
 	uint32_t pp0_sync_cfg_hght = d8p1_read32(0x00971008u);
@@ -734,14 +848,15 @@ xzs_d8m8_prekick_status(void)
 	uint32_t pp0_wr_ptr_irq = d8p1_read32(0x00971024u);
 
 	xzs_diag_emit("PP0_TEAR_CHECK_EN=0x"); xzs_d8p1_hex32(pp0_tear); xzs_diag_emit("\n");
-	xzs_diag_emit("PP0_SYNC_CONFIG_VSYNC=0x"); xzs_d8p1_hex32(pp0_sync_cfg_vsync); xzs_diag_emit("\n");
-	xzs_diag_emit("PP0_SYNC_CONFIG_HEIGHT=0x"); xzs_d8p1_hex32(pp0_sync_cfg_hght); xzs_diag_emit("\n");
-	xzs_diag_emit("PP0_SYNC_WRCOUNT=0x"); xzs_d8p1_hex32(pp0_sync_wrcount); xzs_diag_emit("\n");
-	xzs_diag_emit("PP0_VSYNC_INIT_VAL=0x"); xzs_d8p1_hex32(pp0_vsync_init); xzs_diag_emit("\n");
-	xzs_diag_emit("PP0_SYNC_THRESH=0x"); xzs_d8p1_hex32(pp0_sync_thresh); xzs_diag_emit("\n");
-	xzs_diag_emit("PP0_START_POS=0x"); xzs_d8p1_hex32(pp0_start_pos); xzs_diag_emit("\n");
-	xzs_diag_emit("PP0_RD_PTR_IRQ=0x"); xzs_d8p1_hex32(pp0_rd_ptr_irq); xzs_diag_emit("\n");
-	xzs_diag_emit("PP0_WR_PTR_IRQ=0x"); xzs_d8p1_hex32(pp0_wr_ptr_irq); xzs_diag_emit("\n\n");
+	xzs_diag_emit("PP_SYNC_CONFIG_VSYNC_WRITE=0x00080093\n");
+	xzs_diag_emit("PP_SYNC_CONFIG_VSYNC_READBACK=0x"); xzs_d8p1_hex32(pp0_sync_cfg_vsync); xzs_diag_emit("\n");
+	xzs_diag_emit("PP_SYNC_CONFIG_HEIGHT=0x"); xzs_d8p1_hex32(pp0_sync_cfg_hght); xzs_diag_emit("\n");
+	xzs_diag_emit("PP_SYNC_WRCOUNT=0x"); xzs_d8p1_hex32(pp0_sync_wrcount); xzs_diag_emit("\n");
+	xzs_diag_emit("PP_VSYNC_INIT_VAL=0x"); xzs_d8p1_hex32(pp0_vsync_init); xzs_diag_emit("\n");
+	xzs_diag_emit("PP_SYNC_THRESH=0x"); xzs_d8p1_hex32(pp0_sync_thresh); xzs_diag_emit("\n");
+	xzs_diag_emit("PP_START_POS=0x"); xzs_d8p1_hex32(pp0_start_pos); xzs_diag_emit("\n");
+	xzs_diag_emit("PP_RD_PTR_IRQ=0x"); xzs_d8p1_hex32(pp0_rd_ptr_irq); xzs_diag_emit("\n");
+	xzs_diag_emit("PP_WR_PTR_IRQ=0x"); xzs_d8p1_hex32(pp0_wr_ptr_irq); xzs_diag_emit("\n\n");
 
 	uint32_t mdp_intr_en = d8p1_read32(0x00901010u);
 	xzs_diag_emit("MDP_INTR_EN=0x"); xzs_d8p1_hex32(mdp_intr_en); xzs_diag_emit("\n\n");
@@ -760,10 +875,10 @@ xzs_d8m8_prekick_status(void)
 
 	uint32_t pp0_line_cnt_pre = d8p1_read32(0x0097102cu);
 	uint32_t pp0_out_line_cnt_pre = d8p1_read32(0x00971028u);
-	uint32_t rgb0_sw_status_pre = d8p1_read32(0x00915070u);
+	uint32_t rgb0_cur_src0_pre = d8p1_read32(0x009150a4u);
 	xzs_diag_emit("PP0_LINE_COUNT_PRE=0x"); xzs_d8p1_hex32(pp0_line_cnt_pre); xzs_diag_emit("\n");
 	xzs_diag_emit("PP0_OUT_LINE_COUNT_PRE=0x"); xzs_d8p1_hex32(pp0_out_line_cnt_pre); xzs_diag_emit("\n");
-	xzs_diag_emit("RGB0_SRC_ADDR_SW_STATUS_PRE=0x"); xzs_d8p1_hex32(rgb0_sw_status_pre); xzs_diag_emit("\n\n");
+	xzs_diag_emit("RGB0_CURRENT_SRC0_ADDR_PRE=0x"); xzs_d8p1_hex32(rgb0_cur_src0_pre); xzs_diag_emit("\n\n");
 
 	uint32_t disp_intf = d8p1_read32(0x00901004u);
 	uint32_t ctl_layer = d8p1_read32(0x00902000u);
@@ -790,20 +905,24 @@ xzs_d8m8_prekick_status(void)
 	xzs_diag_emit("MDP_KICKOFF_COUNT=0\n");
 	xzs_diag_emit("FRAMEBUFFER_SCANOUT_COUNT=0\n\n");
 
+	bool pp_timing_ok = (pp0_tear == 0) &&
+	                    ((pp0_sync_cfg_vsync & (1u << 19)) != 0) &&
+	                    ((pp0_sync_cfg_vsync & (1u << 20)) == 0) &&
+	                    (pp0_sync_cfg_hght == 0x0000fff0u) &&
+	                    (pp0_sync_wrcount == 0x00000009u) &&
+	                    (pp0_vsync_init == 0x00000780u) &&
+	                    (pp0_sync_thresh == 0x00040004u) &&
+	                    (pp0_start_pos == 0x00000004u) &&
+	                    (pp0_rd_ptr_irq == 0x00000781u) &&
+	                    (pp0_wr_ptr_irq == 0x00000000u);
+
 	bool ready = g_m8_fb_initialized && g_m8_fb_cache_cleaned &&
 	             (rgb0_addr == g_m8_fb_pa) && (rgb0_stride == 0x1100u) &&
 	             (rgb0_src_sz == 0x07800438u) && (rgb0_out_sz == 0x07800438u) &&
 	             (rgb0_fmt == 0x000236aau) && (rgb0_unp == 0x03010002u) &&
 	             (lm0_out_sz == 0x07800438u) &&
-	             (pp0_tear == 0) &&
-	             (pp0_sync_cfg_vsync == 0) &&
-	             (pp0_sync_cfg_hght == 0) &&
-	             (pp0_sync_wrcount == 0) &&
-	             (pp0_vsync_init == 0) &&
-	             (pp0_sync_thresh == 0) &&
-	             (pp0_start_pos == 0) &&
-	             (pp0_rd_ptr_irq == 0) &&
-	             (pp0_wr_ptr_irq == 0) &&
+	             vsync_clk_unhalted &&
+	             pp_timing_ok &&
 	             (mdp_intr_en == 0) &&
 	             ((post_clear_intr & 0x00001100u) == 0) &&
 	             (dsi_mdp_ctrl == 0x00000008u) && ((dsi_dcs_cmd & 0xffffu) == 0x3c2cu) &&
@@ -879,6 +998,18 @@ xzs_d8m8_kickoff(void)
 	uint32_t dsi_mdp_ctrl = d8p1_read32(0x00994040u);
 	uint32_t mdp_intr_en = d8p1_read32(0x00901010u);
 
+	/* VSYNC clock status */
+	uint32_t vsync_cfg = d8p1_read32(0x008c2084u);
+	uint32_t vsync_cmd = d8p1_read32(0x008c2080u);
+	uint32_t vsync_cbcr = d8p1_read32(0x008c2328u);
+	bool vsync_clk_unhalted = ((vsync_cmd & 1u) == 0) &&
+	                          ((vsync_cbcr & 1u) != 0) &&
+	                          ((vsync_cbcr & (1u << 31)) == 0);
+	xzs_diag_emit("VSYNC_CFG_RCGR=0x"); xzs_d8p1_hex32(vsync_cfg); xzs_diag_emit("\n");
+	xzs_diag_emit("VSYNC_CMD_RCGR=0x"); xzs_d8p1_hex32(vsync_cmd); xzs_diag_emit("\n");
+	xzs_diag_emit("VSYNC_CBCR=0x"); xzs_d8p1_hex32(vsync_cbcr); xzs_diag_emit("\n");
+	xzs_diag_emit("VSYNC_CLOCK_UNHALTED="); xzs_diag_emit(vsync_clk_unhalted ? "yes\n" : "no\n");
+
 	/* Pre-kick interrupt cleanup: Read PRE_INTR_STATUS, clear 0x1100 (bits 8 and 12), re-read POST_CLEAR_INTR_STATUS */
 	uint32_t pre_intr = d8p1_read32(0x00901014u);
 	xzs_diag_emit("PRE_INTR_STATUS=0x"); xzs_d8p1_hex32(pre_intr); xzs_diag_emit("\n");
@@ -887,17 +1018,22 @@ xzs_d8m8_kickoff(void)
 	uint32_t post_clear_intr = d8p1_read32(0x00901014u);
 	xzs_diag_emit("POST_CLEAR_INTR_STATUS=0x"); xzs_d8p1_hex32(post_clear_intr); xzs_diag_emit("\n");
 
+	bool pp_timing_ok = (pp0_tear == 0) &&
+	                    ((pp0_sync_cfg_vsync & (1u << 19)) != 0) &&
+	                    ((pp0_sync_cfg_vsync & (1u << 20)) == 0) &&
+	                    (pp0_sync_cfg_hght == 0x0000fff0u) &&
+	                    (pp0_sync_wrcount == 0x00000009u) &&
+	                    (pp0_vsync_init == 0x00000780u) &&
+	                    (pp0_sync_thresh == 0x00040004u) &&
+	                    (pp0_start_pos == 0x00000004u) &&
+	                    (pp0_rd_ptr_irq == 0x00000781u) &&
+	                    (pp0_wr_ptr_irq == 0x00000000u);
+
 	bool ready = g_m8_fb_initialized && g_m8_fb_cache_cleaned &&
 	             (rgb0_addr == g_m8_fb_pa) && (dsi_st0_tot == 0x07800438u) &&
-	             (ctl_top == 0x00020010u) && (pp0_tear == 0) &&
-	             (pp0_sync_cfg_vsync == 0) &&
-	             (pp0_sync_cfg_hght == 0) &&
-	             (pp0_sync_wrcount == 0) &&
-	             (pp0_vsync_init == 0) &&
-	             (pp0_sync_thresh == 0) &&
-	             (pp0_start_pos == 0) &&
-	             (pp0_rd_ptr_irq == 0) &&
-	             (pp0_wr_ptr_irq == 0) &&
+	             (ctl_top == 0x00020010u) &&
+	             vsync_clk_unhalted &&
+	             pp_timing_ok &&
 	             (dsi_mdp_ctrl == 0x00000008u) &&
 	             (mdp_intr_en == 0) &&
 	             ((post_clear_intr & 0x00001100u) == 0);
@@ -926,10 +1062,10 @@ xzs_d8m8_kickoff(void)
 	/* Activity diagnostics: PRE sample */
 	uint32_t pp0_line_cnt_pre = d8p1_read32(0x0097102cu);
 	uint32_t pp0_out_line_cnt_pre = d8p1_read32(0x00971028u);
-	uint32_t rgb0_sw_status_pre = d8p1_read32(0x00915070u);
+	uint32_t rgb0_cur_src0_pre = d8p1_read32(0x009150a4u);
 	xzs_diag_emit("PP0_LINE_COUNT_PRE=0x"); xzs_d8p1_hex32(pp0_line_cnt_pre); xzs_diag_emit("\n");
 	xzs_diag_emit("PP0_OUT_LINE_COUNT_PRE=0x"); xzs_d8p1_hex32(pp0_out_line_cnt_pre); xzs_diag_emit("\n");
-	xzs_diag_emit("RGB0_SW_STATUS_PRE=0x"); xzs_d8p1_hex32(rgb0_sw_status_pre); xzs_diag_emit("\n");
+	xzs_diag_emit("RGB0_CURRENT_SRC0_ADDR_PRE=0x"); xzs_d8p1_hex32(rgb0_cur_src0_pre); xzs_diag_emit("\n");
 
 	/* Pet watchdog & memory barrier */
 	xzs_watchdog_pet();
@@ -955,14 +1091,14 @@ xzs_d8m8_kickoff(void)
 	/* Activity diagnostics: POST_START sample */
 	uint32_t pp0_line_cnt_post = d8p1_read32(0x0097102cu);
 	uint32_t pp0_out_line_cnt_post = d8p1_read32(0x00971028u);
-	uint32_t rgb0_sw_status_post = d8p1_read32(0x00915070u);
+	uint32_t rgb0_cur_src0_post = d8p1_read32(0x009150a4u);
 	uint32_t ctl_start_rb = d8p1_read32(0x0090201cu);
 	xzs_diag_emit("CTL_START_READBACK=0x"); xzs_d8p1_hex32(ctl_start_rb); xzs_diag_emit("\n");
 	xzs_diag_emit("CTL_START_COUNT=1\n");
 	xzs_diag_emit("MDP_KICKOFF_COUNT=1\n");
 	xzs_diag_emit("PP0_LINE_COUNT_POST=0x"); xzs_d8p1_hex32(pp0_line_cnt_post); xzs_diag_emit("\n");
 	xzs_diag_emit("PP0_OUT_LINE_COUNT_POST=0x"); xzs_d8p1_hex32(pp0_out_line_cnt_post); xzs_diag_emit("\n");
-	xzs_diag_emit("RGB0_SW_STATUS_POST=0x"); xzs_d8p1_hex32(rgb0_sw_status_post); xzs_diag_emit("\n");
+	xzs_diag_emit("RGB0_CURRENT_SRC0_ADDR_POST=0x"); xzs_d8p1_hex32(rgb0_cur_src0_post); xzs_diag_emit("\n");
 
 	/* Barrier */
 	__asm__ volatile("dsb sy\n\tisb sy" ::: "memory");
@@ -1018,7 +1154,7 @@ xzs_d8m8_kickoff(void)
 	/* Activity diagnostics: FINAL sample */
 	uint32_t pp0_line_cnt_final = d8p1_read32(0x0097102cu);
 	uint32_t pp0_out_line_cnt_final = d8p1_read32(0x00971028u);
-	uint32_t rgb0_sw_status_final = d8p1_read32(0x00915070u);
+	uint32_t rgb0_cur_src0_final = d8p1_read32(0x009150a4u);
 
 	xzs_diag_emit("PP0_DONE_OBSERVED=");
 	xzs_diag_emit(pp0_done ? "yes\n" : "no\n");
@@ -1027,7 +1163,7 @@ xzs_d8m8_kickoff(void)
 
 	xzs_diag_emit("PP0_LINE_COUNT_FINAL=0x"); xzs_d8p1_hex32(pp0_line_cnt_final); xzs_diag_emit("\n");
 	xzs_diag_emit("PP0_OUT_LINE_COUNT_FINAL=0x"); xzs_d8p1_hex32(pp0_out_line_cnt_final); xzs_diag_emit("\n");
-	xzs_diag_emit("RGB0_SW_STATUS_FINAL=0x"); xzs_d8p1_hex32(rgb0_sw_status_final); xzs_diag_emit("\n");
+	xzs_diag_emit("RGB0_CURRENT_SRC0_ADDR_FINAL=0x"); xzs_d8p1_hex32(rgb0_cur_src0_final); xzs_diag_emit("\n");
 
 	xzs_diag_emit("POST_DSI_ACK_ERR=0x"); xzs_d8p1_hex32(post_ack_err); xzs_diag_emit("\n");
 	xzs_diag_emit("POST_DSI_TIMEOUT=0x"); xzs_d8p1_hex32(post_timeout); xzs_diag_emit("\n");
@@ -1071,31 +1207,31 @@ xzs_d8m8_kickoff(void)
 	                    (pp0_line_cnt_final != pp0_line_cnt_pre) ||
 	                    (pp0_out_line_cnt_post != pp0_out_line_cnt_pre) ||
 	                    (pp0_out_line_cnt_final != pp0_out_line_cnt_pre);
-	bool rgb0_fetch_activity = (rgb0_sw_status_post != rgb0_sw_status_pre) ||
-	                           (rgb0_sw_status_final != rgb0_sw_status_pre);
+	bool rgb0_fetch_activity = (rgb0_cur_src0_post != rgb0_cur_src0_pre) ||
+	                           (rgb0_cur_src0_final != rgb0_cur_src0_pre);
 
-	xzs_diag_emit("PP0_ACTIVITY="); xzs_diag_emit(pp0_activity ? "yes\n" : "no\n");
+	xzs_diag_emit("PP_TIMING_ACTIVE="); xzs_diag_emit(pp0_activity ? "yes\n" : "no\n");
 	xzs_diag_emit("RGB0_FETCH_ACTIVITY="); xzs_diag_emit(rgb0_fetch_activity ? "yes\n" : "no\n");
 
 	if (g_m8_framebuffer_scanout_count == 1 && elapsed_us <= 100000) {
-		xzs_diag_emit("M8_7_RETRY3=PASS\n");
+		xzs_diag_emit("M8_7_RETRY4=PASS\n");
 		xzs_diag_emit("FIRST_MDP_FRAME=yes\n");
 		xzs_diag_emit("FIRST_SCANOUT_TRANSPORT=yes\n");
 		xzs_diag_emit("FIRST_VISIBLE_PIXELS=no\n");
-		xzs_diag_emit("RETRY_PERFORMED_AFTER_RETRY3=no\n");
+		xzs_diag_emit("RETRY_PERFORMED_AFTER_RETRY4=no\n");
 		xzs_diag_emit("BLOCKERS=NONE\n");
 	} else {
-		xzs_diag_emit("M8_7_RETRY3=FAIL\n");
+		xzs_diag_emit("M8_7_RETRY4=FAIL\n");
 		xzs_diag_emit("FIRST_MDP_FRAME=no\n");
 		xzs_diag_emit("FIRST_SCANOUT_TRANSPORT=no\n");
 		xzs_diag_emit("FIRST_VISIBLE_PIXELS=no\n");
-		xzs_diag_emit("RETRY_PERFORMED_AFTER_RETRY3=no\n");
+		xzs_diag_emit("RETRY_PERFORMED_AFTER_RETRY4=no\n");
 		if (!pp0_activity && !rgb0_fetch_activity) {
-			xzs_diag_emit("BLOCKERS=PP0_INACTIVE_NO_LINE_COUNT_NO_DONE\n");
+			xzs_diag_emit("BLOCKERS=PIPELINE_START_INACTIVE_NO_PP_NO_FETCH\n");
 		} else if (pp0_activity && !pp0_done) {
-			xzs_diag_emit("BLOCKERS=PP0_LINE_COUNT_ACTIVE_BUT_NO_DONE\n");
+			xzs_diag_emit("BLOCKERS=PP_TIMING_ACTIVE_BUT_NO_DONE\n");
 		} else if (rgb0_fetch_activity && !pp0_activity) {
-			xzs_diag_emit("BLOCKERS=RGB0_FETCH_ACTIVE_BUT_PP0_INACTIVE\n");
+			xzs_diag_emit("BLOCKERS=RGB0_FETCH_ACTIVE_BUT_PP_INACTIVE\n");
 		} else {
 			xzs_diag_emit("BLOCKERS=PP0_DONE_TIMEOUT_100MS\n");
 		}
@@ -1106,12 +1242,13 @@ xzs_d8m8_kickoff(void)
 		xzs_d8m8_dump_reg("CTL_FLUSH        ", 0x00902018u);
 		xzs_d8m8_dump_reg("CTL_TOP          ", 0x00902014u);
 		xzs_d8m8_dump_reg("CTL_LAYER_0      ", 0x00902000u);
+		xzs_diag_emit("  FB_PA            = 0x"); xzs_d8p1_hex32(g_m8_fb_pa); xzs_diag_emit("\n");
 		xzs_d8m8_dump_reg("RGB0_SRC0_ADDR   ", 0x00915014u);
+		xzs_d8m8_dump_reg("RGB0_CURRENT_SRC0", 0x009150a4u);
 		xzs_d8m8_dump_reg("RGB0_SRC_YSTRIDE0", 0x00915024u);
 		xzs_d8m8_dump_reg("RGB0_SRC_SIZE    ", 0x00915000u);
 		xzs_d8m8_dump_reg("RGB0_SRC_FORMAT  ", 0x00915030u);
 		xzs_d8m8_dump_reg("RGB0_SRC_UNPACK  ", 0x00915034u);
-		xzs_d8m8_dump_reg("RGB0_SW_STATUS   ", 0x00915070u);
 		xzs_d8m8_dump_reg("LM0_OUT_SIZE     ", 0x00945004u);
 		xzs_d8m8_dump_reg("LM0_BORDER_COLOR0", 0x00945008u);
 		xzs_d8m8_dump_reg("PP0_TEAR_CHECK_EN", 0x00971000u);
@@ -1126,6 +1263,9 @@ xzs_d8m8_kickoff(void)
 		xzs_d8m8_dump_reg("PP0_WR_PTR_IRQ   ", 0x00971024u);
 		xzs_d8m8_dump_reg("PP0_OUT_LINE_CNT ", 0x00971028u);
 		xzs_d8m8_dump_reg("PP0_LINE_COUNT   ", 0x0097102cu);
+		xzs_d8m8_dump_reg("VSYNC_CMD_RCGR   ", 0x008c2080u);
+		xzs_d8m8_dump_reg("VSYNC_CFG_RCGR   ", 0x008c2084u);
+		xzs_d8m8_dump_reg("MDSS_VSYNC_CBCR  ", 0x008c2328u);
 		xzs_d8m8_dump_reg("DSI_CMD_MDP_CTRL ", 0x00994040u);
 		xzs_d8m8_dump_reg("DSI_DCS_CMD_CTRL ", 0x00994044u);
 		xzs_d8m8_dump_reg("DSI_STREAM0_CTRL ", 0x00994058u);
