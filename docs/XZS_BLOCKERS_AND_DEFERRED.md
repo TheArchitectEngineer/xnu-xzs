@@ -110,3 +110,21 @@ Status values: `ACTIVE_BLOCKER`, `DEFERRED`, `BYPASSED`, `RESOLVED`, `OBSOLETE`.
 | FIX_COMMIT | `545398f30d8fda592d4ca67ee867a016c2f37092` |
 | HARDWARE_PROOF | Candidate `545398f` booted via `fastboot boot artifacts/hw/d8m2-545398f/xzs-xnu-boot.img` (SHA256: `5a5185fe9b53da69895cc2a6c1b68e96b0f46409cac8e4ca9fb044f6d0712704`). Host transcript `artifacts/hw/d8m2-545398f/host.txt`: 1. `mmss_mmagic_ahb` enabled: `0x80000000` -> `0x00000001` (enable=1, halt=0). 2. `mmss_mmagic_cfg_ahb` enabled: `0x80008000` -> `0x20008001` (enable=1, halt=0). 3. `mmagic_mdss_noc_cfg_ahb` enabled: `0x80000000` -> `0x00000001` (enable=1, halt=0). 4. `mmagic_mdss_axi` enabled: `0x80000000` -> `0x00000001` (enable=1, halt=0). 5. MDSS GDSC powered on: `0x00222001` -> `0xa0222000`. 6. `mdss_ahb` retry: `old=0x80008000, wrote=0x80008001, new=0x20008001, readback=0x20008001` (enable=1, halt=0). 7. `mdss_axi` enabled: `0x80006220` -> `0x00006221` (enable=1, halt=0). 8. `mdss_mdp` enabled: `0x80006220` -> `0x00006221` (enable=1, halt=0). Final `pwd` responsive (`/`), zero panics, zero resets. |
 
+## ACTIVE-D8-002
+
+| Field | Value |
+|---|---|
+| ID | ACTIVE-D8-002 |
+| AREA | display MDP scanout |
+| TITLE | PingPong0 to DSI command-mode transport / handshake boundary |
+| STATUS | DEFERRED |
+| FIRST_SEEN | D8-M8 Retry #1 (`9154f24`), confirmed through Retry #10 (`0243572`) |
+| LAST_KNOWN_COMMIT | `02435720864946ba6aecfe4be21d400a75ff43ff` |
+| EVIDENCE | Framebuffer allocation (`0x98000000`), SSPP RGB0 config (1080x1920 XRGB8888, format/stride verified, active source address latched `0x98000000`), LM0 BASE routing, and CTL0 flush consumption (`0x00020048` -> 0) are proven on silicon. In Retry #10, Qualcomm software-TE / internal VSYNC override (`PP_SYNC_CONFIG_VSYNC=0x00080093`, height=2163) proved internal VSYNC generation: WR_PTR fired at 0 µs, RD_PTR fired at 10 ms (10,000 µs), internal counter cycled at ~16.56 ms. However, `PP0_LINE_COUNT=0`, `PP0_OUT_LINE_COUNT=0`, `PP0_DONE=no`, and `DSI_STREAM_ACTIVITY=no` across 100 ms of polling. In command mode with `DSI_TRIG_CTRL=0x80000004` (`mdp_trigger=NONE`), the DSI command engine does not autonomously launch packet transmission from hardware VSYNC without either `DSI_CMD_MODE_MDP_SW_TRIGGER` or configured hardware trigger, blocking PingPong scanout flow credit. See `docs/XZS_D8_M8_DEFERRED.md`. |
+| IMPACT | Native XNU cannot scan out framebuffer pixels to the physical display in command mode. Framebuffer text console and boot splash blocked. |
+| CURRENT_BYPASS | Serial USB shell console is the primary debugger and interaction interface. |
+| WHY_DEFERRED | As explicitly directed by the user, D8-M8 debugging is frozen at the Retry #10 boundary without further hardware experiments (no Retry #11). |
+| RESUME_CONDITION | Resume from commit `0243572` + freeze commit. Investigation focuses strictly on the PingPong0 → DSI command-mode handshake and trigger contract (`DSI_TRIG_CTRL`, `DSI_CMD_MODE_MDP_SW_TRIGGER`, `DSI_CMD_MDP_CTRL`). |
+| NEXT_INVESTIGATION | Audit downstream Qualcomm Linux `mdss_dsi_host.c` command-mode kickoff path: `mdss_dsi_cmd_mdp_busy()`, `DSI_CMD_MODE_MDP_SW_TRIGGER` (`0x00994094`), and `DSI_TRIG_CTRL` (`0x00994084`). Do not blindly pulse registers without verified driver source reference. |
+
+

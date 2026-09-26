@@ -1,0 +1,21 @@
+{
+  "condition": "display_off_early_boot",
+  "device": "Sony Xperia XZs (G8231)",
+  "soc": "Qualcomm MSM8996 v3.0",
+  "panel": "Sharp+Synaptics cmd_9 1080x1920",
+  "state": "DISPLAY_OFF_POWER_COLLAPSED",
+  "registers": {
+    "MDSS_HW_VERSION": { "address": "0x00900000", "value": "0x10070000", "class": "STABLE_STATIC" },
+    "DISP_INTF_SEL": { "address": "0x00901004", "value": "0x00000000", "class": "POWER_DEPENDENT" },
+    "MDP_INTR_EN": { "address": "0x00901010", "value": "0x00000000", "class": "POWER_DEPENDENT" },
+    "MDP_INTR_STATUS": { "address": "0x00901014", "value": "0x00000000", "class": "POWER_DEPENDENT" },
+    "CTL_LAYER_0": { "address": "0x00902000", "value": "0x00000000", "class": "POWER_DEPENDENT" },
+    "CTL_TOP": { "address": "0x00902014", "value": "0x00000000", "class": "POWER_DEPENDENT" },
+    "RGB0_SRC_SIZE": { "address": "0x00915000", "value": "0x00000000", "class": "POWER_DEPENDENT" },
+    "LM0_OUT_SIZE": { "address": "0x00945004", "value": "0x00000000", "class": "POWER_DEPENDENT" },
+    "PP0_TEAR_CHECK_EN": { "address": "0x00971000", "value": "0x00000000", "class": "POWER_DEPENDENT" },
+    "DSI_CMD_MDP_CTRL": { "address": "0x00994040", "value": "0x00000000", "class": "POWER_DEPENDENT" },
+    "DSI_CTRL": { "address": "0x00994004", "value": "0x00000000", "class": "POWER_DEPENDENT" },
+    "DSI_LANE_STATUS": { "address": "0x009940a8", "value": "0x00000000", "class": "POWER_DEPENDENT" }
+  }
+}

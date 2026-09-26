@@ -82,10 +82,11 @@ D8-P1      TLMM GPIO prerequisite            COMPLETE
 D8-P2      SPMI + LAB/IBB power rails        COMPLETE
 D8-M5      Panel power/reset sequence        COMPLETE
 D8-M6      Panel vendor/DCS init sequence    COMPLETE
-D8-P3      PMIC WLED backlight prerequisite  NEXT
+D8-M8      MDP scanout / command transport   DEFERRED
+D8-P3      PMIC WLED backlight prerequisite  PENDING
 ```
 
-Tags that name durable milestones: `xzs-d7t1-complete`, `xzs-d7t2-full-complete`, `xzs-d8-m1-complete`, `xzs-d8-m2-complete`, `xzs-d8m3-display-pll-phy-complete`, `xzs-d8m4-dsi-host-complete`, `xzs-d8p1-gpio-complete`, `xzs-d8p2-power-rails-complete`, `xzs-d8m5-panel-power-reset-complete`, `xzs-d8m6-panel-dcs-complete`.
+Tags that name durable milestones: `xzs-d7t1-complete`, `xzs-d7t2-full-complete`, `xzs-d8-m1-complete`, `xzs-d8-m2-complete`, `xzs-d8m3-display-pll-phy-complete`, `xzs-d8m4-dsi-host-complete`, `xzs-d8p1-gpio-complete`, `xzs-d8p2-power-rails-complete`, `xzs-d8m5-panel-power-reset-complete`, `xzs-d8m6-panel-dcs-complete`, `xzs-d8m8-deferred`.
 
 ## Generic Native Mach-O Execution (Phase D7-T2)
 
@@ -138,7 +139,8 @@ D8-P1     = PASS (COMPLETE / SEALED / HARDWARE_PROVEN)
 D8-P2     = PASS (COMPLETE / SEALED / HARDWARE_PROVEN)
 D8-M5     = PASS (COMPLETE / SEALED / HARDWARE_PROVEN)
 D8-M6     = PASS (COMPLETE / SEALED / HARDWARE_PROVEN)
-D8-P3     = NEXT
+D8-M8     = DEFERRED / INCOMPLETE / UNSEALED (tag `xzs-d8m8-deferred`)
+D8-P3     = PENDING
 ```
 
 D8-M1, tag `xzs-d8-m1-complete` at `861032cb7b137096edeb1aa5caa04aef6737533a`, read the clock controller only. MMAGIC_MDSS_GDSC was `0xa0222000` (on). MDSS_GDSC was `0x00222001` (collapsed).
@@ -208,9 +210,9 @@ D8-M6, tag `xzs-d8m6-panel-dcs-complete`, completed panel vendor/DCS command tra
 - Strict Scope Locks: `WLED_WRITES=0` (backlight strictly off), `MDP_KICKOFFS=0` (MDP scanout untouched).
 - Reproducibility: 2/2 independent physical cold/fresh boots passed 100% with identical pre- and post-register snapshots.
 
-D8-P3 (PMIC WLED backlight prerequisite) is the NEXT active milestone.
+D8-M8, tag `xzs-d8m8-deferred`, investigated MDP command-mode framebuffer scanout on physical silicon across 10 controlled single-kickoff attempts. Framebuffer allocation (`0x98000000`), SSPP RGB0 configuration (1080x1920 XRGB8888, format/stride verified, active source address latched `0x98000000`), LM0 BASE routing, CTL0 flush consumption (`0x00020048` -> 0), and Qualcomm software-TE / internal VSYNC override (`PP_SYNC_CONFIG_VSYNC=0x00080093`, WR_PTR at 0 us, RD_PTR at 10 ms, internal period ~16.56 ms) were hardware-proven. However, pixel rasterization never advanced (`PP0_LINE_COUNT=0`, `PP0_DONE=0`, `DSI_STREAM_ACTIVITY=0`) due to an unresolved PingPong0 to DSI command-mode trigger / flow-control handshake. As explicitly directed, D8-M8 debugging is frozen, with no further hardware attempts. Milestone D8-M8 is formally marked DEFERRED / INCOMPLETE / UNSEALED. Phase D8 overall remains INCOMPLETE. Full report: [`docs/XZS_D8_M8_DEFERRED.md`](docs/XZS_D8_M8_DEFERRED.md).
 
-Details: [`docs/XZS_DISPLAY_BRINGUP.md`](docs/XZS_DISPLAY_BRINGUP.md), [`docs/XZS_D8_M3_SEAL_REPORT.md`](docs/XZS_D8_M3_SEAL_REPORT.md), [`docs/XZS_D8_M4_SEAL_REPORT.md`](docs/XZS_D8_M4_SEAL_REPORT.md), [`docs/XZS_D8_P1_SEAL_REPORT.md`](docs/XZS_D8_P1_SEAL_REPORT.md), [`docs/XZS_D8_P2_SEAL_REPORT.md`](docs/XZS_D8_P2_SEAL_REPORT.md), [`docs/XZS_D8_M5_SEAL_REPORT.md`](docs/XZS_D8_M5_SEAL_REPORT.md), [`docs/XZS_D8_M6_SEAL_REPORT.md`](docs/XZS_D8_M6_SEAL_REPORT.md). Bypassed work: [`docs/XZS_BLOCKERS_AND_DEFERRED.md`](docs/XZS_BLOCKERS_AND_DEFERRED.md). Status: [`docs/XZS_PORT_STATUS.md`](docs/XZS_PORT_STATUS.md).
+Details: [`docs/XZS_DISPLAY_BRINGUP.md`](docs/XZS_DISPLAY_BRINGUP.md), [`docs/XZS_D8_M3_SEAL_REPORT.md`](docs/XZS_D8_M3_SEAL_REPORT.md), [`docs/XZS_D8_M4_SEAL_REPORT.md`](docs/XZS_D8_M4_SEAL_REPORT.md), [`docs/XZS_D8_P1_SEAL_REPORT.md`](docs/XZS_D8_P1_SEAL_REPORT.md), [`docs/XZS_D8_P2_SEAL_REPORT.md`](docs/XZS_D8_P2_SEAL_REPORT.md), [`docs/XZS_D8_M5_SEAL_REPORT.md`](docs/XZS_D8_M5_SEAL_REPORT.md), [`docs/XZS_D8_M6_SEAL_REPORT.md`](docs/XZS_D8_M6_SEAL_REPORT.md), [`docs/XZS_D8_M8_DEFERRED.md`](docs/XZS_D8_M8_DEFERRED.md). Bypassed work: [`docs/XZS_BLOCKERS_AND_DEFERRED.md`](docs/XZS_BLOCKERS_AND_DEFERRED.md). Status: [`docs/XZS_PORT_STATUS.md`](docs/XZS_PORT_STATUS.md).
 
 ### Verified Milestone Capabilities
 
@@ -288,7 +290,7 @@ Details: [`docs/XZS_DISPLAY_BRINGUP.md`](docs/XZS_DISPLAY_BRINGUP.md), [`docs/XZ
 | **Phase D5** | Real root filesystem mount (RAMDisk XZSFS v1) | **COMPLETE / SEALED** |
 | **Phase D6** | PID 1 / First EL0 userspace (`initproc` / launchd) | **COMPLETE / SEALED** |
 | **Phase D7** | Interactive USB shell (`/bin/sh`) & Generic Mach-O exec | **COMPLETE / SEALED** |
-| **Phase D8** | Display audit, power/clocks, and DSI scanout | **D8-M1..M3 PASS / D8-M4 NEXT** |
+| **Phase D8** | Display audit, power/clocks, and DSI scanout | **D8-M1..M6 PASS / D8-M8 DEFERRED / INCOMPLETE** |
 | **Phase D9** | XZSPlatform hardware/platform compatibility layer | **PLANNED** |
 | **Phase D10**| Core native device drivers | **PLANNED** |
 | **Phase D11**| System hardware integration | **PLANNED** |

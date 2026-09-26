@@ -2,10 +2,10 @@
 
 Current accepted milestones:
 - **D7-T2 (Native Generic Mach-O Execution)**: COMPLETE & SEALED, tag `xzs-d7t2-full-complete`. DEBT-001 is RESOLVED. Generic external Mach-O execution (`/bin/hello`, `/bin/args` with multiple argv layouts) is hardware-verified across 14 external exec cycles without panic or reset.
-- **D8-M2 (Display Power & Core Clocks)**: COMPLETE & SEALED, tag `xzs-d8-m2-complete` (`545398f30d8fda592d4ca67ee867a016c2f37092`). AHB, AXI, MDP clocks verified on physical hardware.
-- **D8-M3 (DSI PHY / PLL / Lanes / Framebuffer)**: NEXT ACTIVE MILESTONE.
+- **D8-M1..M6, D8-P1, D8-P2**: COMPLETE & SEALED on physical hardware.
+- **D8-M8 (MDP Framebuffer Scanout)**: DEFERRED / INCOMPLETE / UNSEALED, tag `xzs-d8m8-deferred`. Final blocker: PingPong0 to DSI command-mode handshake (`ACTIVE-D8-002`). Detailed freeze report: [`docs/XZS_D8_M8_DEFERRED.md`](XZS_D8_M8_DEFERRED.md). Phase D8 overall remains INCOMPLETE.
 
-Do not reopen DEBT-001 (RESOLVED). DEBT-002 and DEBT-003 remain active/deferred. ACTIVE-D8-001 is RESOLVED in [`docs/XZS_BLOCKERS_AND_DEFERRED.md`](XZS_BLOCKERS_AND_DEFERRED.md). Entry point: [`README.md`](../README.md). Display notes: [`docs/XZS_DISPLAY_BRINGUP.md`](XZS_DISPLAY_BRINGUP.md).
+Do not reopen DEBT-001 (RESOLVED). DEBT-002 and DEBT-003 remain active/deferred. ACTIVE-D8-001 is RESOLVED in [`docs/XZS_BLOCKERS_AND_DEFERRED.md`](XZS_BLOCKERS_AND_DEFERRED.md). ACTIVE-D8-002 (D8-M8 PP0->DSI handshake) is DEFERRED in [`docs/XZS_BLOCKERS_AND_DEFERRED.md`](XZS_BLOCKERS_AND_DEFERRED.md). Entry point: [`README.md`](../README.md). Display notes: [`docs/XZS_DISPLAY_BRINGUP.md`](XZS_DISPLAY_BRINGUP.md).
 
 The record below is the older D6/D7 handoff and is kept as history.
 
