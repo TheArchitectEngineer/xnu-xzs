@@ -389,6 +389,11 @@ arm_init(
 	/* Update VBAR_EL1 to KVA so any exception in high virtual address space traps cleanly */
 	__asm__ volatile("msr VBAR_EL1, %0\nisb" :: "r"((uint64_t)&LowExceptionVectorBase) : "memory");
 
+	extern uint64_t g_xzs_boot_t0;
+	if (g_xzs_boot_t0 == 0) {
+		__asm__ volatile("mrs %0, cntvct_el0" : "=r"(g_xzs_boot_t0));
+	}
+
 	*(volatile uint32_t *)0x80060014UL = 0x206; /* XZS_STAGE_XNU_K6 */
 	xzs_early_puts("[XNU-XZS] K6: arm_init entered\n");
 
@@ -421,6 +426,11 @@ arm_init(
 	/* Checkpoint K7c: Calling PE_init_platform */
 	xzs_early_puts("[XNU-XZS] K7c: calling PE_init_platform...\n");
 	PE_init_platform(FALSE, args); /* Get platform expert set up */
+
+	extern uint64_t g_xzs_boot_t1;
+	if (g_xzs_boot_t1 == 0) {
+		__asm__ volatile("mrs %0, cntvct_el0" : "=r"(g_xzs_boot_t1));
+	}
 
 	*(volatile uint32_t *)0x80060014UL = 0x208; /* XZS_STAGE_XNU_K8 */
 	xzs_early_puts("[XNU-XZS] K8: PE_init_platform completed\n");

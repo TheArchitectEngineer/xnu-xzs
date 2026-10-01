@@ -2059,8 +2059,8 @@ xzs_d8m8_stream_config(void)
 	/* Step 3: Enable tear check */
 	xzs_m8_write_reg("PP0_TEAR_CHECK_EN ", 0x00971000u, 0x00000001u, 0x00000001u, false);
 
-	/* Enable Autorefresh (0x80000001) for continuous 60 Hz display refresh */
-	xzs_m8_write_reg("PP0_AUTOREFRESH   ", 0x00971030u, 0x80000001u, 0x80000001u, false);
+	/* F16 Step 3b: Authentic Panel 9 leaves PP0 Autorefresh disabled (0x00000000) per Sony LK binary proof */
+	xzs_m8_write_reg("PP0_AUTOREFRESH   ", 0x00971030u, 0x00000000u, 0x00000000u, false);
 	uint32_t ar_after_pp = d8p1_read32(0x00971030u);
 	xzs_diag_emit("AUTOREFRESH_AFTER_PP_CONFIG=0x"); xzs_d8p1_hex32(ar_after_pp); xzs_diag_emit("\n");
 
@@ -2387,7 +2387,7 @@ xzs_d8m8_prekick_status(void)
 	                    (pp0_start_pos == 0x00000004u) &&
 	                    (pp0_rd_ptr_irq == 0x00000781u) &&
 	                    (pp0_wr_ptr_irq == 0x00000000u) &&
-	                    ((pp0_autorefresh == 0x00000000u) || (pp0_autorefresh == 0x80000001u));
+	                    (pp0_autorefresh == 0x00000000u);
 	bool wrcount_consistent = (pp0_sync_wrcount == (pp0_start_pos + (pp0_sync_thresh & 0xffffu) + 1u));
 
 	bool ready = g_m8_panel_ready && wrcount_consistent &&
@@ -2684,10 +2684,10 @@ xzs_d8m8_kickoff(void)
 	xzs_diag_emit("PRE_INTR_STATUS=0x"); xzs_d8p1_hex32(pre_intr); xzs_diag_emit("\n");
 	xzs_diag_emit("INTR_STATUS_PRE=0x"); xzs_d8p1_hex32(pre_intr); xzs_diag_emit("\n");
 
-	/* D8-M8.5: Set PP0 Autorefresh to 0x80000001 for autonomous 60Hz frame progression */
-	d8p1_write32(0x00971030u, 0x80000001u);
-	xzs_diag_emit("PANEL9_LK_PP_AUTOREFRESH_VALUE=0x80000001\n");
-	xzs_diag_emit("PANEL9_AUTOREFRESH_AUTONOMOUS_ENABLED=YES\n");
+	/* F16: Set PP0 Autorefresh per authentic Sony LK Panel 9 path (autorefresh disabled) */
+	d8p1_write32(0x00971030u, 0x00000000u);
+	xzs_diag_emit("PANEL9_LK_PP_AUTOREFRESH_VALUE=0x00000000\n");
+	xzs_diag_emit("PANEL9_AUTOREFRESH_SOURCE_PROVEN=YES\n");
 
 	g_f1_metrics.trig_ctrl_pre_kick = d8p1_read32(0x00994084u);
 	xzs_diag_emit("TRIG_CTRL_PRE_KICK=0x"); xzs_d8p1_hex32(g_f1_metrics.trig_ctrl_pre_kick); xzs_diag_emit("\n");
@@ -2786,7 +2786,7 @@ xzs_d8m8_kickoff(void)
 	                    (pp0_start_pos == 0x00000004u) &&
 	                    (pp0_rd_ptr_irq == 0x00000781u) &&
 	                    (pp0_wr_ptr_irq == 0x00000000u) &&
-	                    ((pp0_autorefresh == 0x00000000u) || (pp0_autorefresh == 0x80000001u));
+	                    (pp0_autorefresh == 0x00000000u);
 	bool wrcount_consistent = (pp0_sync_wrcount == (pp0_start_pos + (pp0_sync_thresh & 0xffffu) + 1u));
 
 	if (!pp_timing_ok) {
@@ -3031,7 +3031,7 @@ xzs_d8m8_kickoff(void)
 	xzs_wled_set_brightness(1200);
 	g_m8_wled_writes = 1;
 	xzs_diag_emit("WLED_WRITES=1\n");
-	xzs_diag_emit("BACKLIGHT_ACTIVE=YES\n");
+	xzs_wled_status();
 
 	/* Window B Observation Begin */
 	uint64_t t_obs = xzs_d8m5_read_cntvct();
@@ -3394,16 +3394,22 @@ xzs_d8m8_kickoff(void)
 	xzs_diag_emit("R11C_FINAL_TIMEOUT=0x"); xzs_d8p1_hex32(g_m8_r11a_snapshots[12].dsi_timeout); xzs_diag_emit("\n");
 	xzs_diag_emit("M8_7_RETRY11C=OBSERVATION_COMPLETE\n");
 
+	bool visual_proven = (max_line_cnt > 0) && (g_f1_metrics.gpio10_transitions > 0);
 	xzs_diag_emit("\n=======================================================\n");
-	xzs_diag_emit("=== [D8-M8.5] FIRST VISIBLE DISPLAY HARDWARE PROVEN ===\n");
+	xzs_diag_emit("=== [D8-M8.5] DISPLAY KICKOFF EVALUATION            ===\n");
 	xzs_diag_emit("=======================================================\n");
 	xzs_diag_emit("VISIBLE_TEST_PATTERN=8_COLOR_BARS_WITH_CENTER_BADGE\n");
-	xzs_diag_emit("BACKLIGHT_ACTIVE=YES\n");
-	xzs_diag_emit("VISIBLE_PIXELS_FROM_XNU=HW_PROVEN\n");
-	xzs_diag_emit("D8_M8_5_VISIBLE_PIXELS=HW_PROVEN\n");
-	xzs_diag_emit("DISPLAY_ACTIVE_FOR_INSPECTION=YES\n");
+	xzs_wled_status();
+	xzs_diag_emit("VISIBLE_PIXELS_FROM_XNU="); xzs_diag_emit(visual_proven ? "HW_PROVEN\n" : "NOT_PROVEN\n");
+	xzs_diag_emit("D8_M8_5_VISIBLE_PIXELS="); xzs_diag_emit(visual_proven ? "HW_PROVEN\n" : "NOT_PROVEN\n");
+	xzs_diag_emit("DISPLAY_ACTIVE_FOR_INSPECTION="); xzs_diag_emit(visual_proven ? "YES\n" : "NO\n");
 	xzs_diag_emit("M8_KICKOFF_COMPLETE\n");
-	xzs_breadcrumb(0xC11E0u, 0u);
+	xzs_breadcrumb(0xC11E0u, visual_proven ? 0u : 1u);
+
+	/* Milestone D8-M10: Attach Framebuffer Console */
+	if (g_m8_fb_va != 0) {
+		xzs_fbcon_attach(g_m8_fb_va);
+	}
 }
 
 #endif /* _XZS_D8M8_H_ */

@@ -28,7 +28,7 @@ static void xzs_fb_dump_state(void);
 static void xzs_memory_dump_state(void);
 void xzs_diag_dispatch(uint64_t which, uint64_t arg1, uint64_t arg2, uint64_t arg3);
 
-static void
+void
 xzs_diag_emit(const char *s)
 {
 	int n = 0;
@@ -244,6 +244,8 @@ xzs_fb_dump_state(void)
 	xzs_diag_hex_line("[XZS-D8M1] handoff_display=", PE_state.video.v_display);
 	xzs_diag_emit("[XZS-D8M1] pixel_read=no\n");
 	xzs_diag_emit("[XZS-D8M1] FB_AUDIT_DONE\n");
+	extern void xzs_record_boot_t7_and_print(void);
+	xzs_record_boot_t7_and_print();
 }
 
 static void
@@ -774,12 +776,16 @@ xzs_d8m2_critical_on(const char *action, uint32_t offset, int parent)
 	xzs_d8m2_finish("PASS");
 }
 
+
+
 #include "xzs_d8m3.h"
 #include "xzs_d8m4.h"
 #include "xzs_d8p1.h"
 #include "xzs_d8p2.h"
 #include "xzs_d8m5.h"
 #include "xzs_d8m6.h"
+#define XZS_FBCON_IMPL 1
+#include "xzs_fbcon.h"
 #include "xzs_d8m8.h"
 
 void

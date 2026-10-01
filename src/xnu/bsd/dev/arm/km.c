@@ -386,6 +386,16 @@ xzs_console_write(const unsigned char *buf, int len)
 	__asm__ volatile("msr DAIF, %0" :: "r"(daif));
 	extern void xzs_usb_console_write(const unsigned char *buf, int len);
 	xzs_usb_console_write(buf, len);
+
+	extern bool xzs_fbcon_is_active(void);
+	extern void xzs_fbcon_write(const char *buf, int len);
+	extern void xzs_fbcon_early_record(const char *buf, int len);
+
+	if (xzs_fbcon_is_active()) {
+		xzs_fbcon_write((const char *)buf, len);
+	} else {
+		xzs_fbcon_early_record((const char *)buf, len);
+	}
 }
 
 void

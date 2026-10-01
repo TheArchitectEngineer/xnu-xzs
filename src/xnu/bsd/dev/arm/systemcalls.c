@@ -104,19 +104,10 @@ unix_syscall(
 
 #if CONFIG_XZS_BRINGUP
 	extern void xzs_bringup_console_write(const void *buf, int len);
-	if (proc && proc_pid(proc) == 1) {
+	if (proc && proc_pid(proc) == 1 && code == 3 && saved_state64(state)->x[0] == 0) {
 		char scm[128];
 		int scl = snprintf(scm, sizeof(scm),
-		    "[XZS-T4F] SHELL_PROMPT_SYSCALL_ENTER pid=1 code=%d r0=0x%llx r1=0x%llx\n",
-		    code,
-		    (unsigned long long)saved_state64(state)->x[0],
-		    (unsigned long long)saved_state64(state)->x[1]);
-		xzs_bringup_console_write(scm, scl);
-	} else if (code == 1 || code == 4 || code == 7) {
-		char scm[96];
-		int scl = snprintf(scm, sizeof(scm), "[XZS-SC] pid=%d code=%d r0=0x%llx r1=0x%llx\n",
-		    proc_pid(proc), code,
-		    (unsigned long long)saved_state64(state)->x[0],
+		    "[XZS-T4F] SHELL_PROMPT_SYSCALL_ENTER pid=1 code=3 r0=0x0 r1=0x%llx\n",
 		    (unsigned long long)saved_state64(state)->x[1]);
 		xzs_bringup_console_write(scm, scl);
 	}
@@ -301,14 +292,7 @@ skip_syscall:
 
 	uthread_assert_zero_proc_refcount(uthread);
 
-#if CONFIG_XZS_BRINGUP
-	if (code == 1 || code == 4 || code == 7) {
-		char scrm[96];
-		int scrl = snprintf(scrm, sizeof(scrm), "[XZS-SC-RET] pid=%d code=%d err=%d r0=0x%llx\n",
-		    proc_pid(proc), code, error, (unsigned long long)uthread->uu_rval[0]);
-		xzs_bringup_console_write(scrm, scrl);
-	}
-#endif
+
 }
 
 void
@@ -383,6 +367,10 @@ unix_syscall_return(int error)
 		xzs_bringup_console_write(retm, retl);
 		if (proc && proc_pid(proc) == 1 && code == 7) {
 			xzs_bringup_console_write("[XZS-T4F] USER_PID1_RESUMED\n", 28);
+			extern uint64_t g_xzs_boot_t6;
+			if (g_xzs_boot_t6 == 0) {
+				__asm__ volatile("mrs %0, cntvct_el0" : "=r"(g_xzs_boot_t6));
+			}
 		}
 	}
 #endif

@@ -1469,6 +1469,11 @@ kernel_bootstrap_thread(void)
 	kernel_bootstrap_thread_log("sched_startup");
 	sched_startup();
 
+	extern uint64_t g_xzs_boot_t2;
+	if (g_xzs_boot_t2 == 0) {
+		__asm__ volatile("mrs %0, cntvct_el0" : "=r"(g_xzs_boot_t2));
+	}
+
 	/*
 	 * Thread lifecycle maintenance (teardown, stack allocation)
 	 */

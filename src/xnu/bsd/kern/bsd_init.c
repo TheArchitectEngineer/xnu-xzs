@@ -495,6 +495,10 @@ xzs_buf_set_dev(struct buf *bp, uint32_t dev)
 void
 bsd_init(void)
 {
+	extern uint64_t g_xzs_boot_t3;
+	if (g_xzs_boot_t3 == 0) {
+		__asm__ volatile("mrs %0, cntvct_el0" : "=r"(g_xzs_boot_t3));
+	}
 	xzs_early_puts("[XZS-BOOT] [D30] bsd_init ENTERED\n");
 
 	struct uthread *ut;
@@ -1127,6 +1131,10 @@ bsd_init(void)
 		bsd_init_kprintf("vfs_mountroot\n");
 		if (0 == (err = vfs_mountroot())) {
 			xzs_early_puts("[XZS-BOOT] [D51] ROOT MOUNT SUCCESSFUL!\n");
+			extern uint64_t g_xzs_boot_t4;
+			if (g_xzs_boot_t4 == 0) {
+				__asm__ volatile("mrs %0, cntvct_el0" : "=r"(g_xzs_boot_t4));
+			}
 			break;
 		}
 		xzs_early_puts("[XZS-BOOT] [D51-TERMINAL] cannot mount root, errno = 0x");

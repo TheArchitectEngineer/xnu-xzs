@@ -980,6 +980,17 @@ void xzs_usb_console_putc(char c)
 	xzs_tx_kick();
 }
 
+static inline void
+xzs_usb_busy_delay_us(uint32_t usec)
+{
+	uint64_t ticks = ((uint64_t)usec * 192ULL) / 10ULL;
+	uint64_t start, cur;
+	__asm__ volatile("isb\n\tmrs %0, cntvct_el0" : "=r"(start));
+	do {
+		__asm__ volatile("mrs %0, cntvct_el0" : "=r"(cur));
+	} while ((cur - start) < ticks);
+}
+
 void
 xzs_usb_console_write(const unsigned char *buf, int len)
 {
@@ -994,7 +1005,7 @@ xzs_usb_console_write(const unsigned char *buf, int len)
 				break;
 			}
 			xzs_tx_kick();
-			delay(20);
+			xzs_usb_busy_delay_us(20);
 		}
 	}
 	xzs_tx_kick();
@@ -1013,7 +1024,7 @@ int xzs_usb_send_bulk_in(const uint8_t *data, uint32_t len)
 				break;
 			}
 			xzs_tx_kick();
-			delay(20);
+			xzs_usb_busy_delay_us(20);
 		}
 	}
 	xzs_tx_kick();
