@@ -6,6 +6,13 @@
 **Date**: October 2026  
 **Status**: WLED Backlight ACTIVE (50%), Scanout Pixel Gated (Black Screen), USB Console ACTIVE, PAC=0 Verified  
 
+> **Supersession note (2026-10-20):** This report accurately records the
+> black-screen observation, but its proposed internal-VSYNC/tearcheck-bypass
+> remedy is not an accepted correction. The later external-TE A/B run also
+> left `PP_LINE=0`, and the comprehensive source audit rejects a speculative
+> `0x00994094` pulse. Treat the evidence ledger and comprehensive audit as the
+> decision authority for future hardware writes.
+
 ---
 
 ## 1. Executive Summary

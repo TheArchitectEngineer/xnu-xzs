@@ -1,15 +1,15 @@
 #!/usr/bin/env python3
-"""D8-M10 Hardware Test Runner: Framebuffer Console & Interactive Shell Display.
+"""D8-M10 hardware runner.
 
 Executes ONE conditional RAM boot (NO FLASH, PAC=0) on target Sony Xperia XZs (BH905SX976):
 1. Verifies fastboot device connection.
 2. RAM boots XNU kernel with automated display initialization & framebuffer console.
-3. Observes early log replay, live kernel log, boot timing telemetry, and xzs# prompt.
+3. Separates USB-console evidence from physical scanout evidence.
 4. Validates interactive shell commands: help, pwd, echo hello, ls /.
 5. Validates line editing: backspace test and tab expansion test.
 6. Validates scrolling terminal (>120 lines) without crash or framebuffer corruption.
 7. Optionally runs 10-minute long-run stability validation.
-8. Verifies USB + LCD dual console concurrency and logs all evidence.
+8. Never labels the LCD path PASS unless the hardware transport reaches DSI.
 """
 
 import argparse
@@ -39,6 +39,45 @@ def sha256_of(path: Path) -> str:
         for chunk in iter(lambda: f.read(65536), b""):
             h.update(chunk)
     return h.hexdigest()
+
+
+def hex_metric(text: str, key: str):
+    """Return the last hexadecimal value printed for a telemetry key."""
+    match = None
+    pattern = re.compile(rf"(?:^|\\s){re.escape(key)}=0x([0-9a-fA-F]+)(?:\\s|$)")
+    for line in text.splitlines():
+        found = pattern.search(line)
+        if found:
+            match = int(found.group(1), 16)
+    return match
+
+
+def scanout_status(kickoff: str):
+    """Classify the hardware boundary reached by a single kickoff.
+
+    An M8_KICKOFF_COMPLETE marker only proves that the diagnostic command
+    returned. It is not display proof. A physical frame requires evidence
+    that PingPong emitted lines and that the DSI command-MDP path completed.
+    """
+    pp_line = max(filter(lambda value: value is not None, (
+        hex_metric(kickoff, "PP_LINE_MAX"),
+        hex_metric(kickoff, "F1_PP_LINE_MAX"),
+        hex_metric(kickoff, "R11DB_MAX_PP_LINE"),
+    )), default=0)
+    pp_out = max(filter(lambda value: value is not None, (
+        hex_metric(kickoff, "PP_OUT_MAX"),
+        hex_metric(kickoff, "F1_PP_OUT_MAX"),
+        hex_metric(kickoff, "R11DB_MAX_PP_OUT"),
+    )), default=0)
+    pp_done = "PP0_DONE_SEEN=YES" in kickoff or "PP0_DONE_OBSERVED=yes" in kickoff
+    dsi_busy = "DSI_MDP_BUSY_SEEN=YES" in kickoff or "DSI_MDP_BUSY_SEEN=yes" in kickoff
+    dsi_done = "CMD_MDP_DONE_SEEN=YES" in kickoff or "DSI_MDP_DONE_RAW_SEEN=yes" in kickoff
+
+    if pp_line > 0 and pp_out > 0 and pp_done and (dsi_busy or dsi_done):
+        return True, pp_line, pp_out, "DSI_COMMAND_MODE_FRAME_COMPLETE"
+    if pp_line > 0:
+        return False, pp_line, pp_out, "PINGPONG_STARTED_DSI_COMPLETION_MISSING"
+    return False, pp_line, pp_out, "RGB0_OR_CTL_ONLY_NO_PINGPONG_SCANLINES"
 
 
 def main():
@@ -243,19 +282,20 @@ def main():
         for label, command, timeout, expected in pipeline:
             send_cmd(dev, command, wait_sec=timeout, required_substr=expected)
 
-        # Kickoff & Attach Framebuffer Console
-        note("\n--- M8-7: Kickoff & Framebuffer Console Attachment ---\n")
+        # A returned diagnostic command is not a presented frame. Evaluate
+        # PP0/DSI telemetry before treating the framebuffer console as LCD.
+        note("\n--- M8-7: Single kickoff and physical scanout gate ---\n")
         kickoff_out = send_cmd(dev, "display m8-kickoff", wait_sec=60.0, required_substr="M8_KICKOFF_COMPLETE")
-        if "M8_KICKOFF_COMPLETE" not in kickoff_out:
-            raise RuntimeError(f"Kickoff failed: {kickoff_out}")
-        note("[PASS] Kickoff completed and Framebuffer Console attached!\n")
-        note("\n" + "=" * 70 + "\n")
-        note("=== [VISUAL OBSERVATION WINDOW] PHYSICAL LCD ACTIVE (10 SECONDS)   ===\n")
-        note("=== Top 33% (Rows 0-38)  : Live XNU Terminal Console with Banners  ===\n")
-        note("=== Middle Row 39        : Yellow Divider Banner                   ===\n")
-        note("=== Bottom 67% (Rows 40+): 8 High-Contrast Color Bars + Test Badge ===\n")
-        note("=" * 70 + "\n\n")
-        time.sleep(10.0)
+        scanout_ok, pp_line, pp_out, boundary = scanout_status(kickoff_out)
+        note(f"SCANOUT_BOUNDARY={boundary}\n")
+        note(f"PP_LINE_MAX=0x{pp_line:08x}\n")
+        note(f"PP_OUT_MAX=0x{pp_out:08x}\n")
+        if not scanout_ok:
+            raise RuntimeError(
+                "LCD scanout is not proven; refusing to run USB-console tests "
+                "as a D8-M10 display success"
+            )
+        note("[PASS] Hardware scanout reached DSI completion; visual observation required next.\n")
 
         # --- Interactive Shell Tests ---
         note("\n--- STEP 1: fb command test & Boot Timing Telemetry (Section 26 & 29) ---\n")

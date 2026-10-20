@@ -82,10 +82,10 @@ D8-P1      TLMM GPIO prerequisite            COMPLETE
 D8-P2      SPMI + LAB/IBB power rails        COMPLETE
 D8-M5      Panel power/reset sequence        COMPLETE
 D8-M6      Panel vendor/DCS init sequence    COMPLETE
-D8-M8      MDP command-mode scanout          CLOSED / SUPERSEDED BY D8-M8.5
-D8-M8.5    First Visible Display (WLED/DCS)  COMPLETE / SEALED / HW_PROVEN
-D8-M9      First Visible Pixels              SATISFIED BY D8-M8.5
-D8-M10     Framebuffer Text Console / Shell  ACTIVE / IN PROGRESS
+D8-M8      MDP command-mode scanout          BLOCKED / INCOMPLETE
+D8-M8.5    WLED, panel DCS, framebuffer RAM  COMPLETE (NOT pixel scanout)
+D8-M9      First Visible Pixels              BLOCKED
+D8-M10     Framebuffer Text Console / Shell  BLOCKED ON D8-M8
 
 Phase D9   Apple Compatibility Services      ACTIVE / IN PROGRESS
 Phase D10  Authentic iOS RootFS & Storage    PLANNED
@@ -285,10 +285,10 @@ Details: [`docs/XZS_DISPLAY_BRINGUP.md`](docs/XZS_DISPLAY_BRINGUP.md), [`docs/XZ
   - D8-P2 SPMI + LAB/IBB display bias rails complete (tag `xzs-d8p2-power-rails-complete`).
   - D8-M5 Panel power & reset sequence complete (tag `xzs-d8m5-panel-power-reset-complete`).
   - D8-M6 Panel vendor/DCS init sequence complete (tag `xzs-d8m6-panel-dcs-complete`).
-  - D8-M8 MDP command-mode scanout closed/superseded by D8-M8.5.
-  - D8-M8.5 First Visible Display complete and sealed on hardware (tag `xzs-d8-m8.5-complete`). Physical Sharp 1080p IPS LCD panel illuminated with visible test bars across 3/3 fresh cold boots.
-  - D8-M9 First Visible Pixels satisfied by D8-M8.5.
-* **Next active milestone**: D8-M10 (Framebuffer Text Console / Interactive Shell Display).
+  - D8-M8 MDP command-mode scanout remains blocked: source fetch latches, but no PP0 scanline or DSI command-MDP completion has been observed.
+  - D8-M8.5 proves WLED, panel DCS, and rendering into the RAM framebuffer; it does **not** prove visible pixels.
+  - D8-M9 and D8-M10 are blocked on D8-M8. USB console and framebuffer-RAM rendering are not LCD evidence.
+* **Next active milestone**: source-audit the remaining Panel 9 wake/vendor-init and bootloader-handoff differences; no further MMIO experiment is justified until it yields one source-backed variable.
 
 ---
 
@@ -306,7 +306,7 @@ Details: [`docs/XZS_DISPLAY_BRINGUP.md`](docs/XZS_DISPLAY_BRINGUP.md), [`docs/XZ
 | **Phase D5** | Real root filesystem mount (RAMDisk XZSFS v1) | **COMPLETE / SEALED** |
 | **Phase D6** | PID 1 / First EL0 userspace (`initproc` / launchd) | **COMPLETE / SEALED** |
 | **Phase D7** | Interactive USB shell (`/bin/sh`) & Generic Mach-O exec | **COMPLETE / SEALED** |
-| **Phase D8** | Display subsystem: Clocks, DSI PHY/PLL, WLED & Framebuffer | **D8-M8.5 SEALED / D8-M10 ACTIVE** |
+| **Phase D8** | Display subsystem: Clocks, DSI PHY/PLL, WLED & Framebuffer | **D8-M1..M6 SEALED / D8-M8 BLOCKED** |
 | **Phase D9** | XZSAppleCompat: Apple Compatibility Services (`AppleCLCD`, `IOSurface`, `AppleKeyStore`, `xzs_amfi`, `XZSHID`) | **ACTIVE / IN PROGRESS** |
 | **Phase D10**| Authentic iOS RootFS Pipeline: IPSW extraction, HFS+ volume, Setup & Activation tweaks | **PLANNED** |
 | **Phase D11**| Apple Device Tree & Identity (`tools/mkadt.py` for iPhone X / D22AP) | **PLANNED** |
@@ -364,8 +364,8 @@ The complete reference implementation of Apple's iOS 16 userland running on Qual
 ## Current Status & Known Boundaries
 
 1. **Display Subsystem Status**:
-   - Milestone `D8-M8.5` is **COMPLETE & SEALED** on physical hardware (`BH905SX976`). The PMI8994 WLED backlight driver is functional, and the Sharp 1080p IPS LCD panel illuminates with an 8-color-bar test pattern.
-   - Milestone `D8-M10` (`xzs_fbcon`) is **ACTIVE**: Real-time console text rendering (135x120 grid) and interactive shell execution mirrored on physical LCD and USB CDC console.
+   - WLED, panel DCS, RAM framebuffer rendering, and the USB console are hardware-proven. The physical LCD backlight is active, but no pixel scanout is proven: `PP_LINE`, `PP_OUT`, `PP0_DONE`, and DSI command-MDP completion remain absent.
+   - `xzs_fbcon` renders text into RAM and mirrors the shell to USB CDC; it must not be described as an LCD console until the D8-M8 transport gate is passed.
 2. **Apple Compatibility Services Pivot**:
    - In accordance with the `XZS_IOS_HYBRID_ARCHITECTURE` blueprint, Phase D9 brings in the self-contained IOKit service providers (`XZSFramebuffer`, `XZSSurface`, `XZSKeyStore`, `xzs_amfi`, `XZSHID`) to transition from simple shell display to authentic `backboardd` / `SpringBoard` window-server execution.
 3. **devfs Pointer-Hardening Bypass**: Commit `3e417bb` bypasses `vm_kernel_addrhash` in `devfs_getattr` to prevent a SHA-256 address hashing hang during early devfs open. Classified as `XZS PLATFORM WORKAROUND` to be re-audited under Phase D9.
