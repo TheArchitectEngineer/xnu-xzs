@@ -536,6 +536,74 @@ static int xzs_rpm_glink_handshake(void)
 	return 0;
 }
 
+/* Ensure RPM Message RAM and GLINK Transport are Initialized */
+static int xzs_rpm_ensure_init(void)
+{
+	if (g_channel_open && g_tx_desc != NULL && g_rx_desc != NULL) {
+		return 0;
+	}
+
+	if (g_msgram_base == 0) {
+		g_msgram_base = (uintptr_t)ml_io_map(RPM_MSGRAM_PHYS_BASE, RPM_MSGRAM_SIZE);
+		if (g_msgram_base == 0) {
+			xzs_early_puts("[XZS-RPM] [FATAL] FAILED TO MAP RPM MESSAGE RAM\n");
+			return -1;
+		}
+	}
+	if (g_apcs_ipc_base == 0) {
+		g_apcs_ipc_base = (uintptr_t)ml_io_map(RPM_APCS_IPC_PHYS_BASE, 0x1000);
+		if (g_apcs_ipc_base == 0) {
+			xzs_early_puts("[XZS-RPM] [FATAL] FAILED TO MAP APCS IPC DOORBELL\n");
+			return -2;
+		}
+	}
+
+	uintptr_t toc_addr = g_msgram_base + RPM_MSGRAM_SIZE - RPM_TOC_SIZE;
+	struct rpm_toc *toc = (struct rpm_toc *)toc_addr;
+	if (toc->magic != RPM_TOC_MAGIC) {
+		xzs_early_puts("[XZS-RPM] [FAIL] INVALID TOC MAGIC\n");
+		return -3;
+	}
+
+	uint32_t tx_offset = 0, tx_size = 0;
+	uint32_t rx_offset = 0, rx_size = 0;
+	bool tx_found = false, rx_found = false;
+	for (uint32_t i = 0; i < toc->count; i++) {
+		if (toc->entries[i].id == RPM_TX_FIFO_ID) {
+			tx_offset = toc->entries[i].offset;
+			tx_size = toc->entries[i].size;
+			tx_found = true;
+		} else if (toc->entries[i].id == RPM_RX_FIFO_ID) {
+			rx_offset = toc->entries[i].offset;
+			rx_size = toc->entries[i].size;
+			rx_found = true;
+		}
+	}
+	if (!tx_found || !rx_found) {
+		xzs_early_puts("[XZS-RPM] [FAIL] FIFOS NOT FOUND IN TOC\n");
+		return -4;
+	}
+
+	g_tx_desc = (volatile struct channel_desc *)(g_msgram_base + tx_offset);
+	g_tx_fifo = (volatile uint8_t *)(g_msgram_base + tx_offset + 8U);
+	g_tx_fifo_size = tx_size;
+	g_rx_desc = (volatile struct channel_desc *)(g_msgram_base + rx_offset);
+	g_rx_fifo = (volatile uint8_t *)(g_msgram_base + rx_offset + 8U);
+	g_rx_fifo_size = rx_size;
+
+	g_tx_desc->write_index = 0;
+	g_rx_desc->read_index = 0;
+	xzs_rpm_wmb();
+
+	int h_rc = xzs_rpm_glink_handshake();
+	if (h_rc != 0) {
+		xzs_early_puts("[XZS-RPM] [FAIL] GLINK HANDSHAKE FAILED\n");
+		return -5;
+	}
+	xzs_early_puts("[XZS-RPM] [PASS] RPM GLINK TRANSPORT CHANNEL VERIFIED\n");
+	return 0;
+}
+
 /* Send Arbitrary KVP RPM Request and Bounded-Poll for Matching ACK */
 static int xzs_rpm_send_kvp_request_and_wait_ack(uint32_t set,
                                                  uint32_t resource_type,
@@ -544,6 +612,11 @@ static int xzs_rpm_send_kvp_request_and_wait_ack(uint32_t set,
                                                  uint32_t num_kvps,
                                                  uint32_t *out_elapsed_us)
 {
+	int init_rc = xzs_rpm_ensure_init();
+	if (init_rc != 0) {
+		return init_rc;
+	}
+
 	uint32_t msg_id = g_rpm_msg_id++;
 	uint8_t tx_buf[128] __attribute__((aligned(8))) = { 0 };
 	uint32_t payload_len = 0;

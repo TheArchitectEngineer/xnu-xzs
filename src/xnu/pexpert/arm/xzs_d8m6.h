@@ -932,9 +932,11 @@ xzs_d8m6_panel_power_up_to_idle(void)
 	xzs_d8m5_dec32(ldo22_elapsed_us);
 	xzs_diag_emit("\n");
 	if (ldo22_rc != 0) {
-		xzs_diag_emit("!!! FAIL: LDO22 touch-avdd RPM vote rejected.\n");
-		xzs_d8m5_power_down();
-		return -10;
+		xzs_diag_emit("  LDO22_VOTE_RESULT=FAIL_RC_");
+		xzs_d8m5_dec32((uint32_t)(-ldo22_rc));
+		xzs_diag_emit("\n");
+	} else {
+		xzs_diag_emit("  LDO22_VOTE_RESULT=PASS\n");
 	}
 	xzs_d8p2_delay_us(1000);
 
