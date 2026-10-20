@@ -926,7 +926,7 @@ struct xzs_debug_log {
 	char data[DRAM_LOG_SIZE]; /* 0x40 */
 };
 
-static volatile struct xzs_debug_log *g_dram_log = NULL;
+volatile struct xzs_debug_log *g_dram_log = NULL;
 
 static inline void msm_uart_write(uint32_t offset, uint32_t val)
 {

@@ -109,7 +109,7 @@ uint32_t adt_build_tree_at(uint64_t base_addr) {
     adt_put_prop("random-seed", random_seed, sizeof(random_seed));
 
     /* Child 1.1: /chosen/memory-map -> 0 children */
-    adt_put_node(2, 0);
+    adt_put_node(3, 0);
     adt_put_str("name", "memory-map");
     static const struct {
         uint64_t paddr;
@@ -119,6 +119,14 @@ uint32_t adt_build_tree_at(uint64_t base_addr) {
         .length = 0x12000ULL,    /* 73728 bytes, image plus zero padding */
     };
     adt_put_prop("RAMDisk", &ramdisk_range, sizeof(ramdisk_range));
+    static const struct {
+        uint64_t paddr;
+        uint64_t length;
+    } fb_range = {
+        .paddr = 0x98000000ULL,
+        .length = 0x800000ULL,    /* 8 MB unified framebuffer */
+    };
+    adt_put_prop("Display-FrameBuffer", &fb_range, sizeof(fb_range));
 
     /* Child 2: /defaults -> 0 children */
     adt_put_node(2, 0);
@@ -169,12 +177,12 @@ uint32_t adt_build_tree_at(uint64_t base_addr) {
     adt_put_u32("clock-frequency", 2150000000U);    /* 2.15 GHz Kryo Gold */
     adt_put_u32("memory-frequency", 1866000000U);   /* 1.866 GHz LPDDR4 */
 
-    /* Child 4: /arm-io -> 3 children (uart, gic, timer) */
+    /* Child 4: /arm-io -> 4 children (uart, gic, timer, disp0) */
     /* ranges: child_bus_base=0, parent_phys_base=0x01000000, size=0x10000000 (256MB)
      * pe_arm_get_soc_base_phys() returns ranges[1] = 0x01000000 (non-zero).
      */
     uint64_t ranges[] = { 0ULL, 0x01000000ULL, 0x10000000ULL };
-    adt_put_node(3, 3);
+    adt_put_node(3, 4);
     adt_put_str("name", "arm-io");
     adt_put_str("device_type", "arm-io");
     adt_put_u64_array("ranges", ranges, 3);
@@ -211,6 +219,15 @@ uint32_t adt_build_tree_at(uint64_t base_addr) {
     adt_put_str("name", "timer");
     adt_put_str("device_type", "timer");
     adt_put_u64_array("reg", timer_reg, 2);
+
+    /* Child 4.4: /arm-io/disp0 -> 0 children */
+    /* Matches AppleCLCD (IOMobileFramebuffer) on /arm-io/disp0 */
+    adt_put_node(5, 0);
+    adt_put_str("name", "disp0");
+    adt_put_str("device_type", "display-subsystem");
+    adt_put_str("compatible", "xzs,display");
+    adt_put_u32("canvas-width", 1080);
+    adt_put_u32("canvas-height", 1920);
 
     return (uint32_t)(adt_ptr - start);
 }

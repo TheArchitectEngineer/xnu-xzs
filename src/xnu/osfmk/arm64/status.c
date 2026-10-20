@@ -2781,6 +2781,12 @@ xzs_get_thread_user_sp(thread_t th)
 	return get_saved_state_sp(th->machine.upcb);
 }
 
+uint64_t
+xzs_get_thread_wait_event(thread_t th)
+{
+	return th ? (uint64_t)th->wait_event : 0;
+}
+
 task_t
 xzs_get_map_owning_task(vm_map_t map)
 {

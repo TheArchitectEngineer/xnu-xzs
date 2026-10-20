@@ -459,7 +459,14 @@ void bootshim_main(uint64_t dtb_phys, uint64_t current_el, uint64_t mpidr) {
     ba->deviceTreeP = (void *)ADT_BASE_ADDR;
     ba->deviceTreeLength = adt_len;
 
-    copy_string(ba->CommandLine, "console=ttyMSM0,115200 debug=0x14e serial=2 -v keepends=1 rd=md0", sizeof(ba->CommandLine));
+    ba->Video.v_baseAddr = 0x98000001ULL; /* Bit 0=1 indicates physical address to XNU initialize_screen */
+    ba->Video.v_display = 1;
+    ba->Video.v_rowBytes = 1080 * 4;
+    ba->Video.v_width = 1080;
+    ba->Video.v_height = 1920;
+    ba->Video.v_depth = 32;
+
+    copy_string(ba->CommandLine, "console=ttyMSM0,115200 debug=0x4e serial=2 -v keepsyms=1 wdt=-1 -noprogress rd=md0", sizeof(ba->CommandLine));
 
     ba->machineType = 0;
     ba->bootFlags = 0;

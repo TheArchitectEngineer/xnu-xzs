@@ -1,6 +1,6 @@
 # Sony Xperia XZs (MSM8996) — Port Status
 
-Current sealed display milestones are D8-M1..M6, D8-P1, D8-P2, D8-M8, and D8-M8.5. Milestone D8-M8.5 (First Visible Display) is COMPLETE / SEALED / HARDWARE PROVEN (tag `xzs-d8-m8.5-complete`; report `docs/XZS_D8_M8_5_FIRST_VISIBLE_DISPLAY.md`). First visible pixels are verified on physical hardware across 3/3 fresh cold boots.
+Current sealed display milestones are D8-M1..M6, D8-P1, D8-P2, D8-M8, and D8-M8.5. Milestone D8-M8.5 (First Visible Display) is COMPLETE / SEALED / HARDWARE PROVEN (tag `xzs-d8-m8.5-complete`; report `docs/XZS_D8_M8_5_FIRST_VISIBLE_DISPLAY.md`). Milestone D8-M10 (Hardware Evaluation & Diagnostic Shell) is EVALUATED on physical hardware (`BH905SX976`, report `docs/XZS_D8_M10_HARDWARE_EVALUATION.md`). Phase D9 (Apple Compatibility Services Layer) is INTEGRATED under the hybrid architecture blueprint (`docs/XZS_IOS_HYBRID_ARCHITECTURE.md`).
 
 ```text
 D7-T1   = PASS (USB transport)
@@ -15,6 +15,11 @@ D8-M5   = PASS (Panel power & reset lifecycle; COMPLETE & SEALED)
 D8-M6   = PASS (Panel vendor/DCS initialization sequence; COMPLETE & SEALED)
 D8-M8   = PASS (MDP scanout / command transport; COMPLETE & SEALED)
 D8-M8.5 = PASS (First Visible Display: WLED Backlight + Visible Frame; COMPLETE & SEALED)
+D8-M10  = EVALUATED (WLED Backlight Active 50%, Scanout Pixel Gating Analyzed; report docs/XZS_D8_M10_HARDWARE_EVALUATION.md)
+D9-M1   = COMPLETE (AppleCLCD & IOCoreSurfaceRoot / XZSFramebuffer & XZSSurface integrated)
+D9-M2   = COMPLETE (xzs_amfi.c permissive Sandbox & AMFI MAC policies integrated)
+D9-M3   = COMPLETE (XZSKeyStore.cpp AppleKeyStore stub integrated)
+D10     = NEXT (Generate HFS+ userdata rootfs and boot authentic iOS launchd)
 ```
 
 D8-M3 hardware verification summary:

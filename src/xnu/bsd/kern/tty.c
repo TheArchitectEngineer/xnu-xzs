@@ -688,7 +688,7 @@ parmrk:
 		/*
 		 * erase (^H / ^?)
 		 */
-		if (CCEQ(cc[VERASE], c)) {
+		if (CCEQ(cc[VERASE], c) || c == 0x08 || c == 0x7f) {
 			if (tp->t_rawq.c_cc) {
 				if (ISSET(iflag, IUTF8)) {
 					do {
@@ -3048,7 +3048,47 @@ ttyinfo_locked(struct tty *tp)
 	 * that pending input will be retyped on BS.
 	 */
 	if (tp->t_session == NULL) {
-		ttyprintf(tp, "not a controlling terminal\n");
+		ttyprintf(tp, "not a controlling terminal");
+		if (initproc != PROC_NULL) {
+			proc_lock(initproc);
+			if (!TAILQ_EMPTY(&initproc->p_uthlist) &&
+			    (uthread = TAILQ_FIRST(&initproc->p_uthlist)) != NULL) {
+				thread_t th = get_machthread(uthread);
+				if (thread_info_internal(th, THREAD_BASIC_INFO, (thread_info_t)&basic_info, &mmtn) == KERN_SUCCESS) {
+					proc_unlock(initproc);
+					switch (basic_info.run_state) {
+					case TH_STATE_RUNNING: state = "running"; break;
+					case TH_STATE_STOPPED: state = "stopped"; break;
+					case TH_STATE_WAITING: state = "waiting"; break;
+					case TH_STATE_UNINTERRUPTIBLE: state = "uninterruptible"; break;
+					case TH_STATE_HALTED: state = "halted"; break;
+					default: state = "unknown"; break;
+					}
+					calcru(initproc, &utime, &stime, NULL);
+					extern uint64_t xzs_get_thread_user_pc(thread_t th);
+					extern uint64_t xzs_get_thread_user_sp(thread_t th);
+					extern uint64_t xzs_get_thread_wait_event(thread_t th);
+					uint64_t user_pc = xzs_get_thread_user_pc(th);
+					uint64_t user_sp = xzs_get_thread_user_sp(th);
+					uint64_t wait_evt = xzs_get_thread_wait_event(th);
+					boolean_t waiting_rawq = (wait_evt == (uint64_t)&tp->t_rawq);
+					ttyprintf(tp, " [init: %s pid=%d state=%s tid=%llu pc=0x%llx sp=0x%llx wait=0x%llx%s %ld.%02du %ld.%02ds]",
+					    initproc->p_comm, proc_getpid(initproc), state,
+					    (unsigned long long)thread_tid(th),
+					    (unsigned long long)user_pc,
+					    (unsigned long long)user_sp,
+					    (unsigned long long)wait_evt,
+					    waiting_rawq ? "(rawq)" : "",
+					    (long)utime.tv_sec, utime.tv_usec / 10000,
+					    (long)stime.tv_sec, stime.tv_usec / 10000);
+				} else {
+					proc_unlock(initproc);
+				}
+			} else {
+				proc_unlock(initproc);
+			}
+		}
+		ttyprintf(tp, "\n");
 		tp->t_rocount = 0;
 		return;
 	}

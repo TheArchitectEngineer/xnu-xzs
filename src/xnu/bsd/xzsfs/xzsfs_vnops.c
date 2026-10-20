@@ -156,6 +156,7 @@ xzsfs_readdir(struct vnop_readdir_args *ap)
     struct dirent de;
     off_t startpos, pos;
     int error = 0;
+    int numdirent = 0;
 
     if (vp->v_type != VDIR) {
         return ENOTDIR;
@@ -206,12 +207,20 @@ xzsfs_readdir(struct vnop_readdir_args *ap)
             if (error != 0) {
                 break;
             }
+            numdirent++;
         }
         pos += de.d_reclen;
         entry_idx++;
     }
 
     uio_setoffset(uio, pos);
+    if (ap->a_eofflag) {
+        *ap->a_eofflag = (pos <= startpos || numdirent == 0) ? 1 : 0;
+    }
+    if (ap->a_numdirent) {
+        *ap->a_numdirent = numdirent;
+    }
+
     return error;
 }
 

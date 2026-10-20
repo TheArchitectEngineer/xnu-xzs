@@ -85,10 +85,16 @@ D8-M6      Panel vendor/DCS init sequence    COMPLETE
 D8-M8      MDP command-mode scanout          CLOSED / SUPERSEDED BY D8-M8.5
 D8-M8.5    First Visible Display (WLED/DCS)  COMPLETE / SEALED / HW_PROVEN
 D8-M9      First Visible Pixels              SATISFIED BY D8-M8.5
-D8-M10     Framebuffer Text Console / Shell  NEXT / ACTIVE
+D8-M10     Framebuffer Text Console / Shell  ACTIVE / IN PROGRESS
+
+Phase D9   Apple Compatibility Services      ACTIVE / IN PROGRESS
+Phase D10  Authentic iOS RootFS & Storage    PLANNED
+Phase D11  Apple Device Tree (iPhone X)      PLANNED
+Phase D12  Full iOS Userland GUI Boot        TARGET
 ```
 
 Tags that name durable milestones: `xzs-d7t1-complete`, `xzs-d7t2-full-complete`, `xzs-d8-m1-complete`, `xzs-d8-m2-complete`, `xzs-d8m3-display-pll-phy-complete`, `xzs-d8m4-dsi-host-complete`, `xzs-d8p1-gpio-complete`, `xzs-d8p2-power-rails-complete`, `xzs-d8m5-panel-power-reset-complete`, `xzs-d8m6-panel-dcs-complete`, `xzs-d8-m8.5-complete`.
+Reference blueprint: [`docs/XZS_IOS_HYBRID_ARCHITECTURE.md`](docs/XZS_IOS_HYBRID_ARCHITECTURE.md).
 
 ## Generic Native Mach-O Execution (Phase D7-T2)
 
@@ -300,17 +306,13 @@ Details: [`docs/XZS_DISPLAY_BRINGUP.md`](docs/XZS_DISPLAY_BRINGUP.md), [`docs/XZ
 | **Phase D5** | Real root filesystem mount (RAMDisk XZSFS v1) | **COMPLETE / SEALED** |
 | **Phase D6** | PID 1 / First EL0 userspace (`initproc` / launchd) | **COMPLETE / SEALED** |
 | **Phase D7** | Interactive USB shell (`/bin/sh`) & Generic Mach-O exec | **COMPLETE / SEALED** |
-| **Phase D8** | Display audit, power/clocks, and DSI scanout | **D8-M1..M6 PASS / D8-M8 DEFERRED / INCOMPLETE** |
-| **Phase D9** | XZSPlatform hardware/platform compatibility layer | **PLANNED** |
-| **Phase D10**| Core native device drivers | **PLANNED** |
-| **Phase D11**| System hardware integration | **PLANNED** |
-| **Phase D12**| XZSAppleCompat (Apple-facing hardware compatibility layer) | **PLANNED** |
-| **Phase D13**| Darwin / iOS userland compatibility | **PLANNED** |
-| **Phase D14**| First old-iOS userland boot | **PLANNED** |
-| **Phase D15**| iOS service bring-up | **PLANNED** |
-| **Phase D16**| Graphical iOS userland / SpringBoard investigation | **PLANNED** |
+| **Phase D8** | Display subsystem: Clocks, DSI PHY/PLL, WLED & Framebuffer | **D8-M8.5 SEALED / D8-M10 ACTIVE** |
+| **Phase D9** | XZSAppleCompat: Apple Compatibility Services (`AppleCLCD`, `IOSurface`, `AppleKeyStore`, `xzs_amfi`, `XZSHID`) | **ACTIVE / IN PROGRESS** |
+| **Phase D10**| Authentic iOS RootFS Pipeline: IPSW extraction, HFS+ volume, Setup & Activation tweaks | **PLANNED** |
+| **Phase D11**| Apple Device Tree & Identity (`tools/mkadt.py` for iPhone X / D22AP) | **PLANNED** |
+| **Phase D12**| Authentic iOS Userland Boot: `/sbin/launchd` -> `backboardd` -> `SpringBoard` GUI | **TARGET** |
 
-Full specifications and milestone criteria are detailed in [`docs/XZS_ROADMAP.md`](docs/XZS_ROADMAP.md).
+Full specifications and milestone criteria are detailed in [`docs/XZS_ROADMAP.md`](docs/XZS_ROADMAP.md) and [`docs/XZS_IOS_HYBRID_ARCHITECTURE.md`](docs/XZS_IOS_HYBRID_ARCHITECTURE.md).
 
 
 ---
@@ -320,8 +322,9 @@ Full specifications and milestone criteria are detailed in [`docs/XZS_ROADMAP.md
 To maintain engineering rigor and keep generic XNU maintainable:
 1. **Upstream Alignment**: Keep generic XNU code as close to canonical Apple/Darwin semantics as practical.
 2. **Platform Encapsulation**: All Qualcomm MSM8996 and Sony Xperia specific hardware behaviors must be encapsulated within `XZSPlatform`.
-3. **Compatibility Shimming**: Apple-specific expectations (IORegistry planes, property trees, power sources) are isolated within `XZSAppleCompat`.
-4. **Audit and Retirement**: Temporary bring-up workarounds (e.g. `devfs_getattr` pointer-hardening bypass `3e417bb`) are tracked as technical debt and slated for systematic retirement under Phase D9.
+3. **Compatibility Shimming (`XZSAppleCompat`)**: Apple-specific expectations (`AppleCLCD` / `IOMobileFramebuffer`, `IOCoreSurfaceRoot` / `IOSurface`, `AppleKeyStore`, `IOHIDEventService`, permissive AMFI/Sandbox) are ported from the proven `ios-sweet` architectural model into `xnu-xzs`.
+4. **Continuous Framebuffer Decoupling**: Rather than requiring kernel-level DPU composition, userland window compositing (`backboardd` / `RenderServer`) renders via CPU software rasterization into `IOSurface` buffers, which `XZSFramebuffer` copies to physical RAM (`0x83401000` / `0x98000000`).
+5. **Audit and Retirement**: Temporary bring-up workarounds (e.g. `devfs_getattr` pointer-hardening bypass `3e417bb`) are tracked as technical debt and slated for systematic retirement under Phase D9.
 
 ---
 
@@ -329,25 +332,23 @@ To maintain engineering rigor and keep generic XNU maintainable:
 
 The project models authentic iOS userland execution through an extracted-image paradigm:
 ```text
-Legally obtained Apple IPSW
+Authentic Apple iPhone IPSW
         ↓
-Extract compatible iOS root/userland
+mkiosroot.sh (Merge OS, SystemOS, AppOS Cryptexes into single HFS+ volume)
         ↓
-Prepare project-specific root filesystem/image
+sweet-root-tweaks.py (DataMigration bypass, Hactivation, Setup skip, disable watchdogs)
         ↓
-Boot using xnu-xzs / target-compatible XNU
+Flash to eMMC userdata partition (/dev/disk0s54)
         ↓
-Mount iOS userland
+Boot via xnu-xzs / bootshim with unified ADT payload
         ↓
-Execute authentic Apple launchd
+Mount HFS+ root volume (rd=emmcroot0)
+        ↓
+Execute authentic Apple launchd -> backboardd -> SpringBoard
 ```
 
-### Version Compatibility Principle
-An older iOS userland cannot automatically be assumed compatible with the current macOS Sequoia bring-up XNU kernel. The project audits:
-```text
-Target iOS Version ↔ Darwin Version ↔ XNU Version ↔ dyld Version ↔ launchd Version ↔ IOKit ABI
-```
-The modular `XZSPlatform` design ensures that board support and native drivers can be re-targeted to an XNU branch matching the selected iOS version if needed.
+### Reference Architecture: `ios-sweet`
+The complete reference implementation of Apple's iOS 16 userland running on Qualcomm silicon has been incorporated into the project repository (`ios-sweet/`, excluded via `.gitignore`). The architectural synthesis is detailed in [`docs/XZS_IOS_HYBRID_ARCHITECTURE.md`](docs/XZS_IOS_HYBRID_ARCHITECTURE.md).
 
 ---
 
@@ -360,18 +361,23 @@ The modular `XZSPlatform` design ensures that board support and native drivers c
 
 ---
 
-## Known Limitations
+## Current Status & Known Boundaries
 
-1. **Display is not scanning**: D8-M1 topology audit passed. D8-M2 has powered MDSS and verified clocks on physical hardware. D8-M3 has locked DSI0 PLL (`0x2f`), unhalted MMCC BYTE0/PCLK0/ESC0 branches (`CBCR=1, halt=0`), and verified 14nm PHY lanes. D8-M4 (DSI0 host controller bring-up) is the next milestone. Panel power, backlight, and framebuffer scanout follow in subsequent milestones.
-2. **devfs Pointer-Hardening Bypass**: Commit `3e417bb` bypasses `vm_kernel_addrhash` in `devfs_getattr` to prevent a SHA-256 address hashing hang during early devfs open. Classified as `XZS PLATFORM WORKAROUND` to be re-audited under Phase D9.
-3. **Deferred Subsystems**: Advanced networking (Skywalk, lo0) and DTrace FBT are temporarily deferred until required drivers are active.
+1. **Display Subsystem Status**:
+   - Milestone `D8-M8.5` is **COMPLETE & SEALED** on physical hardware (`BH905SX976`). The PMI8994 WLED backlight driver is functional, and the Sharp 1080p IPS LCD panel illuminates with an 8-color-bar test pattern.
+   - Milestone `D8-M10` (`xzs_fbcon`) is **ACTIVE**: Real-time console text rendering (135x120 grid) and interactive shell execution mirrored on physical LCD and USB CDC console.
+2. **Apple Compatibility Services Pivot**:
+   - In accordance with the `XZS_IOS_HYBRID_ARCHITECTURE` blueprint, Phase D9 brings in the self-contained IOKit service providers (`XZSFramebuffer`, `XZSSurface`, `XZSKeyStore`, `xzs_amfi`, `XZSHID`) to transition from simple shell display to authentic `backboardd` / `SpringBoard` window-server execution.
+3. **devfs Pointer-Hardening Bypass**: Commit `3e417bb` bypasses `vm_kernel_addrhash` in `devfs_getattr` to prevent a SHA-256 address hashing hang during early devfs open. Classified as `XZS PLATFORM WORKAROUND` to be re-audited under Phase D9.
+4. **Deferred Subsystems**: Advanced networking (Skywalk, lo0) and DTrace FBT are temporarily deferred until required drivers are active.
 
 ---
 
 ## Documentation Index
 
 ### Core Architecture & Strategy
-* [Project Roadmap](docs/XZS_ROADMAP.md) — Authoritative multi-phase development roadmap (Phases A through D16).
+* [iOS Hybrid Architecture Blueprint](docs/XZS_IOS_HYBRID_ARCHITECTURE.md) — Comprehensive technical blueprint importing the `ios-sweet` architecture onto Sony Xperia XZs (MSM8996).
+* [Project Roadmap](docs/XZS_ROADMAP.md) — Authoritative multi-phase development roadmap (Phases A through D12).
 * [Architecture Overview](docs/XZS_ARCHITECTURE.md) — End-to-end boot architecture, execution flow, and platform design.
 * [Workarounds & Compatibility Matrix](docs/XZS_WORKAROUNDS.md) — Active shims, workarounds, and classification taxonomy.
 * [Technical Debt & Backlog](docs/XZS_TECHNICAL_DEBT.md) — Architectural debt inventory, risks, and remediation plans.

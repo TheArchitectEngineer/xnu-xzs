@@ -60,6 +60,9 @@ extern vm_offset_t ml_static_vtop(vm_offset_t va);
 /* DSI Packet Data Types */
 #define DSI_DCS_SHORT_WRITE_0_PARAM         0x05u
 #define DSI_DCS_SHORT_WRITE_1_PARAM         0x15u
+#define DSI_GENERIC_SHORT_WRITE_0_PARAM     0x03u
+#define DSI_GENERIC_SHORT_WRITE_1_PARAM     0x13u
+#define DSI_GENERIC_SHORT_WRITE_2_PARAM     0x23u
 #define DSI_GENERIC_LONG_WRITE              0x29u
 #define DSI_DCS_LONG_WRITE                  0x39u
 
@@ -191,6 +194,40 @@ static const struct xzs_d8m6_cmd s_cmd_dt_on_12 = {
 	.post_wait_us = 0,
 };
 
+/*
+ * Authentic Sony Xperia XZs Panel 9 (somc,sharp_synaptics_cmd_9_panel)
+ * Commands directly extracted from panel9.dtsi:357 (qcom,mdss-dsi-on-command)
+ */
+static const uint8_t s_p9_payload_51[2]  = { 0x51, 0xff };
+static const uint8_t s_p9_payload_53[2]  = { 0x53, 0x0c };
+static const uint8_t s_p9_payload_55[2]  = { 0x55, 0x00 };
+static const uint8_t s_p9_payload_35[2]  = { 0x35, 0x00 };
+static const uint8_t s_p9_payload_b0[2]  = { 0xb0, 0x04 };
+static const uint8_t s_p9_payload_d6[2]  = { 0xd6, 0x01 };
+static const uint8_t s_p9_payload_c9[9]  = { 0xc9, 0x1f, 0x60, 0x1f, 0x60, 0x90, 0x90, 0xc4, 0x00 };
+static const uint8_t s_p9_payload_d5[12] = { 0xd5, 0x66, 0x00, 0x00, 0x01, 0x25, 0x01, 0x25, 0x00, 0x25, 0x00, 0x25 };
+static const uint8_t s_p9_payload_d0[17] = { 0xd0, 0x19, 0x01, 0x91, 0x0b, 0x94, 0x0f, 0x0a, 0x00, 0x00, 0x00, 0x19, 0x99, 0x00, 0x00, 0x00, 0x00 };
+static const uint8_t s_p9_payload_d3[29] = { 0xd3, 0x1b, 0x3b, 0xbb, 0xbd, 0xb5, 0x33, 0x33, 0x33, 0x00, 0x80, 0xa6, 0xa0, 0x5f, 0x5f, 0x33, 0x33, 0x33, 0xf7, 0xf2, 0x0f, 0x7d, 0x7c, 0xff, 0x0f, 0x99, 0x00, 0xff, 0xff };
+static const uint8_t s_p9_payload_d7[33] = { 0xd7, 0x04, 0xff, 0x23, 0x55, 0x47, 0x1e, 0xfe, 0x78, 0xf0, 0x19, 0xa8, 0x0f, 0x38, 0x3e, 0x60, 0x1c, 0x0f, 0x8f, 0xc7, 0xe3, 0x99, 0xe1, 0x20, 0x00, 0x00, 0x00, 0x00, 0xf0, 0xeb, 0x39, 0x18, 0x07 };
+static const uint8_t s_p9_payload_c1[32] = { 0xc1, 0x84, 0x00, 0x00, 0x00, 0x88, 0x01, 0x00, 0x40, 0xc0, 0x35, 0xe6, 0x1a, 0x63, 0xcd, 0xb1, 0xe6, 0xc0, 0x7a, 0x00, 0xc8, 0x08, 0x00, 0x00, 0xaa, 0x40, 0x02, 0x82, 0x01, 0x08, 0x00, 0x01 };
+static const uint8_t s_p9_payload_c7[31] = { 0xc7, 0x06, 0x10, 0x1a, 0x23, 0x35, 0x44, 0x4e, 0x5d, 0x42, 0x4b, 0x57, 0x64, 0x6b, 0x71, 0x79, 0x04, 0x0e, 0x19, 0x22, 0x35, 0x43, 0x4e, 0x5d, 0x42, 0x4a, 0x55, 0x63, 0x6b, 0x70, 0x79 };
+static const uint8_t s_p9_payload_c8[20] = { 0xc8, 0x01, 0x00, 0xfd, 0x01, 0xff, 0xfc, 0x00, 0x00, 0xfd, 0x01, 0xff, 0xfc, 0x00, 0x00, 0xfd, 0x01, 0xff, 0xfc, 0x00 };
+
+static const struct xzs_d8m6_cmd s_p9_cmd_51 = { .name = "P9_CMD1 (51 FF Brightness)", .dtype = DSI_DCS_LONG_WRITE, .dlen = 2, .payload = s_p9_payload_51, .post_wait_us = 0 };
+static const struct xzs_d8m6_cmd s_p9_cmd_53 = { .name = "P9_CMD2 (53 0C Ctrl Disp)",  .dtype = DSI_DCS_LONG_WRITE, .dlen = 2, .payload = s_p9_payload_53, .post_wait_us = 0 };
+static const struct xzs_d8m6_cmd s_p9_cmd_55 = { .name = "P9_CMD3 (55 00 CABC)",       .dtype = DSI_DCS_LONG_WRITE, .dlen = 2, .payload = s_p9_payload_55, .post_wait_us = 0 };
+static const struct xzs_d8m6_cmd s_p9_cmd_35 = { .name = "P9_CMD4 (35 00 TEON)",       .dtype = DSI_DCS_LONG_WRITE, .dlen = 2, .payload = s_p9_payload_35, .post_wait_us = 0 };
+static const struct xzs_d8m6_cmd s_p9_cmd_b0 = { .name = "P9_CMD5 (B0 04 Unlock)",     .dtype = DSI_GENERIC_SHORT_WRITE_2_PARAM, .dlen = 2, .payload = s_p9_payload_b0, .post_wait_us = 0 };
+static const struct xzs_d8m6_cmd s_p9_cmd_d6 = { .name = "P9_CMD6 (D6 01 TE Output)",  .dtype = DSI_GENERIC_SHORT_WRITE_2_PARAM, .dlen = 2, .payload = s_p9_payload_d6, .post_wait_us = 0 };
+static const struct xzs_d8m6_cmd s_p9_cmd_c9 = { .name = "P9_CMD7 (C9 Oscillator)",     .dtype = DSI_GENERIC_LONG_WRITE, .dlen = 9, .payload = s_p9_payload_c9, .post_wait_us = 0 };
+static const struct xzs_d8m6_cmd s_p9_cmd_d5 = { .name = "P9_CMD8 (D5 Timing)",         .dtype = DSI_GENERIC_LONG_WRITE, .dlen = 12, .payload = s_p9_payload_d5, .post_wait_us = 0 };
+static const struct xzs_d8m6_cmd s_p9_cmd_d0 = { .name = "P9_CMD9 (D0 Timing)",         .dtype = DSI_GENERIC_LONG_WRITE, .dlen = 17, .payload = s_p9_payload_d0, .post_wait_us = 0 };
+static const struct xzs_d8m6_cmd s_p9_cmd_d3 = { .name = "P9_CMD10 (D3 Gate Timing)",   .dtype = DSI_GENERIC_LONG_WRITE, .dlen = 29, .payload = s_p9_payload_d3, .post_wait_us = 0 };
+static const struct xzs_d8m6_cmd s_p9_cmd_d7 = { .name = "P9_CMD11 (D7 Source Timing)", .dtype = DSI_GENERIC_LONG_WRITE, .dlen = 33, .payload = s_p9_payload_d7, .post_wait_us = 0 };
+static const struct xzs_d8m6_cmd s_p9_cmd_c1 = { .name = "P9_CMD12 (C1 Power / Bias)",  .dtype = DSI_GENERIC_LONG_WRITE, .dlen = 32, .payload = s_p9_payload_c1, .post_wait_us = 0 };
+static const struct xzs_d8m6_cmd s_p9_cmd_c7 = { .name = "P9_CMD13 (C7 Gamma)",         .dtype = DSI_GENERIC_LONG_WRITE, .dlen = 31, .payload = s_p9_payload_c7, .post_wait_us = 0 };
+static const struct xzs_d8m6_cmd s_p9_cmd_c8 = { .name = "P9_CMD14 (C8 Gamma 2)",       .dtype = DSI_GENERIC_LONG_WRITE, .dlen = 20, .payload = s_p9_payload_c8, .post_wait_us = 0 };
+
 /* Master Command Table */
 static const struct xzs_d8m6_cmd s_cmd_slpout = {
 	.name = "SLPOUT (Sleep Out 0x11)",
@@ -259,7 +296,11 @@ xzs_d8m6_encode_packet(const struct xzs_d8m6_cmd *cmd, uint8_t *buf, size_t buf_
 
 	memset(buf, 0, buf_size);
 
-	if (cmd->dtype == DSI_DCS_SHORT_WRITE_0_PARAM || cmd->dtype == DSI_DCS_SHORT_WRITE_1_PARAM) {
+	if (cmd->dtype == DSI_DCS_SHORT_WRITE_0_PARAM ||
+	    cmd->dtype == DSI_DCS_SHORT_WRITE_1_PARAM ||
+	    cmd->dtype == DSI_GENERIC_SHORT_WRITE_0_PARAM ||
+	    cmd->dtype == DSI_GENERIC_SHORT_WRITE_1_PARAM ||
+	    cmd->dtype == DSI_GENERIC_SHORT_WRITE_2_PARAM) {
 		/*
 		 * Short Write Packet Format (4 bytes):
 		 *   data[0] = cmd payload[0] (e.g. 0x11)

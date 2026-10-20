@@ -8,6 +8,21 @@
 
 #include "xzs_d8m3_data.h"
 
+static inline void
+xzs_m3_delay_us(uint32_t usec)
+{
+	uint64_t ticks = ((uint64_t)usec * 192ULL) / 10ULL;
+	uint64_t start, cur;
+	extern void xzs_watchdog_pet(void);
+	xzs_watchdog_pet();
+	__asm__ volatile ("isb\n\tmrs %0, cntvct_el0" : "=r" (start));
+	do {
+		__asm__ volatile ("mrs %0, cntvct_el0" : "=r" (cur));
+	} while ((cur - start) < ticks);
+}
+#undef delay
+#define delay(usec) xzs_m3_delay_us((uint32_t)(usec))
+
 static int s_m3_attempted = 0;
 
 static int

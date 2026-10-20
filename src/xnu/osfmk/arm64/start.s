@@ -1496,7 +1496,16 @@ xzs_watchdog_arm:
 	cbz		w0, 1f
 	b		2f
 1:	MOV64	x0, 0xF0000			// ~30 seconds (983040 ticks at 32765 Hz)
-2:	// 1. Pre-seed Fastboot restart reason in IMEM SRAM
+2:	mrs		x5, DAIF
+	msr		DAIFSet, #0x2		// Mask IRQ
+	adrp	x3, EXT(g_xzs_ttbr0)@page
+	add		x3, x3, EXT(g_xzs_ttbr0)@pageoff
+	ldr		x3, [x3]
+	cbz		x3, 3f
+	mrs		x4, TTBR0_EL1
+	msr		TTBR0_EL1, x3
+	isb		sy
+3:	// 1. Pre-seed Fastboot restart reason in IMEM SRAM
 	MOV64	x1, 0x066bf65c
 	MOV64	x2, 0x77665500
 	str		w2, [x1]
@@ -1515,6 +1524,12 @@ xzs_watchdog_arm:
 	str		w2, [x1]			// WDT_EN = 1
 	dsb		sy
 	isb
+
+	// Restore TTBR0_EL1 if switched
+	cbz		x3, 4f
+	msr		TTBR0_EL1, x4
+	isb		sy
+4:	msr		DAIF, x5
 	ret
 
 	.globl EXT(xzs_watchdog_pet)
@@ -1528,7 +1543,13 @@ xzs_watchdog_pet:
 	.globl EXT(xzs_record_fault)
 LEXT(xzs_record_fault)
 xzs_record_fault:
-	// Pre-seed Fastboot restart reason
+	adrp	x6, EXT(g_xzs_ttbr0)@page
+	add		x6, x6, EXT(g_xzs_ttbr0)@pageoff
+	ldr		x6, [x6]
+	cbz		x6, 1f
+	msr		TTBR0_EL1, x6
+	isb		sy
+1:	// Pre-seed Fastboot restart reason
 	MOV64	x4, 0x066bf65c
 	MOV64	x5, 0x77665500
 	str		w5, [x4]
