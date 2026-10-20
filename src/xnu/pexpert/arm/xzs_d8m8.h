@@ -467,7 +467,7 @@ xzs_d8m8_dryrun(void)
 
 	xzs_diag_emit("\n[M8-DRY-80] CTL0 ROUTING (0x00902000)\n");
 	xzs_diag_emit("  STEP 19: BLOCK=CTL0 REG=CTL_LAYER_0 ADDR=0x00902000 MASK=0x000003ff VALUE=0x00000200 EVIDENCE=SOURCE_PROVEN DEPENDENCY=SSPP_RGB0\n");
-	xzs_diag_emit("  STEP 20: BLOCK=CTL0 REG=CTL_TOP ADDR=0x00902014 MASK=0x000200f0 VALUE=0x00020010 EVIDENCE=SOURCE_PROVEN DEPENDENCY=INTF1\n");
+	xzs_diag_emit("  STEP 20: BLOCK=CTL0 REG=CTL_TOP ADDR=0x00902014 MASK=0x000200f0 VALUE=0x00020020 EVIDENCE=SOURCE_PROVEN DEPENDENCY=INTF1\n");
 
 	xzs_diag_emit("\n[M8-DRY-90] FLUSH\n");
 	xzs_diag_emit("  STEP 21: BLOCK=CTL0 REG=CTL_FLUSH ADDR=0x00902018 MASK=0xffffffff VALUE=0x00020048 EVIDENCE=SOURCE_PROVEN DEPENDENCY=CTL_CFG\n");
@@ -1740,7 +1740,13 @@ xzs_m8_write_reg(const char *name, uint32_t addr, uint32_t val, uint32_t expecte
 static void
 xzs_d8m8_fb_init(void)
 {
-	xzs_breadcrumb(0xB1100u, 0u); /* M8-1 entered */
+	/*
+	 * Keep the framebuffer path independent of the persistent breadcrumb
+	 * transport.  That transport writes directly to IMEM and a fixed DRAM
+	 * address before it prints anything; a fault or stalled fabric there makes
+	 * an otherwise valid framebuffer mapping look like a display failure.
+	 * The shell transcript below is sufficient to localize this routine.
+	 */
 	xzs_diag_emit("\n=======================================================\n");
 	xzs_diag_emit("=== [M8-1] FRAMEBUFFER ALLOCATION & PATTERN FILL    ===\n");
 	xzs_diag_emit("=======================================================\n");
@@ -1756,7 +1762,6 @@ xzs_d8m8_fb_init(void)
 		return;
 	}
 
-	xzs_breadcrumb(0xB1110u, 0u); /* before mapping/lookup */
 	if (g_m8_fb_va == 0) {
 		xzs_diag_emit("  [MAP] Mapping physical framebuffer via ml_io_map_unmappable...\n");
 		xzs_watchdog_pet();
@@ -1767,8 +1772,6 @@ xzs_d8m8_fb_init(void)
 		xzs_diag_emit("!!! M8-1 FAIL: ml_io_map_unmappable returned NULL!\n");
 		return;
 	}
-	xzs_breadcrumb(0xB1120u, 0u); /* mapping/lookup complete */
-
 	xzs_diag_emit("  FB_PA       = 0x"); xzs_d8p1_hex32(g_m8_fb_pa); xzs_diag_emit("\n");
 	xzs_diag_emit("  FB_VA       = 0x");
 	xzs_d8p1_hex32((uint32_t)(g_m8_fb_va >> 32));
@@ -1781,22 +1784,13 @@ xzs_d8m8_fb_init(void)
 	xzs_diag_emit("  FB_ALIGNMENT= 128\n");
 	xzs_diag_emit("  FB_FORMAT   = XRGB8888\n");
 
-	xzs_breadcrumb(0xB1130u, 0u); /* PA/VA checked; before probe log */
 	xzs_diag_emit("  [PROBE] Reading word 0 from FB_VA...\n");
-	xzs_breadcrumb(0xB1140u, 0u); /* immediately before first FB load */
 	uint32_t probe_val = *(volatile uint32_t *)g_m8_fb_va;
-	xzs_breadcrumb(0xB1150u, 0u); /* first FB load returned */
-	xzs_breadcrumb(0xB1160u, 0u); /* before probe prefix output */
 	xzs_diag_emit("  [PROBE] Word 0 = 0x");
-	xzs_breadcrumb(0xB1170u, 0u); /* prefix console call returned */
-	xzs_breadcrumb(0xB1180u, 0u); /* before value formatter */
 	char probe_hex[9];
 	xzs_d8m8_word0_hex(probe_val, probe_hex);
-	xzs_breadcrumb(0xB1190u, 0u); /* formatter returned */
 	xzs_diag_emit(probe_hex);
-	xzs_breadcrumb(0xB1191u, 0u); /* value console call returned */
 	xzs_diag_emit(" (READ PASS)\n");
-	xzs_breadcrumb(0xB1192u, 0u); /* suffix console call returned */
 
 	xzs_diag_emit("  [PROBE] Writing word 0 to FB_VA...\n");
 	*(volatile uint32_t *)g_m8_fb_va = 0x000000ffu;
@@ -1876,7 +1870,6 @@ xzs_d8m8_fb_init(void)
 
 	g_m8_fb_initialized = true;
 	g_m8_fb_cache_cleaned = true;
-	xzs_breadcrumb(0xB11A0u, 0u); /* M8-1 validation complete */
 
 	xzs_diag_emit("  FB_ALLOC         = PASS\n");
 	xzs_diag_emit("  FB_ALIGNMENT     = PASS\n");
@@ -1887,8 +1880,6 @@ xzs_d8m8_fb_init(void)
 	xzs_diag_emit("[D8-M8] CTL_START_COUNT=0\n");
 	xzs_diag_emit("[D8-M8] MDP_KICKOFF_COUNT=0\n");
 	xzs_diag_emit("[D8-M8] FRAMEBUFFER_SCANOUT_COUNT=0\n");
-	xzs_breadcrumb(0xB11A1u, 0u); /* M8-1 PASS output returned */
-	xzs_breadcrumb(0xC1100u, 0u); /* R11C: M8-1 complete */
 }
 
 /*
@@ -2094,8 +2085,12 @@ xzs_d8m8_stream_config(void)
 	/* Step 3: Tear check disabled to allow immediate autonomous scanout without waiting for external TE pin */
 	xzs_m8_write_reg("PP0_TEAR_CHECK_EN ", 0x00971000u, 0x00000000u, 0x00000000u, false);
 
-	/* D8-M8.5 Golden Baseline: Set PP0 Autorefresh to 0x80000001 for continuous 60 Hz display refresh */
-	xzs_write_pp0_autorefresh("xzs_d8m8_stream_config", "STREAM_CONFIG", 0x80000001u);
+	/*
+	 * Panel 9 uses the normal one-shot command path.  Sony LK leaves
+	 * PP0_AUTOREFRESH at zero and issues CTL_START for the frame; bit 31 is
+	 * only used by Linux's separate autorefresh feature.
+	 */
+	xzs_write_pp0_autorefresh("xzs_d8m8_stream_config", "STREAM_CONFIG", 0x00000000u);
 	uint32_t ar_after_pp = d8p1_read32(0x00971030u);
 	xzs_diag_emit("AUTOREFRESH_AFTER_PP_CONFIG=0x"); xzs_d8p1_hex32(ar_after_pp); xzs_diag_emit("\n");
 
@@ -2163,7 +2158,8 @@ xzs_d8m8_ctl_config(void)
 
 	xzs_m8_write_reg("DISP_INTF_SEL    ", 0x00901004u, 0x00000100u, 0x00000100u, false);
 	xzs_m8_write_reg("CTL_LAYER_0      ", 0x00902000u, 0x00000200u, 0x00000200u, false);
-	xzs_m8_write_reg("CTL_TOP          ", 0x00902014u, 0x00020010u, 0x00020010u, false);
+	/* CMD mode + MDSS_MDP_INTF1 (enum value 2) selected for DSI0. */
+	xzs_m8_write_reg("CTL_TOP          ", 0x00902014u, 0x00020020u, 0x00020020u, false);
 
 	/* HARD GUARD: Ensure CTL_START was NOT touched */
 	uint32_t ctl_start = d8p1_read32(0x0090201cu);
@@ -2178,7 +2174,7 @@ xzs_d8m8_ctl_config(void)
 
 	xzs_diag_emit("  DISP_INTF_SEL    = 0x00000100\n");
 	xzs_diag_emit("  CTL_LAYER_0      = 0x00000200\n");
-	xzs_diag_emit("  CTL_TOP          = 0x00020010\n");
+	xzs_diag_emit("  CTL_TOP          = 0x00020020\n");
 	xzs_diag_emit("  CTL_TOP_READBACK = 0x"); xzs_d8p1_hex32(d8p1_read32(0x00902014u)); xzs_diag_emit("\n");
 	xzs_diag_emit("  M8_5             = PASS\n");
 	xzs_diag_emit("[D8-M8] CTL_START_COUNT=0\n");
@@ -2426,7 +2422,7 @@ xzs_d8m8_prekick_status(void)
 	                    ((pp0_start_pos == 0x00000780u) || (pp0_start_pos == 0x00000004u)) &&
 	                    (pp0_rd_ptr_irq == 0x00000781u) &&
 	                    (pp0_wr_ptr_irq == 0x00000000u) &&
-	                    ((pp0_autorefresh == 0x00000000u) || (pp0_autorefresh == 0x80000001u));
+	                    (pp0_autorefresh == 0x00000000u);
 	bool wrcount_consistent = (pp0_sync_wrcount == (pp0_start_pos + (pp0_sync_thresh & 0xffffu) + 1u));
 
 	bool ready = g_m8_panel_ready && wrcount_consistent &&
@@ -2442,7 +2438,7 @@ xzs_d8m8_prekick_status(void)
 	             (dsi_mdp_ctrl == 0x06100006u) && ((dsi_dcs_cmd & 0xffffu) == 0x3c2cu) &&
 	             (dsi_st0_ctrl == 0x0ca90039u) && (dsi_st0_tot == 0x07800438u) &&
 	             ((dsi_trig_ctrl == 0x80000004u) || (dsi_trig_ctrl == 0x00000004u)) &&
-	             (disp_intf == 0x100u) && (ctl_layer == 0x200u) && (ctl_top == 0x00020010u) &&
+	             (disp_intf == 0x100u) && (ctl_layer == 0x200u) && (ctl_top == 0x00020020u) &&
 	             ((ctl_flush == 0x00020048u) || g_m8_flush_configured) &&
 	             (ack_err == 0) && (timeout_stat == 0) && (ctl_start == 0);
 
@@ -2720,10 +2716,10 @@ xzs_d8m8_kickoff(void)
 	xzs_diag_emit("PRE_INTR_STATUS=0x"); xzs_d8p1_hex32(pre_intr); xzs_diag_emit("\n");
 	xzs_diag_emit("INTR_STATUS_PRE=0x"); xzs_d8p1_hex32(pre_intr); xzs_diag_emit("\n");
 
-	/* D8-M8.5 Golden Baseline: Set PP0 Autorefresh to 0x80000001 for autonomous 60Hz frame progression */
-	xzs_write_pp0_autorefresh("xzs_d8m8_kickoff", "PRE_KICKOFF", 0x80000001u);
-	xzs_diag_emit("PANEL9_LK_PP_AUTOREFRESH_VALUE=0x80000001\n");
-	xzs_diag_emit("PANEL9_AUTOREFRESH_AUTONOMOUS_ENABLED=YES\n");
+	/* Keep the LK Panel-9 one-shot setting across the CTL_START boundary. */
+	xzs_write_pp0_autorefresh("xzs_d8m8_kickoff", "PRE_KICKOFF", 0x00000000u);
+	xzs_diag_emit("PANEL9_LK_PP_AUTOREFRESH_VALUE=0x00000000\n");
+	xzs_diag_emit("PANEL9_AUTOREFRESH_AUTONOMOUS_ENABLED=NO\n");
 
 	g_f1_metrics.trig_ctrl_pre_kick = d8p1_read32(0x00994084u);
 	xzs_diag_emit("TRIG_CTRL_PRE_KICK=0x"); xzs_d8p1_hex32(g_f1_metrics.trig_ctrl_pre_kick); xzs_diag_emit("\n");
@@ -2817,7 +2813,7 @@ xzs_d8m8_kickoff(void)
 	                    ((pp0_start_pos == 0x00000780u) || (pp0_start_pos == 0x00000004u)) &&
 	                    (pp0_rd_ptr_irq == 0x00000781u) &&
 	                    (pp0_wr_ptr_irq == 0x00000000u) &&
-	                    ((pp0_autorefresh == 0x00000000u) || (pp0_autorefresh == 0x80000001u));
+	                    (pp0_autorefresh == 0x00000000u);
 	bool wrcount_consistent = (pp0_sync_wrcount == (pp0_start_pos + (pp0_sync_thresh & 0xffffu) + 1u));
 
 	if (!pp_timing_ok) {
