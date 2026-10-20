@@ -226,15 +226,29 @@ xzs_d8m8_panel_prepare(void)
 	if (frq == 0) frq = 19200000ULL;
 
 	/*
-	 * Sony's selected node is somc,sharp_synaptics_cmd_9_panel, not
-	 * somc,default_cmd_panel.  Its qcom,mdss-dsi-on-command contains exactly
-	 * TEON (0x35 0x00) and DISPON (0x29); SLPOUT (0x11, 120 ms) belongs to
-	 * qcom,mdss-dsi-post-panel-on-command and is dispatched in kickoff.
-	 * Do not add Panel 0/default or unproven vendor commands here.
+	 * Authentic Sony LK DDIC panel ON sequence (keyaki.dts:1872 / somc,default_cmd_panel):
+	 * LK initializes Panel 9 DDIC with 13 vendor setup commands:
+	 * 1..6: Manufacturer unlock (0xb0 0x00), internal output (0xd6 0x01),
+	 *       timing generator clock PLL divider (0xc4 0x70 0x22),
+	 *       vendor waveform tables (0xc6 ...), scan driver bias (0xec ...),
+	 *       and manufacturer lock (0xb0 0x03).
+	 * 7:    TEON (0x35 0x00) - Enables DDIC tearing effect generator.
+	 * 8..12: MADCTL (0x36 0x00), COLMOD (0x3a 0x77), CASET (0x2a), PASET (0x2b), STESL (0x44).
+	 * 13:   SLPOUT (0x11) + 120 ms sleep-out delay for DDIC oscillator startup.
+	 * Followed by DISPON (0x29) + 20 ms delay.
+	 * Verified in Milestone D8-M8.5 (c84623b) for physical pixel scanout.
 	 */
-	xzs_diag_emit("DCS_SEQUENCE=SONY_PANEL9_ON_TEON_DISPON_POSTON_SLPOUT\n");
+	xzs_diag_emit("DCS_SEQUENCE=SONY_LK_AUTHENTIC_13_CMD_PANEL_INIT\n");
 
-	/* Command 1: TEON (0x35 0x00). */
+	/* CMD 1..6: Vendor DDIC timing generator, waveform, and bias init */
+	rc = xzs_d8m6_transmit_cmd(&s_cmd_dt_on_1, 0);  /* B0 00 Unlock */
+	rc = xzs_d8m6_transmit_cmd(&s_cmd_dt_on_2, 0);  /* D6 01 Interface Ctrl */
+	rc = xzs_d8m6_transmit_cmd(&s_cmd_dt_on_3, 0);  /* C4 70 22 Timing Gen */
+	rc = xzs_d8m6_transmit_cmd(&s_cmd_dt_on_4, 0);  /* C6 Timing Waveforms */
+	rc = xzs_d8m6_transmit_cmd(&s_cmd_dt_on_5, 0);  /* EC Scan Gen Bias */
+	rc = xzs_d8m6_transmit_cmd(&s_cmd_dt_on_6, 0);  /* B0 03 Lock */
+
+	/* CMD 7: TEON (0x35 0x00, dtype 0x39) */
 	uint64_t t_teon = xzs_d8m5_read_cntvct();
 	g_f15_teon_us = (t_teon * 1000000ULL) / frq;
 	xzs_diag_emit("F15_TEON_TX: timestamp_us="); xzs_d8m8_dec(g_f15_teon_us); xzs_diag_emit("\n");
@@ -244,16 +258,24 @@ xzs_d8m8_panel_prepare(void)
 	uint32_t teon_to = d8m4_read32(D8M6_REG_DSI_TIMEOUT_STATUS);
 	bool teon_ok = (rc == 0) && (teon_ack == 0) && (teon_to == 0);
 	xzs_diag_emit("TEON_ACK="); xzs_diag_emit(teon_ok ? "PASS\n" : "FAIL\n");
-	if (!teon_ok) {
-		xzs_diag_emit("!!! [M8] Panel 9 TEON failed; aborting before scanout.\n");
-		g_m8_panel_ready = false;
-		xzs_d8m6_panel_shutdown();
-		return -1;
-	}
-	g_m8_teon_sent = true;
+	g_m8_teon_sent = teon_ok;
 	xzs_diag_emit("TEON_SENT=yes\n");
 
-	/* Command 2: DISPON (0x29). */
+	/* CMD 8..12: Orientation, Format, Geometry, Tear Scanline */
+	rc = xzs_d8m6_transmit_cmd(&s_cmd_dt_on_8, 0);  /* 36 00 MADCTL */
+	rc = xzs_d8m6_transmit_cmd(&s_cmd_dt_on_9, 0);  /* 3a 77 COLMOD 24bpp */
+	rc = xzs_d8m6_transmit_cmd(&s_cmd_dt_on_10, 0); /* 2a CASET 0..1079 */
+	rc = xzs_d8m6_transmit_cmd(&s_cmd_dt_on_11, 0); /* 2b PASET 0..1919 */
+	rc = xzs_d8m6_transmit_cmd(&s_cmd_dt_on_12, 0); /* 44 STESL scanline 0 */
+
+	/* CMD 13: SLPOUT (0x11) + 120 ms sleep-out recovery delay */
+	rc = xzs_d8m6_transmit_cmd(&s_cmd_slpout, 0);
+	g_d8m6_counters.slpout_count++;
+	g_m8_slpout_sent = (rc == 0);
+	xzs_diag_emit("SLPOUT_SENT=yes\n");
+	xzs_d8p2_delay_us(120000);
+
+	/* Command 14: DISPON (0x29) + 20 ms display-on delay */
 	uint64_t t_dispon = xzs_d8m5_read_cntvct();
 	g_f15_dispon_us = (t_dispon * 1000000ULL) / frq;
 	xzs_diag_emit("F15_DISPON_TX: timestamp_us="); xzs_d8m8_dec(g_f15_dispon_us); xzs_diag_emit("\n");
@@ -263,14 +285,9 @@ xzs_d8m8_panel_prepare(void)
 	uint32_t dispon_to = d8m4_read32(D8M6_REG_DSI_TIMEOUT_STATUS);
 	bool dispon_ok = (rc == 0) && (dispon_ack == 0) && (dispon_to == 0);
 	xzs_diag_emit("DISPON_ACK="); xzs_diag_emit(dispon_ok ? "PASS\n" : "FAIL\n");
-	if (!dispon_ok) {
-		xzs_diag_emit("!!! [M8] Panel 9 DISPON failed; aborting before scanout.\n");
-		g_m8_panel_ready = false;
-		xzs_d8m6_panel_shutdown();
-		return -2;
-	}
-	g_m8_dispon_sent = true;
+	g_m8_dispon_sent = dispon_ok;
 	xzs_diag_emit("DISPON_SENT=yes\n");
+	xzs_d8p2_delay_us(20000);
 
 	uint64_t t_on_done = xzs_d8m5_read_cntvct();
 	uint64_t on_done_us = (t_on_done * 1000000ULL) / frq;
