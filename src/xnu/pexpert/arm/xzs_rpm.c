@@ -16,9 +16,9 @@
 /* Forward declarations of kernel utilities */
 extern void *ml_io_map(vm_offset_t phys_addr, vm_size_t size);
 extern void delay(int usec);
-extern void xzs_early_puts(const char *s);
-extern void xzs_early_puthex64(uint64_t val);
-extern void xzs_early_putc(char c);
+#define xzs_early_puts(s) do { (void)(s); } while(0)
+#define xzs_early_puthex64(v) do { (void)(v); } while(0)
+#define xzs_early_putc(c) do { (void)(c); } while(0)
 extern void xzs_watchdog_pet(void);
 extern void xzs_breadcrumb(uint32_t checkpoint, uint32_t error);
 extern void xzs_spin_halt(void);
