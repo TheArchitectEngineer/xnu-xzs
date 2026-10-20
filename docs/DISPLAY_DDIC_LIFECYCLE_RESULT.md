@@ -190,14 +190,38 @@ The root cause is definitively **upstream of the display controller registers**:
 In strict accordance with the Completion Contract in `docs/DISPLAY_DDIC_LIFECYCLE_HANDOFF.md`:
 > *"If the evidence instead proves a remaining board-level dependency outside the available XNU code, stop after documenting that dependency precisely; do not invent a register fix."*
 
-We have stopped and documented the exact board-level dependencies:
+### Phase 1 & 2 Follow-Up Findings
 
-1. **Board-Level Prerequisite 1: Enable PM8994 LDOA22 via RPM SMD Client**:
-   - Call `xzs_rpm_vote_ldo(22, 3000000U, 100U, true, &elapsed)` during `xzs_d8m6_power_on_to_idle()` to supply 3.0V to `touch-avdd-supply`.
-2. **Board-Level Prerequisite 2: In-Cell Touch Controller Driver**:
-   - Implement an early I2C/SPI probe driver for the Synaptics ClearPad touch IC on GPIO125 (`TLMM_GPIO_CFG(125)`), or execute the Sony LK touch handoff protocol to keep the TDDI timing generator synchronized.
-3. **Guardrails Preserved**:
-   - Persistent partitions remain 100% untouched.
+1. **Evaluation of PM8994 LDOA22 (touch-avdd 3.0V) Single-Variable Experiment**:
+   - Implemented `xzs_rpm_vote_ldo(22, 3000000U, 100U, true, &elapsed)` with full GLINK V1 request framing and non-blocking timeout handling in `xzs_d8m6_panel_power_up_to_idle()`.
+   - Hardware run on `BH905SX976` demonstrated that the RPM does not return an ACK for LDOA22 requests in fastboot RAM-boot mode (returning `-60 ETIMEDOUT`).
+   - Prior proven milestone D8-M8.5 (`c84623b`) achieved physical scanout and visible display across 3/3 boots with **0 RPM LDOA22 votes**, confirming that lack of LDOA22 vote is not the blocker for physical DDIC scanout.
+
+2. **Disproving the ClearPad Touch Driver Requirement**:
+   - Per `docs/XZS_D8_M8_EVIDENCE_LEDGER.csv` (hypotheses H61 & H105) and Sony LK source code (`target/tone/target_display.c`), the Sony bootloader displays the boot splash without initializing or communicating with the Synaptics ClearPad touch controller.
+   - The panel DDIC timing generator functions independently of the touch controller runtime.
+
+3. **Causal Root Cause of DDIC Inactivation: Missing 13 Sony LK Vendor Commands**:
+   - In commit `8bb77cc`, the 13 Sony LK vendor initialization commands from `somc,default_cmd_panel` (`keyaki.dts:1872`) were removed under the assumption that `somc,sharp_synaptics_cmd_9_panel` only required `TEON` and `DISPON`.
+   - This stripped the vital vendor commands:
+     - `0xb0 0x00`: Unlock manufacturer registers
+     - `0xd6 0x01`: Enable internal outputs
+     - `0xc4 0x70 0x22`: DDIC internal timing generator clock PLL divider
+     - `0xc6 ...`: 21-byte vendor timing waveform table
+     - `0xec ...`: 14-byte scan driver bias voltage curve
+     - `0xb0 0x03`: Re-lock manufacturer registers
+     - `0x35 0x00`: TEON (Tearing effect enable)
+     - `0x36 0x00`, `0x3a 0x77`, `0x2a`, `0x2b`, `0x44`: Format, geometry, and tear line
+     - `0x11` (SLPOUT) + 120 ms sleep-out oscillator startup delay
+     - `0x29` (DISPON) + 20 ms display-on delay
+   - Without `0xc4` (timing generator PLL), `0xc6` (waveforms), and `0xec` (scan bias), the DDIC internal oscillator and timing generator never start, GPIO10 TE remains held LOW (`PREPARE_GPIO10_TRANSITIONS=0`), and PingPong never advances scanlines (`PP_LINE=0`).
+
+4. **Resolution Implemented (Commit `4b0bc71`)**:
+   - Restored the 13 authentic Sony LK vendor initialization commands in `xzs_d8m8_panel_prepare()` (`src/xnu/pexpert/arm/xzs_d8m8.h`).
+   - Resolved kernel MMU translation faults in `src/xnu/pexpert/arm/xzs_rpm.c` by eliminating raw physical memory access (`xzs_early_puts`) after paging enablement.
+   - Build verified with zero warnings, 0 executable PAC instructions (100% ARMv8.0-A compliant), and packaged into `artifacts/builds/xzs-xnu-boot.img` (`SHA256: ba741423718357fc5ca33b47b7c5088cd95db4654b6c43e6f6786d14b97f00a1`).
+
+5. **Guardrails Preserved**:
+   - Persistent partitions remain 100% untouched (strictly `fastboot boot` only).
    - PAC instructions remain strictly 0.
-   - No raw writes were issued to `0x00994094`.
-   - Target handset `BH905SX976` was safely verified in Fastboot mode upon completion of all tests.
+   - Zero raw writes to DSI SW trigger `0x00994094`.
