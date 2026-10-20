@@ -221,73 +221,56 @@ xzs_d8m8_panel_prepare(void)
 		return -1;
 	}
 
-	xzs_diag_emit("DCS_SEQUENCE=AUTHENTIC_PANEL_9_SHARP_COMMANDS (keyaki.dts:1771)\n");
-
 	uint64_t frq = 19200000ULL;
 	__asm__ volatile("mrs %0, cntfrq_el0" : "=r"(frq));
 	if (frq == 0) frq = 19200000ULL;
 
-	/* Authentic Panel 9 (Sharp cmd_9) ON Sequence:
-	 * 1. Vendor & Display control commands from panel9.dtsi:357:
-	 *    51 FF (Brightness), 53 0C (Ctrl Disp), 55 00 (CABC), 35 00 (TEON),
-	 *    B0 04 (Unlock), D6 01 (TE Pin enable), C9 (Oscillator),
-	 *    D5 (Timing), D0 (Timing), D3 (Gate timing), D7 (Source timing),
-	 *    C1 (Power & Bias), C7 (Gamma), C8 (Gamma 2)
-	 * 2. SLPOUT (0x11) + 120ms
-	 * 3. COLMOD (0x3A 0x77), CASET (0x2A), PASET (0x2B), MADCTL (0x36 0x00)
-	 * 4. DISPON (0x29) + 20ms
+	/*
+	 * Sony's selected node is somc,sharp_synaptics_cmd_9_panel, not
+	 * somc,default_cmd_panel.  Its qcom,mdss-dsi-on-command contains exactly
+	 * TEON (0x35 0x00) and DISPON (0x29); SLPOUT (0x11, 120 ms) belongs to
+	 * qcom,mdss-dsi-post-panel-on-command and is dispatched in kickoff.
+	 * Do not add Panel 0/default or unproven vendor commands here.
 	 */
-	xzs_d8m6_transmit_cmd(&s_p9_cmd_51, 0);
-	xzs_d8m6_transmit_cmd(&s_p9_cmd_53, 0);
-	xzs_d8m6_transmit_cmd(&s_p9_cmd_55, 0);
-	xzs_d8m6_transmit_cmd(&s_p9_cmd_35, 0);
-	xzs_d8m6_transmit_cmd(&s_p9_cmd_b0, 0);
-	xzs_d8m6_transmit_cmd(&s_p9_cmd_d6, 0);
-	xzs_d8m6_transmit_cmd(&s_p9_cmd_c9, 0);
-	xzs_d8m6_transmit_cmd(&s_p9_cmd_d5, 0);
-	xzs_d8m6_transmit_cmd(&s_p9_cmd_d0, 0);
-	xzs_d8m6_transmit_cmd(&s_p9_cmd_d3, 0);
-	xzs_d8m6_transmit_cmd(&s_p9_cmd_d7, 0);
-	xzs_d8m6_transmit_cmd(&s_p9_cmd_c1, 0);
-	xzs_d8m6_transmit_cmd(&s_p9_cmd_c7, 0);
-	xzs_d8m6_transmit_cmd(&s_p9_cmd_c8, 0);
-	xzs_diag_emit("P9_VENDOR_INIT_CMDS_SENT=yes\n");
+	xzs_diag_emit("DCS_SEQUENCE=SONY_PANEL9_ON_TEON_DISPON_POSTON_SLPOUT\n");
 
-	/* 1. SLPOUT (0x11) + 120 ms delay */
-	rc = xzs_d8m6_transmit_cmd(&s_cmd_slpout, 0);
-	g_d8m6_counters.slpout_count++;
-	g_m8_slpout_sent = (rc == 0);
-	xzs_diag_emit("SLPOUT_SENT=yes\n");
-	xzs_d8p2_delay_us(120000);
-
-	/* 2. Pixel format COLMOD (0x3A 0x77) -> 24bpp RGB888 format (matches TWRP readback 0x0C = 0x77) */
-	rc = xzs_d8m6_transmit_cmd(&s_cmd_dt_on_9, 0);
-	xzs_diag_emit("COLMOD_SENT=yes\n");
-
-	/* 3. Column Address Set CASET (0x2A 0..1079) -> Full FHD width */
-	rc = xzs_d8m6_transmit_cmd(&s_cmd_dt_on_10, 0);
-	xzs_diag_emit("CASET_SENT=yes\n");
-
-	/* 4. Page Address Set PASET (0x2B 0..1919) -> Full FHD height */
-	rc = xzs_d8m6_transmit_cmd(&s_cmd_dt_on_11, 0);
-	xzs_diag_emit("PASET_SENT=yes\n");
-
-	/* 5. Memory Access Control MADCTL (0x36 0x00) -> Standard orientation (matches TWRP readback 0x0B = 0x00) */
-	rc = xzs_d8m6_transmit_cmd(&s_cmd_dt_on_8, 0);
-	xzs_diag_emit("MADCTL_SENT=yes\n");
-
-	/* 6. Tear On TEON (0x35 0x00) */
+	/* Command 1: TEON (0x35 0x00). */
+	uint64_t t_teon = xzs_d8m5_read_cntvct();
+	g_f15_teon_us = (t_teon * 1000000ULL) / frq;
+	xzs_diag_emit("F15_TEON_TX: timestamp_us="); xzs_d8m8_dec(g_f15_teon_us); xzs_diag_emit("\n");
 	rc = xzs_d8m6_transmit_cmd(&s_cmd_teon, 0);
 	g_d8m6_counters.teon_count++;
-	g_m8_teon_sent = (rc == 0);
+	uint32_t teon_ack = d8m4_read32(D8M6_REG_DSI_ACK_ERR_STATUS);
+	uint32_t teon_to = d8m4_read32(D8M6_REG_DSI_TIMEOUT_STATUS);
+	bool teon_ok = (rc == 0) && (teon_ack == 0) && (teon_to == 0);
+	xzs_diag_emit("TEON_ACK="); xzs_diag_emit(teon_ok ? "PASS\n" : "FAIL\n");
+	if (!teon_ok) {
+		xzs_diag_emit("!!! [M8] Panel 9 TEON failed; aborting before scanout.\n");
+		g_m8_panel_ready = false;
+		xzs_d8m6_panel_shutdown();
+		return -1;
+	}
+	g_m8_teon_sent = true;
 	xzs_diag_emit("TEON_SENT=yes\n");
 
-	/* 7. DISPON (0x29) + 20 ms delay */
+	/* Command 2: DISPON (0x29). */
+	uint64_t t_dispon = xzs_d8m5_read_cntvct();
+	g_f15_dispon_us = (t_dispon * 1000000ULL) / frq;
+	xzs_diag_emit("F15_DISPON_TX: timestamp_us="); xzs_d8m8_dec(g_f15_dispon_us); xzs_diag_emit("\n");
 	rc = xzs_d8m6_transmit_cmd(&s_cmd_dispon, 0);
 	g_d8m6_counters.dispon_count++;
-	g_m8_dispon_sent = (rc == 0);
+	uint32_t dispon_ack = d8m4_read32(D8M6_REG_DSI_ACK_ERR_STATUS);
+	uint32_t dispon_to = d8m4_read32(D8M6_REG_DSI_TIMEOUT_STATUS);
+	bool dispon_ok = (rc == 0) && (dispon_ack == 0) && (dispon_to == 0);
+	xzs_diag_emit("DISPON_ACK="); xzs_diag_emit(dispon_ok ? "PASS\n" : "FAIL\n");
+	if (!dispon_ok) {
+		xzs_diag_emit("!!! [M8] Panel 9 DISPON failed; aborting before scanout.\n");
+		g_m8_panel_ready = false;
+		xzs_d8m6_panel_shutdown();
+		return -2;
+	}
+	g_m8_dispon_sent = true;
 	xzs_diag_emit("DISPON_SENT=yes\n");
-	xzs_d8p2_delay_us(20000);
 
 	uint64_t t_on_done = xzs_d8m5_read_cntvct();
 	uint64_t on_done_us = (t_on_done * 1000000ULL) / frq;
@@ -309,7 +292,7 @@ xzs_d8m8_panel_prepare(void)
 	/* Configure DSI trigger control to MDP Command Mode trigger with pure SW trigger (0x00000004) */
 	d8m4_write32(D8M6_REG_DSI_TRIG_CTRL, 0x00000004u);
 
-	xzs_diag_emit("PANEL_PREPARE_SEQUENCE=AUTHENTIC_PANEL_9_WAKE_FIRST\n");
+	xzs_diag_emit("PANEL_PREPARE_SEQUENCE=SONY_PANEL9_ON_COMMAND_ONLY\n");
 	xzs_diag_emit("F15_PANEL_PREPARE_STABLE=YES\n");
 
 	g_m8_panel_ready = true;

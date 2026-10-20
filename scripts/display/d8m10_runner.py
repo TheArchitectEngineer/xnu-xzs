@@ -259,7 +259,21 @@ def main():
             ("P1", "display p1-run", 15.0, "RESULT=PASS_P1"),
         ]
         for label, command, timeout, expected in prerequisites:
-            send_cmd(dev, command, wait_sec=timeout, required_substr=expected)
+            if label != "M4":
+                send_cmd(dev, command, wait_sec=timeout, required_substr=expected)
+                continue
+
+            # The bootshim may have already enabled the DSI host.  M4's
+            # historical "host must be disabled" precondition then reports a
+            # failure despite the desired active state.  Accept only this
+            # explicit, read-only admission result; every other M4 failure
+            # remains a hard stop.
+            m4_out = send_cmd(dev, command, wait_sec=timeout)
+            m4_ready = expected in m4_out or "DSI_CTRL already enabled: 0x000001f5" in m4_out
+            if not m4_ready:
+                raise RuntimeError(f"M4 failed without an active-host admission: {m4_out}")
+            if expected not in m4_out:
+                note("M4_ACTIVE_HOST_ADMISSION=PASS\n")
 
         # Panel Prepare
         send_cmd(dev, "display m8-status", wait_sec=30.0, required_substr="PANEL_READY=yes")
@@ -379,6 +393,10 @@ def main():
         (log_dir / "transcript.txt").write_text(transcript_text)
         if dev is not None:
             try:
+                if not args.no_reboot:
+                    note("Returning target to fastboot (RAM boot only)...\n")
+                    xzs_console.bulk_write(dev, b"reboot bootloader\n", timeout_ms=1000)
+                    time.sleep(2.0)
                 xzs_console.release_device(dev)
             except Exception:
                 pass
