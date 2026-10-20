@@ -685,41 +685,6 @@ static int xzs_rpm_send_kvp_request_and_wait_ack(uint32_t set,
 		payload_len = sizeof(*msg_hdr) + kvp_bytes;
 	}
 
-	/* Log complete request details before transmission */
-	xzs_early_puts("[XZS-RPM] ========================================================\n");
-	xzs_early_puts("[XZS-RPM] PREPARING RPM REQUEST (Mandatory Pre-Transmission Log):\n");
-	xzs_early_puts("  Format:        "); xzs_early_puts(g_rpm_msg_format == 0 ? "V0\n" : "V1\n");
-	xzs_early_puts("  msg_id:        0x"); xzs_early_puthex64((uint64_t)msg_id); xzs_early_puts("\n");
-	xzs_early_puts("  set:           ");
-	if (set == MSM_RPM_CTX_ACTIVE_SET) xzs_early_puts("ACTIVE (0)\n");
-	else if (set == MSM_RPM_CTX_SLEEP_SET) xzs_early_puts("SLEEP (1)\n");
-	else { xzs_early_puthex64((uint64_t)set); xzs_early_puts("\n"); }
-	xzs_early_puts("  resource_type: 0x"); xzs_early_puthex64((uint64_t)resource_type);
-	if (resource_type == QCOM_SMD_RPM_LDOA) xzs_early_puts(" (\"ldoa\")\n");
-	else if (resource_type == QCOM_SMD_RPM_CLK_BUF_A) xzs_early_puts(" (\"clka\")\n");
-	else xzs_early_puts("\n");
-	xzs_early_puts("  resource_id:   "); xzs_early_puthex64((uint64_t)resource_id); xzs_early_puts("\n");
-	xzs_early_puts("  KVPs (count="); xzs_early_puthex64((uint64_t)num_kvps); xzs_early_puts("):\n");
-	for (uint32_t k = 0; k < num_kvps; k++) {
-		xzs_early_puts("    ["); xzs_early_puthex64((uint64_t)k); xzs_early_puts("] key=0x");
-		xzs_early_puthex64((uint64_t)kvps[k].key);
-		if (kvps[k].key == QCOM_RPM_KEY_SWEN) xzs_early_puts(" (\"swen\")");
-		else if (kvps[k].key == QCOM_RPM_KEY_UV) xzs_early_puts(" (\"uv\")");
-		else if (kvps[k].key == QCOM_RPM_KEY_MA) xzs_early_puts(" (\"ma\")");
-		xzs_early_puts(" nbytes="); xzs_early_puthex64((uint64_t)kvps[k].nbytes);
-		xzs_early_puts(" val="); xzs_early_puthex64((uint64_t)kvps[k].value);
-		xzs_early_puts("\n");
-	}
-	xzs_early_puts("  Payload Size:  "); xzs_early_puthex64((uint64_t)payload_len); xzs_early_puts(" bytes\n");
-	xzs_early_puts("  Raw Request Bytes:\n    ");
-	for (uint32_t b = 0; b < payload_len; b++) {
-		if (b > 0 && (b % 16) == 0) xzs_early_puts("\n    ");
-		xzs_early_puts("0x");
-		xzs_early_puthex64((uint64_t)tx_buf[b]);
-		xzs_early_puts(" ");
-	}
-	xzs_early_puts("\n========================================================\n");
-
 	/* Build GLINK TX_DATA header */
 	struct glink_tx_data_hdr dhdr;
 	dhdr.cmd = GLINK_CMD_TX_DATA;
@@ -730,12 +695,10 @@ static int xzs_rpm_send_kvp_request_and_wait_ack(uint32_t set,
 
 	xzs_diag_emit("    [RPM-TX] transmitting request...\n");
 	if (xzs_rpm_tx_write(&dhdr, sizeof(dhdr), tx_buf, payload_len) != 0) {
-		xzs_early_puts("[XZS-RPM] [FAIL] TX FIFO FULL FOR RPM REQUEST\n");
 		xzs_diag_emit("    [RPM-TX] tx fifo full for rpm request\n");
 		return -1;
 	}
 
-	xzs_early_puts("[XZS-RPM] RPM REQUEST TRANSMITTED — WAITING FOR ACK...\n");
 	xzs_diag_emit("    [RPM-TX] polling for ACK...\n");
 
 	/* Bounded Poll for Matching ACK */
@@ -785,31 +748,18 @@ static int xzs_rpm_send_kvp_request_and_wait_ack(uint32_t set,
 		/* Parse ACK according to format */
 		if (g_rpm_msg_format == 0) {
 			struct msm_rpm_ack_msg_v0 *ack = (struct msm_rpm_ack_msg_v0 *)rx_payload;
-			xzs_early_puts("[XZS-RPM] PARSED ACK V0:\n");
-			xzs_early_puts("  req=0x"); xzs_early_puthex64((uint64_t)ack->req);
-			xzs_early_puts(" req_len="); xzs_early_puthex64((uint64_t)ack->req_len);
-			xzs_early_puts(" rsc_id=0x"); xzs_early_puthex64((uint64_t)ack->rsc_id);
-			xzs_early_puts(" msg_len="); xzs_early_puthex64((uint64_t)ack->msg_len);
-			xzs_early_puts(" id_ack=0x"); xzs_early_puthex64((uint64_t)ack->id_ack);
-			xzs_early_puts("\n");
-
 			if (ack->id_ack == msg_id) {
 				ack_received = true;
 				if (ack->req_len <= sizeof(struct msm_rpm_ack_msg_v0) - 8U) {
 					ack_status = 0; /* Success, no error payload */
 				} else {
 					ack_status = -2; /* RPM returned error payload */
-					xzs_early_puts("[XZS-RPM] [ERROR] RPM RETURNED ERROR IN ACK!\n");
+					xzs_diag_emit("    [RPM-TX] ERROR in ACK payload\n");
 				}
 				break;
 			}
 		} else {
 			struct msm_rpm_ack_msg_v1 *ack = (struct msm_rpm_ack_msg_v1 *)rx_payload;
-			xzs_early_puts("[XZS-RPM] PARSED ACK V1:\n");
-			xzs_early_puts("  request_hdr=0x"); xzs_early_puthex64((uint64_t)ack->request_hdr);
-			xzs_early_puts(" id_ack=0x"); xzs_early_puthex64((uint64_t)ack->id_ack);
-			xzs_early_puts("\n");
-
 			if (ack->id_ack == msg_id) {
 				ack_received = true;
 				ack_status = 0;
@@ -821,22 +771,15 @@ static int xzs_rpm_send_kvp_request_and_wait_ack(uint32_t set,
 	if (out_elapsed_us) *out_elapsed_us = elapsed;
 
 	if (!ack_received) {
-		xzs_early_puts("[XZS-RPM] [FAIL] TIMEOUT WAITING FOR RPM ACK\n");
 		xzs_diag_emit("    [RPM-TX] TIMEOUT waiting for ACK\n");
 		return -60; /* ETIMEDOUT */
 	}
 
 	if (ack_status != 0) {
-		xzs_early_puts("[XZS-RPM] [FAIL] RPM NACK / ERROR REPORTED\n");
 		xzs_diag_emit("    [RPM-TX] RPM NACK / ERROR REPORTED\n");
 		return -5; /* EIO */
 	}
 
-	xzs_early_puts("[XZS-RPM] [PASS] RPM ACK RECEIVED (msg_id=0x");
-	xzs_early_puthex64((uint64_t)msg_id);
-	xzs_early_puts(", elapsed=");
-	xzs_early_puthex64((uint64_t)elapsed);
-	xzs_early_puts(" us)\n");
 	xzs_diag_emit("    [RPM-TX] RPM ACK received successfully!\n");
 	return 0;
 }
