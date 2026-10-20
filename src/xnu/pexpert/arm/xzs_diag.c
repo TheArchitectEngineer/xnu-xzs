@@ -27,6 +27,7 @@ static void xzs_irq_dump_state(void);
 static void xzs_fb_dump_state(void);
 static void xzs_memory_dump_state(void);
 void xzs_diag_dispatch(uint64_t which, uint64_t arg1, uint64_t arg2, uint64_t arg3);
+void xzs_display_bringup_auto(void);
 
 void
 xzs_diag_emit(const char *s)
@@ -989,8 +990,75 @@ xzs_diag_dispatch(uint64_t which, uint64_t arg1, uint64_t arg2, uint64_t arg3)
 	case 64:
 		xzs_d8m6_panel_shutdown();
 		break;
+	case 70:
+		xzs_display_bringup_auto();
+		break;
 	default:
 		xzs_diag_emit("[XZS-D8M1] unknown diag\n");
 		break;
 	}
+}
+
+/*
+ * Milestone D8-M10: Full Automatic Display Bring-Up
+ * Executes the complete hardware-verified D8-M8.5 sequence automatically:
+ * 1. MMAGIC & MDSS GDSC Power Domains & Clocks
+ * 2. DSI PLL & 14nm PHY Mode 2
+ * 3. GPIO Pinmux (GPIO 10, GPIO 8, etc.)
+ * 4. Sharp 1080p panel prepare (13 authentic Sony LK DDIC vendor commands)
+ * 5. Framebuffer init & test pattern (at 0x98000000)
+ * 6. MDP core clock rate to 171.4 MHz (C1)
+ * 7. SSPP RGB0, LM0, Stream, CTL, Flush config
+ * 8. Kickoff: CTL_START, WLED Backlight (2048), FBCON attachment
+ */
+void
+xzs_display_bringup_auto(void)
+{
+	static bool s_auto_done = false;
+	if (s_auto_done) {
+		return;
+	}
+	s_auto_done = true;
+
+	xzs_diag_emit("\n=======================================================\n");
+	xzs_diag_emit("=== [XZS-DISP] AUTO EARLY DISPLAY BRINGUP START     ===\n");
+	xzs_diag_emit("=======================================================\n");
+
+	/* 1. MMAGIC & MDSS GDSC Power Domains & Clocks */
+	xzs_d8m2_critical_on("CLK-MMAGIC-AHB-001", XZS_MMCC_MMAGIC_AHB, 0);
+	xzs_d8m2_critical_on("CLK-MMAGIC-CFG-001", XZS_MMCC_CFG_AHB, 0);
+	xzs_d8m2_critical_on("CLK-MMAGIC-NOC-001", XZS_MMCC_MMAGIC_MDSS_NOC, 1);
+	xzs_d8m2_critical_on("CLK-MMAGIC-AXI-001", XZS_MMCC_MMAGIC_MDSS_AXI, 2);
+	xzs_d8m2_mdss_on();
+	xzs_d8m2_branch_on("CLK-AHB-001", XZS_MMCC_MDSS_AHB);
+	xzs_d8m2_branch_on("CLK-AXI-001", XZS_MMCC_MDSS_AXI);
+	xzs_d8m2_branch_on("CLK-MDP-001", XZS_MMCC_MDSS_MDP);
+
+	/* 2. DSI PLL & 14nm PHY Mode 2 */
+	xzs_d8m3_run(2);
+	xzs_d8m4_run(2);
+
+	/* 3. GPIO Pinmux (GPIO 10 mdp_vsync, GPIO 8, etc.) */
+	xzs_d8p1_run(1);
+
+	/* 4. Sharp 1080p Panel Prepare & 13 Authentic DDIC vendor commands */
+	xzs_d8m8_panel_prepare();
+
+	/* 5. Framebuffer mapping & test pattern */
+	xzs_d8m8_fb_init();
+
+	/* 6. MDP clock rate configuration to 171.4 MHz (C1) */
+	xzs_d8m8_c1_rate();
+
+	/* 7. MDP5 pipeline setup */
+	xzs_d8m8_rgb0_config();
+	xzs_d8m8_lm0_config();
+	xzs_d8m8_stream_config();
+	xzs_d8m8_ctl_config();
+	xzs_d8m8_flush_config();
+
+	/* 8. Kickoff: CTL_START + WLED Backlight + FBCON attachment */
+	xzs_d8m8_kickoff();
+
+	xzs_diag_emit("\n[XZS-DISP] AUTO EARLY DISPLAY BRINGUP COMPLETE - LCD ACTIVE!\n");
 }

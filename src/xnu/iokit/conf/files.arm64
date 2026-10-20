@@ -6,5 +6,13 @@ iokit/Kernel/IOPMrootDomain.cpp    					optional iokitcpp
 # SMP
 iokit/Kernel/arm/AppleARMSMP.cpp    					optional iokitcpp
 
+# XZS Apple Compatibility Services
+iokit/Kernel/arm/XZSPlatformExpert.cpp				optional iokitcpp
+iokit/Kernel/arm/XZSSurface.cpp					optional iokitcpp
+iokit/Kernel/arm/XZSFramebuffer.cpp				optional iokitcpp
+iokit/Kernel/arm/XZSKeyStore.cpp				optional iokitcpp
+iokit/Kernel/arm/XZSWatchdog.cpp				optional iokitcpp
+iokit/Kernel/arm/XZSEntitlements.cpp				optional iokitcpp
+
 # tightbeamc generated implementation files
 ./Exclaves/IOService.tightbeam.c		optional iokitcpp config_exclaves

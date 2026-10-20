@@ -38,3 +38,7 @@ src/xzs-userland/args
 # Test binaries
 tests/test_xzsfs_host
 tests/test_xzs_rx_buf
+
+# Reference codebases
+ios-sweet/
+

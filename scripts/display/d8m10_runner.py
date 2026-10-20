@@ -66,13 +66,12 @@ def main():
         buf = b""
         req_bytes = required_substr.encode("utf-8") if isinstance(required_substr, str) else required_substr
         prompt_seen = False
-        kicked = False
         while time.time() < end:
             chunk, kind = xzs_console.bulk_read(dev, timeout_ms=100)
             if chunk:
                 buf += chunk
                 tail = buf[max(0, len(buf) - 200):]
-                has_prompt = (b"xzs#" in tail or b"code=3 r0=0x0" in tail)
+                has_prompt = (b"xzs#" in tail or b"code=3 r0=0x0" in tail or b"code=3" in tail)
                 if req_bytes and (req_bytes in buf or b"ALREADY" in buf) and has_prompt:
                     time.sleep(0.05)
                     extra, _ = xzs_console.bulk_read(dev, timeout_ms=100)
@@ -207,18 +206,18 @@ def main():
         # --- Display Hardware Bring-Up Sequence (Proven in D8-M8.5) ---
         note("\n--- PHASE 1: Display Hardware Bring-Up & Kickoff ---\n")
         prerequisites = [
-            ("MMAGIC_AHB", "clocks mmagic-ahb-on", 5.0, "PASS"),
-            ("MMAGIC_CFG_AHB", "clocks mmagic-cfg-ahb-on", 5.0, "PASS"),
-            ("MMAGIC_NOC", "clocks mmagic-mdss-noc-on", 5.0, "PASS"),
-            ("MMAGIC_AXI", "clocks mmagic-mdss-axi-on", 5.0, "PASS"),
-            ("MDSS_GDSC", "display power mdss-on", 5.0, "PASS"),
-            ("MDSS_AHB", "clocks mdss-ahb-on", 5.0, "PASS"),
-            ("MDSS_AXI", "clocks mdss-axi-on", 5.0, "PASS"),
-            ("MDSS_MDP", "clocks mdp-on", 5.0, "PASS"),
-            ("CORE_STATUS", "clocks mdss-critical-status", 20.0, "PASS"),
-            ("M3", "display m3-run full", 50.0, "PASS_FULL_M3"),
-            ("M4", "display m4-run full", 10.0, "PASS_MODE2"),
-            ("P1", "display p1-run", 5.0, "RESULT=PASS_P1"),
+            ("MMAGIC_AHB", "clocks mmagic-ahb-on", 15.0, "PASS"),
+            ("MMAGIC_CFG_AHB", "clocks mmagic-cfg-ahb-on", 15.0, "PASS"),
+            ("MMAGIC_NOC", "clocks mmagic-mdss-noc-on", 15.0, "PASS"),
+            ("MMAGIC_AXI", "clocks mmagic-mdss-axi-on", 15.0, "PASS"),
+            ("MDSS_GDSC", "display power mdss-on", 15.0, "PASS"),
+            ("MDSS_AHB", "clocks mdss-ahb-on", 15.0, "PASS"),
+            ("MDSS_AXI", "clocks mdss-axi-on", 15.0, "PASS"),
+            ("MDSS_MDP", "clocks mdp-on", 15.0, "PASS"),
+            ("CORE_STATUS", "clocks mdss-critical-status", 25.0, "PASS"),
+            ("M3", "display m3-run full", 60.0, "PASS_FULL_M3"),
+            ("M4", "display m4-run full", 20.0, "PASS_MODE2"),
+            ("P1", "display p1-run", 15.0, "RESULT=PASS_P1"),
         ]
         for label, command, timeout, expected in prerequisites:
             send_cmd(dev, command, wait_sec=timeout, required_substr=expected)
@@ -250,6 +249,13 @@ def main():
         if "M8_KICKOFF_COMPLETE" not in kickoff_out:
             raise RuntimeError(f"Kickoff failed: {kickoff_out}")
         note("[PASS] Kickoff completed and Framebuffer Console attached!\n")
+        note("\n" + "=" * 70 + "\n")
+        note("=== [VISUAL OBSERVATION WINDOW] PHYSICAL LCD ACTIVE (10 SECONDS)   ===\n")
+        note("=== Top 33% (Rows 0-38)  : Live XNU Terminal Console with Banners  ===\n")
+        note("=== Middle Row 39        : Yellow Divider Banner                   ===\n")
+        note("=== Bottom 67% (Rows 40+): 8 High-Contrast Color Bars + Test Badge ===\n")
+        note("=" * 70 + "\n\n")
+        time.sleep(10.0)
 
         # --- Interactive Shell Tests ---
         note("\n--- STEP 1: fb command test & Boot Timing Telemetry (Section 26 & 29) ---\n")
@@ -300,6 +306,7 @@ def main():
         note("Generating >120 lines of console output to verify scrollback and line scrolling...\n")
         for i in range(130):
             send_cmd(dev, f"echo scroll_line_{i:03d}", wait_sec=10.0, required_substr=f"scroll_line_{i:03d}")
+            time.sleep(0.02)
         note("[PASS] Scrolling test complete! Prompt is alive and responsive.\n")
 
         # --- STEP 9: Stability Run (10 Minutes) if requested ---

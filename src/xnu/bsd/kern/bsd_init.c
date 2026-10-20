@@ -733,10 +733,20 @@ bsd_init(void)
 	xzs_early_puts("[XZS-BOOT] [D41] VFS INIT COMPLETE\n");
 	xzs_breadcrumb(0xD41, 0);
 
+#if CONFIG_XZS_BRINGUP || defined(XZS)
+	/* Register XZS AMFI & permissive Sandbox MAC policies before exec */
+	extern void xzs_amfi_policy_register(void);
+	xzs_amfi_policy_register();
+#endif
+
 #if CONFIG_XZS_BRINGUP
 	/* Phase D4: Read-Only BSD Block Storage & Integration */
 	extern void xzs_sdhci_phase_d4_probe(void);
 	xzs_sdhci_phase_d4_probe();
+
+	/* Milestone D8-M10: Automatic Hardware Display Bringup & Scanout */
+	extern void xzs_display_bringup_auto(void);
+	xzs_display_bringup_auto();
 #endif
 
 

@@ -31,7 +31,10 @@
 #define XZS_FONT_WIDTH          8u
 #define XZS_FONT_HEIGHT         16u
 #define XZS_FBCON_COLS          (XZS_FB_WIDTH / XZS_FONT_WIDTH)   /* 135 columns */
-#define XZS_FBCON_ROWS          (XZS_FB_HEIGHT / XZS_FONT_HEIGHT) /* 120 rows */
+#define XZS_FBCON_TOTAL_ROWS    (XZS_FB_HEIGHT / XZS_FONT_HEIGHT) /* 120 rows total */
+#define XZS_FBCON_ROWS          39u                               /* Console viewport: rows 0..38 */
+#define XZS_FBCON_DIVIDER_ROW   39u                               /* Fixed divider at row 39 */
+#define XZS_FBCON_BARS_START    40u                               /* Hardware test bars: rows 40..119 */
 #define XZS_SCROLLBACK_LINES    256u
 #define XZS_EARLY_RING_CAP      65536u
 
@@ -48,6 +51,7 @@
 /* External ISO font from osfmk/console/iso_font.c */
 extern unsigned char iso_font[256 * 16];
 extern int snprintf(char *, size_t, const char *, ...);
+extern void xzs_d8m8_kick_frame(void);
 
 /* Boot Timing Telemetry Timestamps (19.2 MHz ARM Generic Timer) */
 extern uint64_t g_xzs_boot_t0; /* T0 = first reliable XNU entry */
@@ -162,7 +166,7 @@ xzs_fbcon_early_record(const char *buf, int len)
 static inline void
 xzs_fbcon_draw_glyph_raw(uint32_t col, uint32_t row, char ch, uint32_t fg, uint32_t bg)
 {
-	if (g_fbcon_va == 0 || col >= XZS_FBCON_COLS || row >= XZS_FBCON_ROWS) {
+	if (g_fbcon_va == 0 || col >= XZS_FBCON_COLS || row >= XZS_FBCON_TOTAL_ROWS) {
 		return;
 	}
 	volatile uint32_t *line_ptr = (volatile uint32_t *)g_fbcon_va +
@@ -217,16 +221,16 @@ xzs_fbcon_draw_cursor_raw(uint32_t col, uint32_t row, bool visible)
 
 extern void xzs_watchdog_pet(void);
 
-/* Clear Screen Primitive (Section 18) */
+/* Clear Console Viewport (Rows 0..38, Lines 0..623) */
 void
 xzs_fbcon_clear(uint32_t bg)
 {
 	if (g_fbcon_va == 0) return;
 	xzs_watchdog_pet();
 	volatile uint32_t *dst = (volatile uint32_t *)g_fbcon_va;
-	uint32_t total_words = XZS_FB_WORDS_PER_ROW * XZS_FB_HEIGHT;
+	uint32_t total_words = XZS_FB_WORDS_PER_ROW * (XZS_FBCON_ROWS * XZS_FONT_HEIGHT);
 	for (uint32_t i = 0; i < total_words; i++) {
-		if ((i & 0x1ffff) == 0) {
+		if ((i & 0x7ffff) == 0) {
 			xzs_watchdog_pet();
 		}
 		dst[i] = bg;
@@ -235,6 +239,50 @@ xzs_fbcon_clear(uint32_t bg)
 	memset(g_fbcon_row_len, 0, sizeof(g_fbcon_row_len));
 	g_fbcon_col = 0;
 	g_fbcon_row = 0;
+	__asm__ volatile("dmb oshst" ::: "memory");
+	xzs_watchdog_pet();
+}
+
+/* Render permanent 8 vertical color bars + center badge onto rows 40..119 (lines 640..1919) */
+static void
+xzs_fbcon_draw_test_bars(uintptr_t fb_va)
+{
+	if (fb_va == 0) return;
+	static const uint32_t s_bar_colors[8] = {
+		0x00ffffffu, /* White */
+		0x0000ffffu, /* Yellow */
+		0x00ffff00u, /* Cyan */
+		0x0000ff00u, /* Green */
+		0x00ff00ffu, /* Magenta */
+		0x000000ffu, /* Red */
+		0x00ff0000u, /* Blue */
+		0x00101010u  /* Dark Slate */
+	};
+
+	for (uint32_t y = 640; y < XZS_FB_HEIGHT; y++) {
+		if ((y & 63) == 0) {
+			xzs_watchdog_pet();
+		}
+		uint32_t *line_ptr = (uint32_t *)(fb_va + y * XZS_FB_STRIDE);
+		for (uint32_t x = 0; x < XZS_FB_WIDTH; x++) {
+			/* Outer border: 30px white on bottom/left/right */
+			if (y >= (XZS_FB_HEIGHT - 30) || x < 30 || x >= (XZS_FB_WIDTH - 30)) {
+				line_ptr[x] = 0x00ffffffu;
+			}
+			/* Center contrasting test badge: lines 760..1160, cols 240..840 */
+			else if (y >= 760 && y < 1160 && x >= 240 && x < 840) {
+				uint32_t cell_x = (x - 240) / 40;
+				uint32_t cell_y = (y - 760) / 40;
+				line_ptr[x] = ((cell_x + cell_y) & 1) ? 0x00ffffffu : 0x00000000u;
+			}
+			/* 8 vertical color bars */
+			else {
+				uint32_t bar_idx = (x * 8) / XZS_FB_WIDTH;
+				if (bar_idx > 7) bar_idx = 7;
+				line_ptr[x] = s_bar_colors[bar_idx];
+			}
+		}
+	}
 	__asm__ volatile("dmb oshst" ::: "memory");
 }
 
@@ -246,6 +294,7 @@ xzs_fbcon_scroll_up(void)
 
 	/* Hide cursor before scroll */
 	xzs_fbcon_draw_cursor_raw(g_fbcon_col, g_fbcon_row, false);
+	xzs_watchdog_pet();
 
 	/* Shift screen text and row lengths up by 1 row in cacheable RAM */
 	uint8_t old_lens[XZS_FBCON_ROWS];
@@ -281,7 +330,7 @@ xzs_fbcon_scroll_up(void)
 
 	uint32_t active_rows = g_fbcon_row < XZS_FBCON_ROWS ? (g_fbcon_row + 1) : XZS_FBCON_ROWS;
 	for (uint32_t r = 0; r < active_rows; r++) {
-		if ((r & 15u) == 0) {
+		if ((r & 7u) == 0) {
 			xzs_watchdog_pet();
 		}
 		uint32_t max_col = g_fbcon_row_len[r] > old_lens[r] ? g_fbcon_row_len[r] : old_lens[r];
@@ -297,6 +346,8 @@ xzs_fbcon_scroll_up(void)
 	}
 
 	__asm__ volatile("dmb oshst" ::: "memory");
+	xzs_watchdog_pet();
+	xzs_d8m8_kick_frame();
 }
 
 /* Character Dispatcher with Control Characters (Section 20) */
@@ -395,6 +446,7 @@ xzs_fbcon_putc(char c)
 	xzs_fbcon_draw_cursor_raw(g_fbcon_col, g_fbcon_row, true);
 	__asm__ volatile("dmb oshst" ::: "memory");
 	xzs_fbcon_unlock_irq(daif);
+	xzs_d8m8_kick_frame();
 }
 
 void
@@ -414,6 +466,7 @@ xzs_fbcon_write(const char *buf, int len)
 	xzs_fbcon_draw_cursor_raw(g_fbcon_col, g_fbcon_row, true);
 	__asm__ volatile("dmb oshst" ::: "memory");
 	xzs_fbcon_unlock_irq(daif);
+	xzs_d8m8_kick_frame();
 }
 
 /* Print String Utility for Banner / Markers */
@@ -519,7 +572,7 @@ xzs_fbcon_replay_optimized(const char *log_data, uint32_t log_len)
 	s_replay_lines[last_slot][cur_col] = '\0';
 
 	/* Number of valid lines available in ring buffer */
-	uint32_t available_rows = 40; /* 40 visible early boot lines, leaving 75+ lines for interactive shell */
+	uint32_t available_rows = 28; /* Fits into console viewport (rows 3..30), leaving space for prompt */
 	uint32_t num_lines_to_draw = total_lines_seen + 1;
 	if (num_lines_to_draw > available_rows) {
 		num_lines_to_draw = available_rows;
@@ -567,9 +620,13 @@ xzs_fbcon_attach(uintptr_t fb_va)
 
 	g_fbcon_va = fb_va;
 
-	/* Clear entire framebuffer to near-black */
+	/* Clear console viewport (rows 0..38) */
 	xzs_fbcon_clear(XZS_COLOR_BG);
 	xzs_diag_emit("[XZS-ATTACH] 2: clear done\n");
+
+	/* Render permanent hardware test bars onto lines 640..1919 (rows 40..119) */
+	xzs_fbcon_draw_test_bars(g_fbcon_va);
+	xzs_diag_emit("[XZS-ATTACH] 2b: test bars rendered\n");
 
 	/* Render Title Banner */
 	g_fbcon_row = 0;
@@ -608,6 +665,17 @@ xzs_fbcon_attach(uintptr_t fb_va)
 	xzs_fbcon_puts_raw("--- [XZS-FBCON] Framebuffer Console Attached - Live Kernel & Shell Display Active ---\n", XZS_COLOR_YELLOW, XZS_COLOR_BG);
 	xzs_diag_emit("[XZS-ATTACH] 5: marker done\n");
 
+	/* Render Divider Bar at row 39 */
+	for (uint32_t c = 0; c < XZS_FBCON_COLS; c++) {
+		xzs_fbcon_draw_glyph_raw(c, XZS_FBCON_DIVIDER_ROW, '=', XZS_COLOR_YELLOW, XZS_COLOR_BG);
+	}
+	const char *div_text = " [XZS-FBCON] LIVE CONSOLE (ROWS 0-38) | HARDWARE TEST BARS (ROWS 40-119) ";
+	uint32_t div_len = (uint32_t)strlen(div_text);
+	uint32_t div_start = (XZS_FBCON_COLS > div_len) ? (XZS_FBCON_COLS - div_len) / 2 : 0;
+	for (uint32_t c = 0; c < div_len && (div_start + c) < XZS_FBCON_COLS; c++) {
+		xzs_fbcon_draw_glyph_raw(div_start + c, XZS_FBCON_DIVIDER_ROW, div_text[c], XZS_COLOR_GREEN, XZS_COLOR_BG);
+	}
+
 	/* Position cursor and activate live console */
 	xzs_fbcon_draw_cursor_raw(g_fbcon_col, g_fbcon_row, true);
 
@@ -615,6 +683,9 @@ xzs_fbcon_attach(uintptr_t fb_va)
 	__asm__ volatile("dmb oshst" ::: "memory");
 	xzs_diag_emit("[XZS-ATTACH] 6: attach complete\n");
 	g_fbcon_attached = true;
+
+	/* Kick first frame to physical LCD */
+	xzs_d8m8_kick_frame();
 }
 
 /* Boot Timing Telemetry Output (Section 29 & 30) */
