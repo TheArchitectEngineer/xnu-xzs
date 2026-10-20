@@ -22,6 +22,7 @@
 #include <string.h>
 #include "xzs_d8m5.h"
 #include "xzs_d8m4.h"
+#include <pexpert/arm/xzs_rpm.h>
 
 extern void xzs_diag_emit(const char *msg);
 extern void xzs_watchdog_pet(void);
@@ -915,6 +916,27 @@ xzs_d8m6_panel_power_up_to_idle(void)
 		xzs_d8m5_power_down();
 		return -4;
 	}
+
+	/*
+	 * Panel 9 in-cell analog supply.  keyaki.dts binds touch-avdd-supply
+	 * to PM8994 LDOA22 at 3.0 V.  Keep this as a single-variable causal
+	 * experiment: no other display lifecycle or scanout setting changes.
+	 */
+	xzs_diag_emit("  2a. Vote PM8994 LDOA22 touch-avdd (3.0V, 100mA)...\n");
+	uint32_t ldo22_elapsed_us = 0;
+	int ldo22_rc = xzs_rpm_vote_ldo(22, 3000000U, 100U, true, &ldo22_elapsed_us);
+	xzs_diag_emit("  LDO22_RPM_REQUEST=resource:22 uV:3000000 mA:100 enable:1\n");
+	xzs_diag_emit("  LDO22_RPM_ACK=");
+	xzs_diag_emit(ldo22_rc == 0 ? "YES" : "NO");
+	xzs_diag_emit(" elapsed_us=");
+	xzs_d8m5_dec32(ldo22_elapsed_us);
+	xzs_diag_emit("\n");
+	if (ldo22_rc != 0) {
+		xzs_diag_emit("!!! FAIL: LDO22 touch-avdd RPM vote rejected.\n");
+		xzs_d8m5_power_down();
+		return -10;
+	}
+	xzs_d8p2_delay_us(1000);
 
 	/* 2b. Touch Interrupt Pinmux (GPIO 125 Input with Pull-Up) per Sony LK Step T4 */
 	xzs_diag_emit("  2b. Touch INT Pinmux (GPIO125 Input with Pull-Up)...\n");
