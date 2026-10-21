@@ -170,6 +170,23 @@ static inline void xzs_rpm_kick(void)
 	xzs_rpm_wmb();
 }
 
+/*
+ * Accurate architectural timer busy-wait (cntvct_el0 / cntfrq_el0).
+ * Never blocks the thread or calls scheduler thread_block().
+ * Continuously pets hardware watchdog.
+ */
+static inline void
+xzs_rpm_delay_us(uint32_t usec)
+{
+	uint64_t ticks = ((uint64_t)usec * 192ULL) / 10ULL;
+	uint64_t start, cur;
+	xzs_watchdog_pet();
+	__asm__ volatile ("isb\n\tmrs %0, cntvct_el0" : "=r" (start));
+	do {
+		__asm__ volatile ("mrs %0, cntvct_el0" : "=r" (cur));
+	} while ((cur - start) < ticks);
+}
+
 /* FIFO Space Calculations */
 static uint32_t xzs_rpm_tx_avail(void)
 {
@@ -482,8 +499,8 @@ static int xzs_rpm_glink_handshake(void)
 	}
 
 	/* Poll for version settlement (up to 50 ms) */
-	for (int i = 0; i < 5000; i++) {
-		delay(10);
+	for (int i = 0; i < 1000; i++) {
+		xzs_rpm_delay_us(50);
 		xzs_watchdog_pet();
 		while (xzs_rpm_glink_poll_step() > 0) {
 			if (g_version_settled) {
@@ -524,8 +541,8 @@ static int xzs_rpm_glink_handshake(void)
 	}
 
 	/* Poll for channel open confirmation (up to 50 ms) */
-	for (int i = 0; i < 5000; i++) {
-		delay(10);
+	for (int i = 0; i < 1000; i++) {
+		xzs_rpm_delay_us(50);
 		xzs_watchdog_pet();
 		while (xzs_rpm_glink_poll_step() > 0) {
 			if (g_channel_open) {
@@ -701,14 +718,14 @@ static int xzs_rpm_send_kvp_request_and_wait_ack(uint32_t set,
 
 	xzs_diag_emit("    [RPM-TX] polling for ACK...\n");
 
-	/* Bounded Poll for Matching ACK */
+	/* Bounded Poll for Matching ACK (up to 50 ms) */
 	uint32_t elapsed = 0;
 	bool ack_received = false;
 	int ack_status = -1;
 
-	for (int poll = 0; poll < 10000; poll++) {
-		delay(10);
-		elapsed += 10;
+	for (int poll = 0; poll < 1000; poll++) {
+		xzs_rpm_delay_us(50);
+		elapsed += 50;
 		xzs_watchdog_pet();
 
 		uint32_t avail = xzs_rpm_rx_avail();
