@@ -952,11 +952,25 @@ xzs_d8m6_panel_power_up_to_idle(void)
 	}
 
 	/*
-	 * Phase 1 evaluation: PM8994 LDOA22 vote via RPM SMD does not return ACK
-	 * in fastboot RAM-boot mode. Disproven as a scanout requirement because
-	 * milestone D8-M8.5 (c84623b) achieved physical scanout with 0 LDO22 votes.
+	 * Phase 1: Direct single-variable test of PM8994 LDOA22 (touch-avdd 3.0V) vote via RPM SMD
+	 * Request parameters: resource_id=22, uV=3000000 (3.0V), mA=100, enable=true
 	 */
-	xzs_diag_emit("  2a. LDOA22: Bootloader default retained (Phase 1 RPM vote evaluated)\n");
+	xzs_diag_emit("  2a. Voting LDOA22 (touch-avdd: 3000000 uV, 100 mA, enable=true)...\n");
+	uint32_t ldo22_elapsed = 0;
+	int ldo22_rc = xzs_rpm_vote_ldo(22, 3000000U, 100U, true, &ldo22_elapsed);
+	xzs_diag_emit("  LDO22_REQUEST_PARAMS: id=22 uV=3000000 mA=100 enable=true\n");
+	xzs_diag_emit("  LDO22_VOTE_RC=0x");
+	xzs_d8p1_hex32((uint32_t)ldo22_rc);
+	if (ldo22_rc == 0) {
+		xzs_diag_emit(" (PASS_ACK_RECEIVED)\n");
+	} else if (ldo22_rc == -60) {
+		xzs_diag_emit(" (-60 ETIMEDOUT)\n");
+	} else {
+		xzs_diag_emit(" (FAIL)\n");
+	}
+	xzs_diag_emit("  LDO22_ELAPSED_US=0x");
+	xzs_d8p1_hex32(ldo22_elapsed);
+	xzs_diag_emit("\n");
 
 	/* 2b. Touch Interrupt Pinmux (GPIO 125 Input with Pull-Up) per Sony LK Step T4 */
 	xzs_diag_emit("  2b. Touch INT Pinmux (GPIO125 Input with Pull-Up)...\n");
