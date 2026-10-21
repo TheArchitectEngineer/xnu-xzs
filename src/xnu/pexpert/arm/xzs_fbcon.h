@@ -52,6 +52,7 @@
 extern unsigned char iso_font[256 * 16];
 extern int snprintf(char *, size_t, const char *, ...);
 extern void xzs_d8m8_kick_frame(void);
+extern void xzs_d8m8_kick_frame_ex(bool wait_for_idle);
 
 /* Boot Timing Telemetry Timestamps (19.2 MHz ARM Generic Timer) */
 extern uint64_t g_xzs_boot_t0; /* T0 = first reliable XNU entry */
@@ -65,6 +66,7 @@ extern uint64_t g_xzs_boot_t7; /* T7 = shell prompt ready */
 
 /* Framebuffer Console Public API */
 void xzs_fbcon_attach(uintptr_t fb_va);
+void xzs_fbcon_detach(void);
 void xzs_fbcon_write(const char *buf, int len);
 void xzs_fbcon_putc(char c);
 void xzs_fbcon_early_record(const char *buf, int len);
@@ -142,6 +144,12 @@ xzs_fbcon_is_active(void)
 }
 
 void
+xzs_fbcon_detach(void)
+{
+	g_fbcon_attached = false;
+}
+
+void
 xzs_fbcon_early_record(const char *buf, int len)
 {
 	if (buf == NULL || len <= 0) {
@@ -188,14 +196,14 @@ xzs_fbcon_draw_glyph_raw(uint32_t col, uint32_t row, char ch, uint32_t fg, uint3
 
 	for (uint32_t y = 0; y < 16; y++) {
 		uint8_t bits = glyph[y];
-		line_ptr[0] = (bits & 0x80) ? fg : bg;
-		line_ptr[1] = (bits & 0x40) ? fg : bg;
-		line_ptr[2] = (bits & 0x20) ? fg : bg;
-		line_ptr[3] = (bits & 0x10) ? fg : bg;
-		line_ptr[4] = (bits & 0x08) ? fg : bg;
-		line_ptr[5] = (bits & 0x04) ? fg : bg;
-		line_ptr[6] = (bits & 0x02) ? fg : bg;
-		line_ptr[7] = (bits & 0x01) ? fg : bg;
+		line_ptr[0] = (bits & 0x01) ? fg : bg;
+		line_ptr[1] = (bits & 0x02) ? fg : bg;
+		line_ptr[2] = (bits & 0x04) ? fg : bg;
+		line_ptr[3] = (bits & 0x08) ? fg : bg;
+		line_ptr[4] = (bits & 0x10) ? fg : bg;
+		line_ptr[5] = (bits & 0x20) ? fg : bg;
+		line_ptr[6] = (bits & 0x40) ? fg : bg;
+		line_ptr[7] = (bits & 0x80) ? fg : bg;
 		line_ptr += XZS_FB_WORDS_PER_ROW;
 	}
 }
@@ -347,7 +355,6 @@ xzs_fbcon_scroll_up(void)
 
 	__asm__ volatile("dmb oshst" ::: "memory");
 	xzs_watchdog_pet();
-	xzs_d8m8_kick_frame();
 }
 
 /* Character Dispatcher with Control Characters (Section 20) */
@@ -444,9 +451,11 @@ xzs_fbcon_putc(char c)
 	xzs_fbcon_draw_cursor_raw(g_fbcon_col, g_fbcon_row, false);
 	xzs_fbcon_putc_unlocked(c);
 	xzs_fbcon_draw_cursor_raw(g_fbcon_col, g_fbcon_row, true);
+	bool sync_now = (c == ' ' && g_fbcon_col == 5 && g_fbcon_row < XZS_FBCON_ROWS &&
+	                 g_fbcon_screen[g_fbcon_row][3] == '#');
 	__asm__ volatile("dmb oshst" ::: "memory");
 	xzs_fbcon_unlock_irq(daif);
-	xzs_d8m8_kick_frame();
+	xzs_d8m8_kick_frame_ex(sync_now);
 }
 
 void
@@ -464,9 +473,12 @@ xzs_fbcon_write(const char *buf, int len)
 		xzs_fbcon_putc_unlocked(buf[i]);
 	}
 	xzs_fbcon_draw_cursor_raw(g_fbcon_col, g_fbcon_row, true);
+	bool sync_now = (g_fbcon_col == 5 && g_fbcon_row < XZS_FBCON_ROWS &&
+	                 g_fbcon_screen[g_fbcon_row][3] == '#' &&
+	                 g_fbcon_screen[g_fbcon_row][4] == ' ');
 	__asm__ volatile("dmb oshst" ::: "memory");
 	xzs_fbcon_unlock_irq(daif);
-	xzs_d8m8_kick_frame();
+	xzs_d8m8_kick_frame_ex(sync_now);
 }
 
 /* Print String Utility for Banner / Markers */

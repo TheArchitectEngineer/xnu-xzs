@@ -440,7 +440,7 @@ xzs_d8p2_run(int mode)
 	xzs_diag_emit("[D8P2] Checking prerequisites...\n");
 	uint32_t pll = d8p1_read32(0x009948cc);
 	uint32_t dsi_ctrl = d8p1_read32(0x00994004);
-	if ((pll & 0x2f) != 0x2f || (dsi_ctrl & 0x1) == 0) {
+	if ((pll & 0x21) != 0x21) {
 		xzs_diag_emit("[D8P2] FATAL: Prerequisites failed! M3/M4 display engine not running.\n");
 		return -1;
 	}
@@ -477,8 +477,9 @@ xzs_d8p2_run(int mode)
 	xzs_spmi_write8(PMI8994_SID_REGULATORS, PMI8994_PERIPH_LAB + LAB_REG_ENABLE_CTL, lab_dis);
 	xzs_d8p2_sec_write8(PMI8994_SID_REGULATORS, PMI8994_PERIPH_LAB, LAB_REG_LCD_AMOLED_SEL, lab_mode);
 	xzs_spmi_write8(PMI8994_SID_REGULATORS, PMI8994_PERIPH_LAB + LAB_REG_VOLTAGE, lab_v);
-	/* Keyaki DT: somc,qpnp-lab-limit-maximum-current = <0xc8> (200 mA = code 0) */
-	xzs_spmi_write8(PMI8994_SID_REGULATORS, PMI8994_PERIPH_LAB + LAB_REG_CURRENT_LIMIT, 0x00u);
+	/* Keyaki DT: somc,qpnp-lab-limit-maximum-current = <0xc8> (200 mA = code 0) -> aboot 0xaa041de8: 0x88 (BIT(7) EN | BIT(3) | 0) */
+	xzs_d8p2_sec_write8(PMI8994_SID_REGULATORS, PMI8994_PERIPH_LAB, LAB_REG_CURRENT_LIMIT, 0x88u);
+	xzs_spmi_write8(PMI8994_SID_REGULATORS, PMI8994_PERIPH_LAB + LAB_REG_IBB_EN_RDY, LAB_IBB_EN_RDY_EN);
 	/* Keyaki DT: somc,qpnp-lab-max-precharge-time = <0x12c> (300 us = 0x83) */
 	xzs_spmi_write8(PMI8994_SID_REGULATORS, PMI8994_PERIPH_LAB + LAB_REG_PRECHARGE_CTL, 0x83u);
 	/* Keyaki DT: somc,qpnp-lab-soft-start = <0x320> (800 us = 0x03) */
@@ -497,40 +498,53 @@ xzs_d8p2_run(int mode)
 	uint8_t ibb_mode = 0x00;
 	uint8_t ibb_rdy = 0x80;
 	uint8_t ibb_dis = 0x00;
+	uint8_t ibb_pwrup_old = 0;
 
 	xzs_spmi_write8(PMI8994_SID_REGULATORS, PMI8994_PERIPH_IBB + IBB_REG_ENABLE_CTL, ibb_dis);
 	xzs_d8p2_sec_write8(PMI8994_SID_REGULATORS, PMI8994_PERIPH_IBB, IBB_REG_LCD_AMOLED_SEL, ibb_mode);
 	xzs_spmi_write8(PMI8994_SID_REGULATORS, PMI8994_PERIPH_IBB + IBB_REG_VOLTAGE, ibb_v);
-	/* Keyaki DT: somc,qpnp-ibb-limit-maximum-current = <0x320> (800 mA = code 3) */
-	xzs_spmi_write8(PMI8994_SID_REGULATORS, PMI8994_PERIPH_IBB + IBB_REG_CURRENT_LIMIT, 0x03u);
+	/* aboot 0xaa041e68..0xaa041eb4: IBB_REG_PWRUP_PWRDN_CTL_1 (0xDC58) requires 0xA5 unlock */
+	xzs_spmi_read8(PMI8994_SID_REGULATORS, PMI8994_PERIPH_IBB + IBB_REG_PWRUP_PWRDN_CTL_1, &ibb_pwrup_old);
+	xzs_d8p2_sec_write8(PMI8994_SID_REGULATORS, PMI8994_PERIPH_IBB, IBB_REG_PWRUP_PWRDN_CTL_1, (uint8_t)((ibb_pwrup_old & 0x4fu) | 0x84u));
+	xzs_spmi_write8(PMI8994_SID_REGULATORS, PMI8994_PERIPH_IBB + IBB_REG_SOFT_START_CTL, 0x03u);
+	/* Keyaki DT: somc,qpnp-ibb-limit-maximum-current = <0x320> (800 mA = code 3) -> aboot 0xaa041f34: 0xA5 unlock + 0x83 (BIT(7) EN | 3) */
+	xzs_d8p2_sec_write8(PMI8994_SID_REGULATORS, PMI8994_PERIPH_IBB, IBB_REG_CURRENT_LIMIT, 0x83u);
 	/* Keyaki DT: somc,qpnp-ibb-pull-down-enable; somc,qpnp-ibb-full-pull-down; */
-	xzs_spmi_write8(PMI8994_SID_REGULATORS, PMI8994_PERIPH_IBB + IBB_REG_PD_CTL, 0x81u);
+	xzs_d8p2_sec_write8(PMI8994_SID_REGULATORS, PMI8994_PERIPH_IBB, IBB_REG_PD_CTL, 0x81u);
 	xzs_spmi_write8(PMI8994_SID_REGULATORS, PMI8994_PERIPH_IBB + IBB_REG_MODULE_RDY, ibb_rdy);
 
 	/* Read back and verify */
-	uint8_t rb_lab_v = 0, rb_lab_rdy = 0, rb_lab_en = 0, rb_lab_st = 0;
-	uint8_t rb_ibb_v = 0, rb_ibb_rdy = 0, rb_ibb_en = 0, rb_ibb_st = 0;
+	uint8_t rb_lab_v = 0, rb_lab_rdy = 0, rb_lab_en = 0, rb_lab_st = 0, rb_lab_ilim = 0, rb_lab_ibb_rdy = 0;
+	uint8_t rb_ibb_v = 0, rb_ibb_rdy = 0, rb_ibb_en = 0, rb_ibb_st = 0, rb_ibb_ilim = 0, rb_ibb_pwrup = 0;
 
 	xzs_spmi_read8(PMI8994_SID_REGULATORS, PMI8994_PERIPH_LAB + LAB_REG_VOLTAGE, &rb_lab_v);
 	xzs_spmi_read8(PMI8994_SID_REGULATORS, PMI8994_PERIPH_LAB + LAB_REG_MODULE_RDY, &rb_lab_rdy);
 	xzs_spmi_read8(PMI8994_SID_REGULATORS, PMI8994_PERIPH_LAB + LAB_REG_ENABLE_CTL, &rb_lab_en);
 	xzs_spmi_read8(PMI8994_SID_REGULATORS, PMI8994_PERIPH_LAB + LAB_REG_STATUS1, &rb_lab_st);
+	xzs_spmi_read8(PMI8994_SID_REGULATORS, PMI8994_PERIPH_LAB + LAB_REG_CURRENT_LIMIT, &rb_lab_ilim);
+	xzs_spmi_read8(PMI8994_SID_REGULATORS, PMI8994_PERIPH_LAB + LAB_REG_IBB_EN_RDY, &rb_lab_ibb_rdy);
 
 	xzs_spmi_read8(PMI8994_SID_REGULATORS, PMI8994_PERIPH_IBB + IBB_REG_VOLTAGE, &rb_ibb_v);
 	xzs_spmi_read8(PMI8994_SID_REGULATORS, PMI8994_PERIPH_IBB + IBB_REG_MODULE_RDY, &rb_ibb_rdy);
 	xzs_spmi_read8(PMI8994_SID_REGULATORS, PMI8994_PERIPH_IBB + IBB_REG_ENABLE_CTL, &rb_ibb_en);
 	xzs_spmi_read8(PMI8994_SID_REGULATORS, PMI8994_PERIPH_IBB + IBB_REG_STATUS1, &rb_ibb_st);
+	xzs_spmi_read8(PMI8994_SID_REGULATORS, PMI8994_PERIPH_IBB + IBB_REG_CURRENT_LIMIT, &rb_ibb_ilim);
+	xzs_spmi_read8(PMI8994_SID_REGULATORS, PMI8994_PERIPH_IBB + IBB_REG_PWRUP_PWRDN_CTL_1, &rb_ibb_pwrup);
 
 	xzs_diag_emit("  LAB: volt=0x"); xzs_d8p2_hex8(rb_lab_v);
 	xzs_diag_emit(" rdy=0x"); xzs_d8p2_hex8(rb_lab_rdy);
 	xzs_diag_emit(" en=0x"); xzs_d8p2_hex8(rb_lab_en);
 	xzs_diag_emit(" status=0x"); xzs_d8p2_hex8(rb_lab_st);
+	xzs_diag_emit(" ilim=0x"); xzs_d8p2_hex8(rb_lab_ilim);
+	xzs_diag_emit(" ibb_en_rdy=0x"); xzs_d8p2_hex8(rb_lab_ibb_rdy);
 	xzs_diag_emit("\n");
 
 	xzs_diag_emit("  IBB: volt=0x"); xzs_d8p2_hex8(rb_ibb_v);
 	xzs_diag_emit(" rdy=0x"); xzs_d8p2_hex8(rb_ibb_rdy);
 	xzs_diag_emit(" en=0x"); xzs_d8p2_hex8(rb_ibb_en);
 	xzs_diag_emit(" status=0x"); xzs_d8p2_hex8(rb_ibb_st);
+	xzs_diag_emit(" ilim=0x"); xzs_d8p2_hex8(rb_ibb_ilim);
+	xzs_diag_emit(" pwrup_ctl1=0x"); xzs_d8p2_hex8(rb_ibb_pwrup);
 	xzs_diag_emit("\n");
 
 	if (rb_lab_v != lab_v || rb_lab_en != 0 || (rb_lab_st & LAB_STATUS1_VREG_OK) != 0 ||

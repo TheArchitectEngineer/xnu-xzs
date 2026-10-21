@@ -22,6 +22,7 @@
 #include <string.h>
 #include "xzs_d8m5.h"
 #include "xzs_d8m4.h"
+#include <pexpert/arm/xzs_rpm.h>
 
 extern void xzs_diag_emit(const char *msg);
 extern void xzs_watchdog_pet(void);
@@ -193,6 +194,42 @@ static const struct xzs_d8m6_cmd s_cmd_dt_on_12 = {
 	.payload = s_payload_cmd12_stesl,
 	.post_wait_us = 0,
 };
+
+/*
+ * Authentic Sony Xperia XZs Panel 9 (somc,sharp_synaptics_cmd_9_panel)
+ * Commands directly extracted from panel9.dtsi:357 (qcom,mdss-dsi-on-command)
+ */
+static const uint8_t s_p9_payload_51[2]  = { 0x51, 0xff };
+static const uint8_t s_p9_payload_53[2]  = { 0x53, 0x0c };
+static const uint8_t s_p9_payload_55[2]  = { 0x55, 0x00 };
+static const uint8_t s_p9_payload_35[2]  = { 0x35, 0x00 };
+static const uint8_t s_p9_payload_b0[2]  = { 0xb0, 0x04 };
+static const uint8_t s_p9_payload_d6[2]  = { 0xd6, 0x01 };
+static const uint8_t s_p9_payload_c9[9]  = { 0xc9, 0x1f, 0x60, 0x1f, 0x60, 0x90, 0x90, 0xc4, 0x00 };
+static const uint8_t s_p9_payload_d5[12] = { 0xd5, 0x66, 0x00, 0x00, 0x01, 0x25, 0x01, 0x25, 0x00, 0x25, 0x00, 0x25 };
+static const uint8_t s_p9_payload_d0[17] = { 0xd0, 0x19, 0x01, 0x91, 0x0b, 0x94, 0x0f, 0x0a, 0x00, 0x00, 0x00, 0x19, 0x99, 0x00, 0x00, 0x00, 0x00 };
+static const uint8_t s_p9_payload_d3[29] = { 0xd3, 0x1b, 0x3b, 0xbb, 0xbd, 0xb5, 0x33, 0x33, 0x33, 0x00, 0x80, 0xa6, 0xa0, 0x5f, 0x5f, 0x33, 0x33, 0x33, 0xf7, 0xf2, 0x0f, 0x7d, 0x7c, 0xff, 0x0f, 0x99, 0x00, 0xff, 0xff };
+static const uint8_t s_p9_payload_d7[33] = { 0xd7, 0x04, 0xff, 0x23, 0x55, 0x47, 0x1e, 0xfe, 0x78, 0xf0, 0x19, 0xa8, 0x0f, 0x38, 0x3e, 0x60, 0x1c, 0x0f, 0x8f, 0xc7, 0xe3, 0x99, 0xe1, 0x20, 0x00, 0x00, 0x00, 0x00, 0xf0, 0xeb, 0x39, 0x18, 0x07 };
+static const uint8_t s_p9_payload_c1[32] = { 0xc1, 0x84, 0x00, 0x00, 0x00, 0x88, 0x01, 0x00, 0x40, 0xc0, 0x35, 0xe6, 0x1a, 0x63, 0xcd, 0xb1, 0xe6, 0xc0, 0x7a, 0x00, 0xc8, 0x08, 0x00, 0x00, 0xaa, 0x40, 0x02, 0x82, 0x01, 0x08, 0x00, 0x01 };
+static const uint8_t s_p9_payload_c7[31] = { 0xc7, 0x06, 0x10, 0x1a, 0x23, 0x35, 0x44, 0x4e, 0x5d, 0x42, 0x4b, 0x57, 0x64, 0x6b, 0x71, 0x79, 0x04, 0x0e, 0x19, 0x22, 0x35, 0x43, 0x4e, 0x5d, 0x42, 0x4a, 0x55, 0x63, 0x6b, 0x70, 0x79 };
+static const uint8_t s_p9_payload_c8[20] = { 0xc8, 0x01, 0x00, 0xfd, 0x01, 0xff, 0xfc, 0x00, 0x00, 0xfd, 0x01, 0xff, 0xfc, 0x00, 0x00, 0xfd, 0x01, 0xff, 0xfc, 0x00 };
+static const uint8_t s_p9_payload_c6_59[2] = { 0xc6, 0x59 };
+
+static const struct xzs_d8m6_cmd s_p9_cmd_51 = { .name = "P9_CMD1 (51 FF Brightness)", .dtype = DSI_DCS_LONG_WRITE, .dlen = 2, .payload = s_p9_payload_51, .post_wait_us = 0 };
+static const struct xzs_d8m6_cmd s_p9_cmd_53 = { .name = "P9_CMD2 (53 0C Ctrl Disp)",  .dtype = DSI_DCS_LONG_WRITE, .dlen = 2, .payload = s_p9_payload_53, .post_wait_us = 0 };
+static const struct xzs_d8m6_cmd s_p9_cmd_55 = { .name = "P9_CMD3 (55 00 CABC)",       .dtype = DSI_DCS_LONG_WRITE, .dlen = 2, .payload = s_p9_payload_55, .post_wait_us = 0 };
+static const struct xzs_d8m6_cmd s_p9_cmd_35 = { .name = "P9_CMD4 (35 00 TEON)",       .dtype = DSI_DCS_LONG_WRITE, .dlen = 2, .payload = s_p9_payload_35, .post_wait_us = 0 };
+static const struct xzs_d8m6_cmd s_p9_cmd_b0 = { .name = "P9_CMD5 (B0 04 Unlock)",     .dtype = DSI_GENERIC_LONG_WRITE, .dlen = 2, .payload = s_p9_payload_b0, .post_wait_us = 0 };
+static const struct xzs_d8m6_cmd s_p9_cmd_d6 = { .name = "P9_CMD6 (D6 01 TE Output)",  .dtype = DSI_GENERIC_LONG_WRITE, .dlen = 2, .payload = s_p9_payload_d6, .post_wait_us = 0 };
+static const struct xzs_d8m6_cmd s_p9_cmd_c6_59 = { .name = "P9_CMD_FPS (C6 59 60Hz)", .dtype = DSI_GENERIC_LONG_WRITE, .dlen = 2, .payload = s_p9_payload_c6_59, .post_wait_us = 0 };
+static const struct xzs_d8m6_cmd s_p9_cmd_c9 = { .name = "P9_CMD7 (C9 Oscillator)",     .dtype = DSI_GENERIC_LONG_WRITE, .dlen = 9, .payload = s_p9_payload_c9, .post_wait_us = 0 };
+static const struct xzs_d8m6_cmd s_p9_cmd_d5 = { .name = "P9_CMD8 (D5 Timing)",         .dtype = DSI_GENERIC_LONG_WRITE, .dlen = 12, .payload = s_p9_payload_d5, .post_wait_us = 0 };
+static const struct xzs_d8m6_cmd s_p9_cmd_d0 = { .name = "P9_CMD9 (D0 Timing)",         .dtype = DSI_GENERIC_LONG_WRITE, .dlen = 17, .payload = s_p9_payload_d0, .post_wait_us = 0 };
+static const struct xzs_d8m6_cmd s_p9_cmd_d3 = { .name = "P9_CMD10 (D3 Gate Timing)",   .dtype = DSI_GENERIC_LONG_WRITE, .dlen = 29, .payload = s_p9_payload_d3, .post_wait_us = 0 };
+static const struct xzs_d8m6_cmd s_p9_cmd_d7 = { .name = "P9_CMD11 (D7 Source Timing)", .dtype = DSI_GENERIC_LONG_WRITE, .dlen = 33, .payload = s_p9_payload_d7, .post_wait_us = 0 };
+static const struct xzs_d8m6_cmd s_p9_cmd_c1 = { .name = "P9_CMD12 (C1 Power / Bias)",  .dtype = DSI_GENERIC_LONG_WRITE, .dlen = 32, .payload = s_p9_payload_c1, .post_wait_us = 0 };
+static const struct xzs_d8m6_cmd s_p9_cmd_c7 = { .name = "P9_CMD13 (C7 Gamma)",         .dtype = DSI_GENERIC_LONG_WRITE, .dlen = 31, .payload = s_p9_payload_c7, .post_wait_us = 0 };
+static const struct xzs_d8m6_cmd s_p9_cmd_c8 = { .name = "P9_CMD14 (C8 Gamma 2)",       .dtype = DSI_GENERIC_LONG_WRITE, .dlen = 20, .payload = s_p9_payload_c8, .post_wait_us = 0 };
 
 /* Master Command Table */
 static const struct xzs_d8m6_cmd s_cmd_slpout = {
@@ -866,7 +903,7 @@ xzs_d8m6_panel_power_up_to_idle(void)
 	xzs_diag_emit("ENTRY_DSI_HOST_ON="); xzs_diag_emit((ctrl & 1u) ? "YES\n" : "NO\n");
 	xzs_diag_emit("ENTRY_DSI_PHY_ON="); xzs_diag_emit(((pll & 0x21u) == 0x21u) ? "YES\n" : "NO\n");
 	xzs_diag_emit("FASTBOOT_HANDOFF_PANEL_STATE=");
-	if ((entry_lab_st & LAB_STATUS1_VREG_OK) || (entry_ibb_st & IBB_STATUS1_VREG_OK) || entry_gpio51) {
+	if ((entry_lab_st & LAB_STATUS1_VREG_OK) || (entry_ibb_st & IBB_STATUS1_VREG_OK) || (entry_gpio51 == 0) || (entry_gpio50 == 0)) {
 		xzs_diag_emit("PARTIALLY_POWERED\n");
 	} else {
 		xzs_diag_emit("FULLY_OFF\n");
@@ -878,7 +915,7 @@ xzs_d8m6_panel_power_up_to_idle(void)
 	 * Phase C / F12 Correction: Verify True-Cold Discharge Before Reinitialization
 	 */
 	xzs_diag_emit("[F12-TRUE-COLD] Verifying source-proven panel discharge:\n");
-	if ((entry_lab_st & LAB_STATUS1_VREG_OK) || (entry_ibb_st & IBB_STATUS1_VREG_OK) || entry_gpio51) {
+	if ((entry_lab_st & LAB_STATUS1_VREG_OK) || (entry_ibb_st & IBB_STATUS1_VREG_OK) || (entry_gpio51 == 0) || (entry_gpio50 == 0)) {
 		/* Disable DSI before cutting VDDIO to protect PHY pads */
 		d8m4_write32(D8M6_REG_DSI_CTRL, 0u);
 		d8m4_write32(D8M6_REG_DSI_CLK_CTRL, 0u);
@@ -905,16 +942,42 @@ xzs_d8m6_panel_power_up_to_idle(void)
 		return -3;
 	}
 
-	/* 2. VDDIO ON -> wait 10 ms */
-	xzs_diag_emit("  2. Enable VDDIO (GPIO51=1, GPIO50=1)...\n");
+	/*
+	 * 2. Enable VDDIO (Active-LOW: GPIO 51 = 0 LOW -> wait 10 ms -> GPIO 50 = 0 LOW)
+	 * Proven by aboot.img (panel_power_on @ 0xaa03eea4..0xaa03eed0) and
+	 * twrp-kernel.bin (mdss_dsi_panel_driver_power_on @ 0x4d6308..0x4d6344).
+	 */
+	xzs_diag_emit("  2. Enable VDDIO (Active-LOW: GPIO51=0 -> 10ms -> GPIO50=0)...\n");
 	xzs_d8m5_set_vddio_high();
-	xzs_d8m5_set_touch_vddio_high();
 	xzs_d8p2_delay_us(10000);
-	if (xzs_d8m5_gpio_read_in(GPIO_VDDIO_NUM) == 0 || xzs_d8m5_gpio_read_in(GPIO_TOUCH_VDDIO_NUM) == 0) {
-		xzs_diag_emit("!!! FAIL: VDDIO enable failed!\n");
+	xzs_d8m5_set_touch_vddio_high();
+	xzs_d8p2_delay_us(1000);
+	if (xzs_d8m5_gpio_read_in(GPIO_VDDIO_NUM) != 0 || xzs_d8m5_gpio_read_in(GPIO_TOUCH_VDDIO_NUM) != 0) {
+		xzs_diag_emit("!!! FAIL: VDDIO enable failed (expected Active-LOW 0)!\n");
 		xzs_d8m5_power_down();
 		return -4;
 	}
+
+	/*
+	 * Phase 1: Direct single-variable test of PM8994 LDOA22 (touch-avdd 3.0V) vote via RPM SMD
+	 * Request parameters: resource_id=22, uV=3000000 (3.0V), mA=100, enable=true
+	 */
+	xzs_diag_emit("  2a. Voting LDOA22 (touch-avdd: 3000000 uV, 100 mA, enable=true)...\n");
+	uint32_t ldo22_elapsed = 0;
+	int ldo22_rc = xzs_rpm_vote_ldo(22, 3000000U, 100U, true, &ldo22_elapsed);
+	xzs_diag_emit("  LDO22_REQUEST_PARAMS: id=22 uV=3000000 mA=100 enable=true\n");
+	xzs_diag_emit("  LDO22_VOTE_RC=0x");
+	xzs_d8p1_hex32((uint32_t)ldo22_rc);
+	if (ldo22_rc == 0) {
+		xzs_diag_emit(" (PASS_ACK_RECEIVED)\n");
+	} else if (ldo22_rc == -60) {
+		xzs_diag_emit(" (-60 ETIMEDOUT)\n");
+	} else {
+		xzs_diag_emit(" (FAIL)\n");
+	}
+	xzs_diag_emit("  LDO22_ELAPSED_US=0x");
+	xzs_d8p1_hex32(ldo22_elapsed);
+	xzs_diag_emit("\n");
 
 	/* 2b. Touch Interrupt Pinmux (GPIO 125 Input with Pull-Up) per Sony LK Step T4 */
 	xzs_diag_emit("  2b. Touch INT Pinmux (GPIO125 Input with Pull-Up)...\n");
@@ -981,7 +1044,7 @@ xzs_d8m6_panel_power_up_to_idle(void)
 	xzs_d8p2_delay_us(10);
 	d8m4_write32(D8M6_REG_DSI_SOFT_RESET, 0u);
 	xzs_d8p2_delay_us(10);
-	d8m4_write32(D8M6_REG_DSI_CLK_CTRL, 0x0000003fu);
+	d8m4_write32(D8M6_REG_DSI_CLK_CTRL, 0x0000023fu);
 	d8m4_write32(D8M6_REG_DSI_TRIG_CTRL, 0x00000004u);
 	d8m4_write32(D8M6_REG_DSI_CTRL, 0x000001f5u);
 	/* Ensure DSI_LANE_CTRL is 0x00000000 (matching TWRP golden state; no forced HS clk) */

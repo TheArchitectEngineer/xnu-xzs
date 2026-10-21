@@ -99,6 +99,12 @@ xzs_diag_boot_args(void)
 #define XZS_MMCC_AXI_CFG 0x5044u
 #define XZS_MMCC_MMAGIC_MDSS_AXI 0x2474u
 #define XZS_MMCC_MMAGIC_HW_CTRL 0x2480u
+#define XZS_MMCC_SMMU_MDP_AHB 0x2454u
+#define XZS_MMCC_SMMU_MDP_AXI 0x2458u
+#define XZS_MMCC_MMSS_S0_AXI 0x5064u
+#define XZS_MMCC_MMSS_MMAGIC_AXI 0x506cu
+#define XZS_MMCC_MMAGIC_BIMC_AXI 0x5294u
+#define XZS_MMCC_MMAGIC_BIMC_GDSC 0x529cu
 #define XZS_GCC_BASE 0x00300000u
 #define XZS_GCC_MMSS_NOC_CFG_AHB 0x9008u
 #define XZS_GCC_GPLL0_MODE 0x00000u
@@ -407,6 +413,79 @@ xzs_d8m2_power_status(void)
 }
 
 static void
+xzs_d8m2_ensure_aboot_mmss_fabric(void)
+{
+	uint32_t gdsc;
+	uint32_t cfg;
+	uint32_t cmd;
+	uint32_t rb;
+	int i;
+
+	/*
+	 * aboot target_panel_clock(0) disables:
+	 * 1. ahb_clk_src (0x5000/0x5004) / mmss_mmagic_ahb (0x5024) / cfg_ahb (0x5054) / noc_cfg_ahb (0x2478)
+	 * 2. MMAGIC_BIMC_GDSCR (0x529c), MMAGIC_MDSS_GDSCR (0x247c), MDSS_GDSCR (0x2304)
+	 * 3. axi_clk_src (0x5040/0x5044)
+	 * 4. 6 AXI branches: 0x506c, 0x5294, 0x5064, 0x2474, 0x2458, 0x2310
+	 * 5. SMMU_MDP_AHB (0x2454)
+	 * Re-enable the full MMSS/BIMC/SMMU AXI & AHB fabric per aboot 0xaa002adc..0xaa0031ec.
+	 */
+	(void)xzs_mmcc_rmw(XZS_MMCC_MMAGIC_AHB, XZS_CBCR_ENABLE, XZS_CBCR_ENABLE);
+	(void)xzs_poll_bit31(XZS_MMCC_MMAGIC_AHB, 0, &rb);
+	(void)xzs_mmcc_rmw(XZS_MMCC_CFG_AHB, XZS_CBCR_ENABLE, XZS_CBCR_ENABLE);
+	(void)xzs_poll_bit31(XZS_MMCC_CFG_AHB, 0, &rb);
+	(void)xzs_mmcc_rmw(XZS_MMCC_MMAGIC_MDSS_NOC, XZS_CBCR_ENABLE, XZS_CBCR_ENABLE);
+	(void)xzs_poll_bit31(XZS_MMCC_MMAGIC_MDSS_NOC, 0, &rb);
+
+	/* Enable MMAGIC_BIMC_GDSCR (0x529c) per aboot 0xaa002adc */
+	gdsc = xzs_mmcc_read32(XZS_MMCC_MMAGIC_BIMC_GDSC);
+	if (!xzs_gdsc_already_on(gdsc)) {
+		xzs_mmcc_write32(XZS_MMCC_MMAGIC_BIMC_GDSC, (gdsc & ~0x000f0001u) | 0x00080000u);
+		(void)xzs_poll_bit31(XZS_MMCC_MMAGIC_BIMC_GDSC, 1, &rb);
+		delay(1);
+	}
+
+	/* Enable MMAGIC_MDSS_GDSCR (0x247c) if not already on */
+	gdsc = xzs_mmcc_read32(XZS_MMCC_MMAGIC_MDSS_GDSC);
+	if (!xzs_gdsc_already_on(gdsc)) {
+		(void)xzs_mmcc_rmw(XZS_MMCC_MMAGIC_MDSS_GDSC, XZS_GDSC_SW_COLLAPSE, 0);
+		delay(1);
+		(void)xzs_poll_bit31(XZS_MMCC_MMAGIC_HW_CTRL, 1, &rb);
+		delay(1);
+		(void)xzs_mmcc_rmw(XZS_MMCC_MMAGIC_MDSS_GDSC, XZS_GDSC_HW_CONTROL, XZS_GDSC_HW_CONTROL);
+		delay(1);
+	}
+
+	/* Switch axi_clk_src (0x5040/0x5044) to GPLL0 200 MHz (0x00000505 per aboot 0xaa0a885c) */
+	cfg = xzs_mmcc_read32(XZS_MMCC_AXI_CFG);
+	if ((cfg & 0x0010371fu) != 0x00000505u) {
+		xzs_mmcc_write32(XZS_MMCC_AXI_CFG, (cfg & ~0x0010371fu) | 0x00000505u);
+		cmd = xzs_mmcc_read32(XZS_MMCC_AXI_CMD);
+		xzs_mmcc_write32(XZS_MMCC_AXI_CMD, cmd | 1u);
+		for (i = 0; i < 500; i++) {
+			if ((xzs_mmcc_read32(XZS_MMCC_AXI_CMD) & 1u) == 0u) {
+				break;
+			}
+			delay(1);
+		}
+	}
+
+	/* Enable MMSS/BIMC/SMMU AXI & AHB branches per aboot mmss_bus_clock_enable (0xaa002fa8) */
+	(void)xzs_mmcc_rmw(XZS_MMCC_MMSS_MMAGIC_AXI, XZS_CBCR_ENABLE, XZS_CBCR_ENABLE);
+	(void)xzs_poll_bit31(XZS_MMCC_MMSS_MMAGIC_AXI, 0, &rb);
+	(void)xzs_mmcc_rmw(XZS_MMCC_MMAGIC_BIMC_AXI, XZS_CBCR_ENABLE, XZS_CBCR_ENABLE);
+	(void)xzs_poll_bit31(XZS_MMCC_MMAGIC_BIMC_AXI, 0, &rb);
+	(void)xzs_mmcc_rmw(XZS_MMCC_MMSS_S0_AXI, XZS_CBCR_ENABLE, XZS_CBCR_ENABLE);
+	(void)xzs_poll_bit31(XZS_MMCC_MMSS_S0_AXI, 0, &rb);
+	(void)xzs_mmcc_rmw(XZS_MMCC_MMAGIC_MDSS_AXI, XZS_CBCR_ENABLE, XZS_CBCR_ENABLE);
+	(void)xzs_poll_bit31(XZS_MMCC_MMAGIC_MDSS_AXI, 0, &rb);
+	(void)xzs_mmcc_rmw(XZS_MMCC_SMMU_MDP_AHB, XZS_CBCR_ENABLE, XZS_CBCR_ENABLE);
+	(void)xzs_poll_bit31(XZS_MMCC_SMMU_MDP_AHB, 0, &rb);
+	(void)xzs_mmcc_rmw(XZS_MMCC_SMMU_MDP_AXI, XZS_CBCR_ENABLE, XZS_CBCR_ENABLE);
+	(void)xzs_poll_bit31(XZS_MMCC_SMMU_MDP_AXI, 0, &rb);
+}
+
+static void
 xzs_d8m2_mmagic_on(void)
 {
 	uint32_t old;
@@ -414,6 +493,7 @@ xzs_d8m2_mmagic_on(void)
 	uint32_t wrote;
 	uint32_t readback;
 
+	xzs_d8m2_ensure_aboot_mmss_fabric();
 	xzs_d8m2_line("ACTION=PWR-MMAGIC-001\n");
 	xzs_d8m2_line("PRE\n");
 	old = xzs_mmcc_read32(XZS_MMCC_MMAGIC_MDSS_GDSC);
@@ -464,6 +544,7 @@ xzs_d8m2_mdss_on(void)
 	uint32_t axi;
 	uint32_t mdp;
 
+	xzs_d8m2_ensure_aboot_mmss_fabric();
 	xzs_d8m2_line("ACTION=PWR-MDSS-001\n");
 	xzs_d8m2_line("PRE\n");
 	parent = xzs_mmcc_read32(XZS_MMCC_MMAGIC_MDSS_GDSC);
@@ -694,10 +775,16 @@ xzs_d8m2_critical_status(void)
 	xzs_d8m2_line("ACTION=CLK-CRIT-STATUS-001\n");
 	xzs_d8m2_line("PRE\n");
 	xzs_d8m2_u32("[D8-M2] mmagic=", xzs_mmcc_read32(XZS_MMCC_MMAGIC_MDSS_GDSC));
+	xzs_d8m2_u32("[D8-M2] mmagic_bimc_gdsc=", xzs_mmcc_read32(XZS_MMCC_MMAGIC_BIMC_GDSC));
 	xzs_d8m2_branch_line("[D8-M2] mmagic_ahb=", xzs_mmcc_read32(XZS_MMCC_MMAGIC_AHB));
 	xzs_d8m2_branch_line("[D8-M2] mmagic_cfg_ahb=", xzs_mmcc_read32(XZS_MMCC_CFG_AHB));
 	xzs_d8m2_branch_line("[D8-M2] mmagic_mdss_noc=", xzs_mmcc_read32(XZS_MMCC_MMAGIC_MDSS_NOC));
 	xzs_d8m2_branch_line("[D8-M2] mmagic_mdss_axi=", xzs_mmcc_read32(XZS_MMCC_MMAGIC_MDSS_AXI));
+	xzs_d8m2_branch_line("[D8-M2] mmss_mmagic_axi=", xzs_mmcc_read32(XZS_MMCC_MMSS_MMAGIC_AXI));
+	xzs_d8m2_branch_line("[D8-M2] mmagic_bimc_axi=", xzs_mmcc_read32(XZS_MMCC_MMAGIC_BIMC_AXI));
+	xzs_d8m2_branch_line("[D8-M2] mmss_s0_axi=", xzs_mmcc_read32(XZS_MMCC_MMSS_S0_AXI));
+	xzs_d8m2_branch_line("[D8-M2] smmu_mdp_ahb=", xzs_mmcc_read32(XZS_MMCC_SMMU_MDP_AHB));
+	xzs_d8m2_branch_line("[D8-M2] smmu_mdp_axi=", xzs_mmcc_read32(XZS_MMCC_SMMU_MDP_AXI));
 	ahb_cmd = xzs_mmcc_read32(XZS_MMCC_AHB_CMD);
 	ahb_cfg = xzs_mmcc_read32(XZS_MMCC_AHB_CFG);
 	axi_cmd = xzs_mmcc_read32(XZS_MMCC_AXI_CMD);
@@ -903,6 +990,13 @@ xzs_diag_dispatch(uint64_t which, uint64_t arg1, uint64_t arg2, uint64_t arg3)
 		xzs_d8p1_run(0);
 		break;
 	case 34:
+		xzs_fbcon_detach();
+		g_m8_stream_configured = false;
+		d8p1_write32(0x0090201cu, 0x00000000u);
+		d8p1_write32(0x00902018u, 0x00000000u);
+		d8p1_write32(0x00971000u, 0x00000000u);
+		d8p1_write32(0x00971030u, 0x00000000u);
+		d8p1_write32(0x00994040u, 0x00000000u);
 		xzs_d8p1_run(1);
 		break;
 	case 35:
@@ -1024,41 +1118,26 @@ xzs_display_bringup_auto(void)
 	xzs_diag_emit("=== [XZS-DISP] AUTO EARLY DISPLAY BRINGUP START     ===\n");
 	xzs_diag_emit("=======================================================\n");
 
-	/* 1. MMAGIC & MDSS GDSC Power Domains & Clocks */
-	xzs_d8m2_critical_on("CLK-MMAGIC-AHB-001", XZS_MMCC_MMAGIC_AHB, 0);
-	xzs_d8m2_critical_on("CLK-MMAGIC-CFG-001", XZS_MMCC_CFG_AHB, 0);
-	xzs_d8m2_critical_on("CLK-MMAGIC-NOC-001", XZS_MMCC_MMAGIC_MDSS_NOC, 1);
-	xzs_d8m2_critical_on("CLK-MMAGIC-AXI-001", XZS_MMCC_MMAGIC_MDSS_AXI, 2);
-	xzs_d8m2_mdss_on();
-	xzs_d8m2_branch_on("CLK-AHB-001", XZS_MMCC_MDSS_AHB);
-	xzs_d8m2_branch_on("CLK-AXI-001", XZS_MMCC_MDSS_AXI);
-	xzs_d8m2_branch_on("CLK-MDP-001", XZS_MMCC_MDSS_MDP);
+	/* 1. MMAGIC & MDSS GDSC Power Domains & Clocks (Fabric prerequisite) */
+	xzs_d8m2_ensure_aboot_mmss_fabric();
+	xzs_diag_emit("\n[XZS-DISP] MMSS/BIMC FABRIC READY FOR DISPLAY BRINGUP\n");
+}
 
-	/* 2. DSI PLL & 14nm PHY Mode 2 */
-	xzs_d8m3_run(2);
-	xzs_d8m4_run(2);
-
-	/* 3. GPIO Pinmux (GPIO 10 mdp_vsync, GPIO 8, etc.) */
-	xzs_d8p1_run(1);
-
-	/* 4. Sharp 1080p Panel Prepare & 13 Authentic DDIC vendor commands */
-	xzs_d8m8_panel_prepare();
-
-	/* 5. Framebuffer mapping & test pattern */
-	xzs_d8m8_fb_init();
-
-	/* 6. MDP clock rate configuration to 171.4 MHz (C1) */
-	xzs_d8m8_c1_rate();
-
-	/* 7. MDP5 pipeline setup */
-	xzs_d8m8_rgb0_config();
-	xzs_d8m8_lm0_config();
-	xzs_d8m8_stream_config();
-	xzs_d8m8_ctl_config();
-	xzs_d8m8_flush_config();
-
-	/* 8. Kickoff: CTL_START + WLED Backlight + FBCON attachment */
-	xzs_d8m8_kickoff();
-
-	xzs_diag_emit("\n[XZS-DISP] AUTO EARLY DISPLAY BRINGUP COMPLETE - LCD ACTIVE!\n");
+void
+xzs_display_quiesce_for_reboot(void)
+{
+	xzs_fbcon_detach();
+	if (g_m8_frame_in_flight) {
+		(void)xzs_d8m8_wait_frame_idle(40000u);
+	}
+	if (g_m8_wled_writes > 0) {
+		xzs_wled_set_brightness(0u);
+	}
+	if (g_m8_stream_configured || g_m8_ctl_configured) {
+		d8p1_write32(0x0090201cu, 0x00000000u);
+		d8p1_write32(0x00902018u, 0x00000000u);
+		d8p1_write32(0x00971000u, 0x00000000u);
+		d8p1_write32(0x00971030u, 0x00000000u);
+		d8p1_write32(0x00994040u, 0x00000000u);
+	}
 }

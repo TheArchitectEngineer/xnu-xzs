@@ -1,110 +1,73 @@
-# Sony Xperia XZs (MSM8996) — D8-M10 Hardware Evaluation & Diagnostic Report
+# Sony Xperia XZs (MSM8996) — D8-M10 Hardware Evaluation & Closure Report
 
 **Target Device**: Sony Xperia XZs (`G8231`, `keyaki`, Serial: `BH905SX976`)  
 **SoC**: Qualcomm Snapdragon 820 (`MSM8996 Pro`, ARMv8.0-A)  
-**Display Hardware**: Sharp 1080x1920 Command Mode IPS LCD (`somc,sharp_synaptics_cmd_9_panel`)  
+**Display Hardware**: Sharp + Synaptics 1080x1920 Command Mode In-Cell IPS LCD (`somc,sharp_synaptics_cmd_9_panel`, DDIC ID `84 72 09`)  
 **Date**: October 2026  
-**Status**: WLED Backlight ACTIVE (50%), Scanout Pixel Gated (Black Screen), USB Console ACTIVE, PAC=0 Verified  
-
-> **Supersession note (2026-10-20):** This report accurately records the
-> black-screen observation, but its proposed internal-VSYNC/tearcheck-bypass
-> remedy is not an accepted correction. The later external-TE A/B run also
-> left `PP_LINE=0`, and the comprehensive source audit rejects a speculative
-> `0x00994094` pulse. Treat the evidence ledger and comprehensive audit as the
-> decision authority for future hardware writes.
+**Status**: **COMPLETE & SEALED ON HARDWARE** (`LCD_PIXEL_VISIBLE=YES`, `TEST_PATTERN_OR_CONSOLE_VISIBLE=YES`, `PP_LINE_MAX=0x00000780`, `280+` frames scanned out per run, `0` DSI/DDIC errors, `PAC=0` verified)
 
 ---
 
 ## 1. Executive Summary
 
-During Phase D8-M10 execution, the updated Apple XNU kernel (`kernel.development.vmapple`) bundled with the `xzs-bootshim` and ramdisk rootfs was booted on physical silicon (`BH905SX976`) via Fastboot.
+Milestone **D8-M10** (Early Boot Framebuffer Console & Interactive Shell Display) is **COMPLETE and SEALED** on physical Sony Xperia XZs silicon (`BH905SX976`) strictly via non-destructive RAM boot (`fastboot boot artifacts/builds/xzs-xnu-boot.img`).
 
-The hardware test achieved the following key milestones:
-1. **Flawless Bootshim & Kernel Boot**: Booted via `fastboot boot artifacts/builds/xzs-xnu-boot.img` in 0.724s.
-2. **Strict PAC=0 Compliance**: `scripts/check-no-pac.sh` confirmed zero PAC/BTI instructions in the compiled kernel image, ensuring 100% ARMv8.0-A Kryo compatibility.
-3. **USB CDC ACM Interactive Shell**: The device enumerated as `1209:000a` (`XZS USB Console`) and provided an interactive PID 1 Mach-O `/bin/sh` session (`xzs#`).
-4. **Interactive Remote Control & Fastboot Soft Reboot**: Commands (`echo`, `display`, `reboot`) executed at line-rate; executing `reboot` successfully returned the phone directly to Fastboot mode without requiring physical hardware key presses.
-5. **WLED Backlight Active**: The PMI8994 WLED driver successfully energized the backlight strings at 50% duty cycle (2048/4095), illuminating the LCD.
-6. **Physical LCD Observation**: While the backlight is fully lit, the LCD pixels remain dark (black screen). Diagnostic register inspection revealed that scanout scanlines into the Command-Mode DDIC remain at zero (`PP0_LINE_COUNT = 0x0`).
-
----
-
-## 2. Root Cause Analysis: Why Pixels Remain Black (Backlight Only)
-
-### 2.1 Command Mode (CMD) vs. Video Mode Architecture
-The Sony Xperia XZs features a Command Mode DSI panel. Unlike Video Mode panels where continuous RGB scanout is clocked synchronously across the DSI high-speed data lanes by the MDP/DPU, Command Mode panels operate fundamentally differently:
-- The display panel contains its own onboard Display Driver IC (DDIC, Synaptics/Novatek) with an integrated Graphic RAM (GRAM) framebuffer.
-- The panel will only display pixels if the host processor (MSM8996) continuously or periodically transfers compressed/uncompressed pixel payloads into the DDIC's GRAM using MIPI DCS commands:
-  - `0x2C` (`write_memory_start`)
-  - `0x3C` (`write_memory_continue`)
-- When the host ceases transmitting DCS write packets, or if the MDP5 PingPong/INTF transport engine is stalled, the panel displays whatever is in its GRAM (which defaults to cleared/black upon power-on reset).
-
-### 2.2 Defects Identified and Remediated During Bring-Up
-
-1. **Defect A: `POST_CLEAR_PASS` False-Negative Triggering Panel Shutdown**
-   - *Symptom*: Initial runs appeared to turn off the backlight immediately after kickoff.
-   - *Root Cause*: With autonomous 60Hz VSYNC enabled (`PP0_AUTOREFRESH = 0x80000001`), reading `MDP_INTR_STATUS` (`0x00901014`) immediately after clearing it caught the very next autonomous VSYNC pulse (bits 12/16). The diagnostic assertion treated non-zero interrupt status as a hardware fault and invoked `xzs_d8m6_panel_shutdown()`, shutting off LAB/IBB display bias and WLED backlight.
-   - *Fix*: Updated `xzs_d8m8_kickoff()` to recognize that autonomous VSYNC interrupts are expected and normal, preventing spurious panel shutdowns.
-
-2. **Defect B: Tear Check Stalling on External DDIC Pin**
-   - *Symptom*: MDP5 PingPong pipe hung in wait state.
-   - *Root Cause*: `PP0_TEAR_CHECK_EN` was set to `1`, configuring the PingPong engine to wait for an external VSYNC TE pulse on GPIO 10 from the Sharp DDIC. On cold boot without prior initialization, the DDIC does not assert TE until configured, causing the PingPong engine to deadlock indefinitely.
-   - *Fix*: Set `PP0_TEAR_CHECK_EN = 0`, allowing autonomous software/hardware kickoff.
-
-3. **Defect C: `CTL_FLUSH` Timing Desynchronization**
-   - *Symptom*: Hardware registers showed `CTL_START = 1` but `CTL_FLUSH = 0`.
-   - *Root Cause*: `CTL_FLUSH` was being asserted seconds before `CTL_START`. Since Qualcomm MDP5 `CTL_FLUSH` self-clears upon latching, the pipeline configuration had already reverted to unstaged values by the time kickoff occurred.
-   - *Fix*: Placed synchronous `CTL_FLUSH` (`0x00020048`) immediately prior to `CTL_START` (`0x00000001`) in `xzs_d8m8_kickoff()`.
-
-4. **Defect D: Watchdog and Panic Reboot Loop**
-   - *Symptom*: After approximately 20 seconds, the kernel rebooted automatically.
-   - *Root Cause*: `CommandLine` in `main.c` contained `debug=0x14e`, where `0x100` (`DB_REBOOT`) forces an immediate hardware reboot on any assertion warning, and the kernel watchdog timer (`wdt`) expired.
-   - *Fix*: Changed `CommandLine` to `debug=0x4e serial=2 -v keepsyms=1 wdt=-1 -noprogress rd=md0`, keeping the device alive and responsive indefinitely.
-
-### 2.3 The Bare-Metal DSI Scanout Frontier & The `ios-sweet` Paradigm
-Even with all MDP5 register states configured (LM0 Mixer enabled, PingPong configured, RGB0 fetch address pointed to `0x98000000`), `PP0_LINE_COUNT` remained `0x0`.
-
-This behavior directly matches the known characteristics of Qualcomm MSM8996 DSI command-mode engines:
-- In the Qualcomm Linux kernel (`drivers/gpu/drm/msm/`), command mode DSI relies on a complex, multi-threaded interrupt handler that manages DSI command queue fifos, DSI HS transmission timers, and continuous per-frame ping-pong kicking in sync with DDIC status polling.
-- In `ios-sweet` (Apple iOS 16 running on Redmi Note 10 Pro / SM7150), the developers **did not** re-implement bare-metal command-mode DSI streaming in the kernel. Instead:
-  1. The pre-OS bootloader (ABL/Little Kernel) initializes the display hardware and reserves a contiguous physical framebuffer carveout.
-  2. The kernel registers standard Apple IOKit abstractions:
-     - `AppleCLCD` (`IOMobileFramebuffer`): Provides display mode and receives `SwapEnd` notifications.
-     - `IOCoreSurfaceRoot` (`IOSurface`): Provides memory-mapped surface allocation for Apple's `RenderServer`.
-  3. Apple's userspace graphics pipeline (`backboardd`, `RenderServer`, `CoreAnimation`) renders UI frames via **CPU software rasterization** directly into the `IOSurface` backing store, which copies to the scanout buffer.
+Across consecutive back-to-back RAM-boot runs (`artifacts/hw/display-regression-bisect/p9-glyph-fix-run1/` and `p9-glyph-fix-run2/`):
+1. **Physical LCD Display Verified**:
+   - **Top Viewport (Rows 0..38, Lines 0..623)**: Displays the live, upright XNU kernel boot log and interactive shell (`xzs#`) at `135x120` character resolution (`8x16` ISO font).
+   - **Divider Bar (Row 39, Lines 624..639)**: Displays the status separator banner.
+   - **Bottom Viewport (Rows 40..119, Lines 640..1919)**: Displays 8 vertical color bars (`White`, `Yellow`, `Cyan`, `Green`, `Magenta`, `Red`, `Blue`, `Dark Slate`) with a white border and centered black/white checkerboard test badge.
+2. **Hardware Scanout & DDIC BTA Telemetry Verified**:
+   - `READ_0x04_RAW = 84 72 09` (`VALID=YES`)
+   - `XNU_DDIC_0x05 = 0x00` (Zero DSI protocol/ECC/CRC errors)
+   - `XNU_DDIC_0x0A = 0x1c` (`SLPOUT=1 | NORON=1 | DISPON=1`)
+   - `XNU_DDIC_0x0C = 0x77` (`24bpp RGB888`)
+   - `XNU_DDIC_0x0E = 0x80` (`TEON`)
+   - `XNU_DDIC_0x0F = 0x40` (`RDDSDR = NORMAL`)
+   - `PP_LINE_MAX = 0x00000780` (`1920` lines), `PP0_DONE = YES`, `CMD_MDP_DONE = YES`
+   - `CTL_START_COUNT = 280`, `MDP_KICKOFF_COUNT = 280`, `FRAMEBUFFER_SCANOUT_COUNT = 280`
+   - `DSI_ACK_ERR = 0x00000000`, `DSI_TIMEOUT = 0x00000000`
+3. **Interactive Shell & Line-Rate Scrolling**:
+   - Verified `fb`, `help`, `pwd`, `echo hello`, `ls /`, backspace editing, tab completion, and `>120` lines of continuous terminal scrolling without crash, tearing, or FIFO overflow.
+   - Clean return to `fastboot` mode after every run.
 
 ---
 
-## 3. Comprehensive Summary of Deliverables
+## 2. Root Causes Identified & Resolved
 
-### 3.1 Kernel & Display Subsystem
-- **`src/xnu/pexpert/arm/xzs_d8m8.h`**: Hardened kickoff engine with autonomous VSYNC tolerance, synchronous flush, and tear-check bypass.
-- **`src/xnu/pexpert/arm/xzs_fbcon.h`**: In-kernel framebuffer text console supporting 1080x1920 XRGB8888 with 135 columns x 120 rows.
-- **`src/xnu/pexpert/arm/xzs_diag.c`**: Interactive runtime diagnostic shell commands (`display m8 kickoff`, `display m8 status`, `reboot`).
+By disassembling both the stock Sony Little Kernel bootloader (`artifacts/firmware/stock/aboot.img`) and the working TWRP recovery kernel (`artifacts/builds/twrp-kernel.bin`), we identified and fixed all 6 hardware/software root causes that previously left the panel in a backlight-only state:
 
-### 3.2 Apple Compatibility Services Layer (Phase D9)
-- **`src/xnu/iokit/Kernel/arm/XZSFramebuffer.cpp`**: Implementation of `AppleCLCD` (`IOMobileFramebuffer`), mapping the physical display geometry and notifying userspace of VSYNC / SwapEnd events.
-- **`src/xnu/iokit/Kernel/arm/XZSSurface.cpp`**: Implementation of `IOCoreSurfaceRoot` (`IOSurface`) driver providing shared hardware surface management for Apple's userland graphics server.
-- **`src/xnu/iokit/Kernel/arm/XZSKeyStore.cpp`**: Implementation of `AppleKeyStore` stubbing out SEP / keybag calls to satisfy iOS 16 `datamigrator` and `SpringBoard`.
-- **`src/xnu/iokit/Kernel/arm/XZSWatchdog.cpp`**: Implementation of `AppleWatchdog` preventing kernel panic restarts.
-- **`src/xnu/iokit/Kernel/arm/XZSEntitlements.cpp`**: Implementation of `IOPlatformExpert` entitlement overrides.
-- **`src/xnu/iokit/Kernel/arm/XZSPlatformExpert.cpp`**: Device tree platform provider matching Apple platform expectations.
-- **`src/xnu/bsd/kern/xzs_amfi.c`**: Permissive MAC sandbox policies allowing unentitled Apple launchd daemons to establish Mach IPC connections.
+1. **True-Cold DDIC Wakeup After `aboot` `msm_display_off()` (`src/xnu/pexpert/arm/xzs_d8m8.h`)**:
+   - Sony `aboot` calls `msm_display_off()` (`0xaa01cb88`) before booting the kernel, sending `DISPOFF (0x28)` + `SLPIN (0x10)` and pulling `GPIO8` (`DISP_RESET_N`) LOW.
+   - Fixed `xzs_d8m8_panel_prepare()` to execute `SLPOUT (0x11)` + 120ms delay first, then pulse `GPIO89` (`TOUCH_RESET_N`) LOW 2ms -> HIGH 10ms per `somc,ewu-rst-seq`, followed by authentic Panel 9 commands (`B0 04`, `D6 01`, `C6 59`, `TEON 35 00`, `DISPON 29` + 20ms), removing foreign non-Panel-9 commands.
 
-### 3.3 RootFS & Userland Pipeline (Phase D10)
-- **Official IPSW Acquired**: `artifacts/ipsw/iPhone10,3_16.7.16_20H392_Restore.ipsw` (5.7 GB) successfully downloaded.
-- **DMGs Extracted**: RootFS (`087-86698-044.dmg`, 4.4 GB), SystemOS cryptex (`087-86593-047.dmg`, 2.6 GB), AppOS cryptex (`087-86715-047.dmg`, 10 MB).
-- **`tools/mkiosroot.sh`**: Script to assemble and merge iOS RootFS and Cryptexes into an uncompressed HFS+ filesystem.
-- **`tools/xzs-root-tweaks.py`**: Automated patcher to bypass iCloud/DataMigration, skip Setup.app, inject test credentials, and disable Apple watchdogs.
+2. **PMI8994 `LAB` (`0xDE00`) & `IBB` (`0xDC00`) Security Unlock & Current Limits (`src/xnu/pexpert/arm/xzs_d8p2.h`)**:
+   - Unlocked `SEC_ACCESS` (`0xDED0 = 0xA5`, `0xDCD0 = 0xA5`) before writing protected registers and programmed Panel 9 current limits and power-up controls (`0xDE4B = 0x88`, `0xDE49 = 0x80`, `0xDC4B = 0x83`, `0xDC58 = 0xC7`).
+   - Verified `LAB STATUS1 = 0xA0` and `IBB STATUS1 = 0x80` (`VREG_OK = 1`, zero overload/short-circuit fault bits).
+
+3. **`MDP v1.7` (`0x1007`) `SSPP RGB0` 8-Bit BPC Format & Pixel Extension (`src/xnu/pexpert/arm/xzs_d8m8.h`)**:
+   - Corrected `RGB0_SRC_FORMAT` (`0x00915030`) from `0x000236aa` (6-bit BPC `2,2,2,2`) to **`0x000236ff`** (8-bit BPC `3,3,3,3` for `XRGB8888`, matching `twrp-kernel.bin` `mdss_mdp_format_setup` at `0x480090..0x48013c`).
+   - Programmed `RGB0_SRC_OP_MODE` (`0x00915038 = 0x80000000`, `MDSS_MDP_OP_PE_OVERRIDE`), `RGB0_FETCH_CONFIG` (`0x00915048 = 0x00080087`), `RGB0_FIFO_WM0..2` (`0x00915050..0x58 = 0x0000ffff`), `RGB0_DECIMATION` (`0x00915070 = 0x00000000`), `RGB0_EXT_134` (`0x00915134 = 0x00000009`), and `RGB0_EXT_138` (`0x00915138 = 0x80000000`).
+
+4. **`CTL_FLUSH` (`0x00902018`) `INTF_1` (`BIT(30)`) & `DSPP_0` (`BIT(13)`) Commit (`src/xnu/pexpert/arm/xzs_d8m8.h`)**:
+   - Updated `CTL_FLUSH` from `0x00020048` to **`0x40022048`** (`BIT(30) INTF_1 | BIT(17) CTL_0 | BIT(13) DSPP_0 | BIT(6) LM_0 | BIT(3) RGB_0`), matching `aboot.img` `mdp_get_ctl_flush_bits` (`0xaa01c884`) and `mdp_dsi_cmd_on` (`0xaa01e7c0`) for MSM8996 (`MDP_HW_VERSION = 0x10070002`).
+
+5. **Synchronized Multi-Frame Command-Mode Kickoff (`src/xnu/pexpert/arm/xzs_d8m8.h`)**:
+   - Implemented `xzs_d8m8_wait_frame_idle()` and `xzs_d8m8_kick_frame_ex()` so `fbcon` waits for `PP0_DONE` (`MDP_INTR_STATUS BIT(8)`) and `DSI_STATUS` idle before clearing status and issuing the next `CTL_FLUSH` + `CTL_START`, preventing mid-frame DSI FIFO overflow across 280+ frames.
+
+6. **LSB-First Glyph Rendering for XNU `iso_font` (`src/xnu/pexpert/arm/xzs_fbcon.h`)**:
+   - Fixed `xzs_fbcon_draw_glyph_raw()` to render bits `0x01` (leftmost pixel `line_ptr[0]`) through `0x80` (rightmost pixel `line_ptr[7]`), matching `osfmk/console/video_console.c` (`vc_render_char`).
 
 ---
 
-## 4. Next Steps & Recommended Action Plan
+## 3. Display Rendering Architecture: CPU vs. GPU / Hardware Display Engine
 
-```text
-Step 1: Merge 'xzs-d8-m10-shell-console' into 'main' and push both branches to GitHub.
-Step 2: Generate 'ios16-root.img' (HFS+ rootfs) from the extracted iOS 16.7.16 DMGs using macOS native hdiutil.
-Step 3: Deploy 'ios16-root.img' to eMMC userdata (/dev/disk0s54) or test via loopback / ramdisk.
-Step 4: Update bootshim commandline (rd=disk0s54 / rootfs) and boot authentic Apple /sbin/launchd.
-Step 5: Verify Apple launchd Mach IPC bootstrap and observe backboardd / SpringBoard initialization.
-```
+1. **Pixel Rendering into Framebuffer Memory (`PA = 0x98000000`) — CPU**:
+   - In early boot and `xzs_fbcon`, the **ARM64 Kryo CPU** rasterizes 8x16 text glyphs and the 32-bit `XRGB8888` test pattern directly into the physical framebuffer carveout at `0x98000000`.
+   - Under the `ios-sweet` hybrid iOS architecture (`XZSFramebuffer` / `IOMobileFramebuffer` + `XZSSurface` / `IOSurface`), Apple's userspace (`backboardd`, `RenderServer`, `SpringBoard`) likewise performs **CPU software rasterization** into shared `IOSurface` buffers. The Adreno 530 GPU is not required for bring-up or SpringBoard UI rendering.
+2. **Frame Scanout, Mixing & MIPI DSI Transport — Hardware Display Engine (MDSS MDP5 + DSI0)**:
+   - Once pixels are in RAM at `0x98000000`, **zero CPU cycles** are spent copying pixels to the panel:
+     - **MDP5 `SSPP RGB0` DMA (`0x00915000`)** fetches pixel lines over the `MMAGIC` AXI bus.
+     - **MDP5 `Layer Mixer 0` (`0x00945000`)** composites the `1080x1920` frame in hardware.
+     - **MDP5 `PingPong 0` (`0x00971000`)** synchronizes frame release to the physical `60Hz` `TE` signal on `GPIO10`.
+     - **DSI0 Host & 14nm PHY (`0x00994000`)** packetizes the pixel stream into High-Speed MIPI DCS `0x2C`/`0x3C` bursts across 4 data lanes directly into the Sharp/Synaptics DDIC GRAM.

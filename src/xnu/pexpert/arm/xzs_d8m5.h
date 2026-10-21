@@ -134,30 +134,37 @@ xzs_d8m5_set_reset_high(void)
 	g_d8m5_counters.reset_release_count++;
 }
 
+/*
+ * Active-LOW VDDIO Load Switches on Sony Xperia XZs (keyaki):
+ * Disassembly of aboot.img (panel_power_on @ 0xaa03ed3c) and twrp-kernel.bin
+ * (mdss_dsi_panel_driver_power_on @ 0x4d61c0 / power_off @ 0x4d5fc0) proves:
+ *   GPIO 51 (disp_vddio):  0 (LOW) = 1.8V VDDIO ON,  1 (HIGH) = 1.8V VDDIO OFF
+ *   GPIO 50 (touch_vddio): 0 (LOW) = 1.8V VDDIO ON,  1 (HIGH) = 1.8V VDDIO OFF
+ */
 static inline void
 xzs_d8m5_set_vddio_high(void)
 {
-	xzs_d8m5_gpio_write_latch(GPIO_VDDIO_NUM, 1);
+	xzs_d8m5_gpio_write_latch(GPIO_VDDIO_NUM, 0);
 	g_d8m5_counters.gpio51_enable_count++;
 }
 
 static inline void
 xzs_d8m5_set_vddio_low(void)
 {
-	xzs_d8m5_gpio_write_latch(GPIO_VDDIO_NUM, 0);
+	xzs_d8m5_gpio_write_latch(GPIO_VDDIO_NUM, 1);
 	g_d8m5_counters.gpio51_disable_count++;
 }
 
 static inline void
 xzs_d8m5_set_touch_vddio_high(void)
 {
-	xzs_d8m5_gpio_write_latch(GPIO_TOUCH_VDDIO_NUM, 1);
+	xzs_d8m5_gpio_write_latch(GPIO_TOUCH_VDDIO_NUM, 0);
 }
 
 static inline void
 xzs_d8m5_set_touch_vddio_low(void)
 {
-	xzs_d8m5_gpio_write_latch(GPIO_TOUCH_VDDIO_NUM, 0);
+	xzs_d8m5_gpio_write_latch(GPIO_TOUCH_VDDIO_NUM, 1);
 }
 
 static inline void
@@ -435,10 +442,10 @@ xzs_d8m5_power_down(void)
 	/* Wait 10ms per somc,pw-wait-after-off-vsp = <0x0a> */
 	xzs_d8p2_delay_us(10000);
 
-	/* Step 4: Disable VDDIO (GPIO 51 LOW, GPIO 50 LOW) */
-	xzs_diag_emit("  4. Disabling VDDIO (GPIO51=0, GPIO50=0)...\n");
-	xzs_d8m5_set_vddio_low();
+	/* Step 4: Disable VDDIO (Active-LOW: GPIO 50 HIGH, GPIO 51 HIGH per twrp-kernel.bin:0x4d60c8) */
+	xzs_diag_emit("  4. Disabling VDDIO (Active-LOW: GPIO50=1, GPIO51=1)...\n");
 	xzs_d8m5_set_touch_vddio_low();
+	xzs_d8m5_set_vddio_low();
 	/* somc,pw-wait-after-off-vddio = <0x00> */
 
 	/* Step 5: Power-down settling period per somc,pw-down-period = <0x12c> (300 ms) */
@@ -453,14 +460,14 @@ xzs_d8m5_power_down(void)
 	xzs_diag_emit("  Shutdown Verification: GPIO8_IN=");
 	xzs_diag_emit(rst_in ? "HIGH(FAULT)" : "LOW(OK)");
 	xzs_diag_emit(" GPIO51_IN=");
-	xzs_diag_emit(vddio_in ? "HIGH(FAULT)" : "LOW(OK)");
+	xzs_diag_emit(vddio_in ? "HIGH(OFF_OK)" : "LOW(ON_FAULT)");
 	xzs_diag_emit(" GPIO89_IN=");
 	xzs_diag_emit(t_rst_in ? "HIGH(FAULT)" : "LOW(OK)");
 	xzs_diag_emit(" GPIO50_IN=");
-	xzs_diag_emit(t_vddio_in ? "HIGH(FAULT)" : "LOW(OK)");
+	xzs_diag_emit(t_vddio_in ? "HIGH(OFF_OK)" : "LOW(ON_FAULT)");
 	xzs_diag_emit("\n");
 
-	if (!ibb_off || !lab_off || rst_in != 0 || vddio_in != 0 || t_rst_in != 0 || t_vddio_in != 0) {
+	if (!ibb_off || !lab_off || rst_in != 0 || vddio_in == 0 || t_rst_in != 0 || t_vddio_in == 0) {
 		xzs_diag_emit("[D8-M5-SHUTDOWN] FAILED: Power-down incomplete!\n");
 		return -1;
 	}
@@ -506,18 +513,19 @@ xzs_d8m5_stage1(void)
 	}
 	xzs_diag_emit("  GPIO8 = LOW confirmed.\n");
 
-	/* Step 2: Enable VDDIO (GPIO 51 HIGH) -> delay 10ms per somc,pw-wait-after-on-vddio = <10> */
-	xzs_diag_emit("[STAGE1-STEP2] Enabling VDDIO (GPIO51 HIGH)...\n");
+	/* Step 2: Enable VDDIO (Active-LOW: GPIO 51 LOW) -> delay 10ms per somc,pw-wait-after-on-vddio = <10> */
+	xzs_diag_emit("[STAGE1-STEP2] Enabling VDDIO (Active-LOW: GPIO51 LOW)...\n");
 	xzs_d8m5_set_vddio_high();
 	xzs_d8p2_delay_us(10000); // 10 ms
+	xzs_d8m5_set_touch_vddio_high();
 
 	uint32_t vddio_in = xzs_d8m5_gpio_read_in(GPIO_VDDIO_NUM);
 	uint32_t rst_check = xzs_d8m5_gpio_read_in(GPIO_RESET_NUM);
-	xzs_diag_emit("  VDDIO_IN="); xzs_diag_emit(vddio_in ? "HIGH(OK)" : "LOW(FAIL)");
+	xzs_diag_emit("  VDDIO_IN="); xzs_diag_emit((vddio_in == 0) ? "LOW(ON_OK)" : "HIGH(OFF_FAIL)");
 	xzs_diag_emit(" RESET_IN="); xzs_diag_emit(rst_check ? "HIGH(LEAK_FAIL)" : "LOW(OK)");
 	xzs_diag_emit("\n");
 
-	if (vddio_in == 0 || rst_check != 0) {
+	if (vddio_in != 0 || rst_check != 0) {
 		xzs_diag_emit("!!! FAIL: VDDIO enable failed or Reset glitch detected!\n");
 		xzs_d8m5_power_down();
 		return -4;
@@ -590,7 +598,7 @@ xzs_d8m5_stage1(void)
 	xzs_diag_emit("  DSI_STATUS=0x"); xzs_d8p1_hex32(dsi_stat); xzs_diag_emit("\n");
 	xzs_diag_emit("  DSI_LANE_STATUS=0x"); xzs_d8p1_hex32(lane); xzs_diag_emit("\n");
 
-	if (rst_check != 0 || !lab_ok || !ibb_ok || vddio_in == 0 ||
+	if (rst_check != 0 || !lab_ok || !ibb_ok || vddio_in != 0 ||
 	    (pll & 0x21u) != 0x21u || (ctrl & 0x1u) == 0 || (lane & 0x1f1fu) != 0x1f1fu) {
 		xzs_diag_emit("!!! FAIL: Stage 1 acceptance criteria violated!\n");
 		xzs_d8m5_power_down();
@@ -659,16 +667,17 @@ xzs_d8m5_run(void)
 	}
 	xzs_diag_emit("  Reset held LOW confirmed.\n");
 
-	/* 2. Enable VDDIO (GPIO 51 HIGH) -> delay 10ms per somc,pw-wait-after-on-vddio = <10> */
-	xzs_diag_emit("  Enabling VDDIO (GPIO51=1)...\n");
+	/* 2. Enable VDDIO (Active-LOW: GPIO 51 LOW) -> delay 10ms per somc,pw-wait-after-on-vddio = <10> */
+	xzs_diag_emit("  Enabling VDDIO (Active-LOW: GPIO51=0, GPIO50=0)...\n");
 	xzs_d8m5_set_vddio_high();
 	xzs_d8p2_delay_us(10000); // 10 ms
+	xzs_d8m5_set_touch_vddio_high();
 	uint32_t vddio_in = xzs_d8m5_gpio_read_in(GPIO_VDDIO_NUM);
 	uint32_t rst_check = xzs_d8m5_gpio_read_in(GPIO_RESET_NUM);
-	xzs_diag_emit("  VDDIO_IN="); xzs_diag_emit(vddio_in ? "HIGH(OK)" : "LOW(FAIL)");
+	xzs_diag_emit("  VDDIO_IN="); xzs_diag_emit((vddio_in == 0) ? "LOW(ON_OK)" : "HIGH(OFF_FAIL)");
 	xzs_diag_emit(" RESET_IN="); xzs_diag_emit(rst_check ? "HIGH(LEAK_FAIL)" : "LOW(OK)");
 	xzs_diag_emit("\n");
-	if (vddio_in == 0 || rst_check != 0) {
+	if (vddio_in != 0 || rst_check != 0) {
 		xzs_diag_emit("!!! FAIL: VDDIO enable failed or Reset glitch detected!\n");
 		xzs_d8m5_power_down();
 		return -4;
@@ -789,7 +798,7 @@ xzs_d8m5_run(void)
 
 	xzs_diag_emit("  GPIO8_RESET     = "); xzs_diag_emit(g8_val ? "HIGH(RELEASED)\n" : "LOW(FAIL)\n");
 	xzs_diag_emit("  GPIO10_TE       = "); xzs_diag_emit(g10_val ? "HIGH\n" : "LOW(INACTIVE_EXPECTED)\n");
-	xzs_diag_emit("  GPIO51_VDDIO    = "); xzs_diag_emit(g51_val ? "HIGH(ASSERTED)\n" : "LOW(FAIL)\n");
+	xzs_diag_emit("  GPIO51_VDDIO    = "); xzs_diag_emit((g51_val == 0) ? "LOW(ON_ASSERTED)\n" : "HIGH(OFF_FAIL)\n");
 	xzs_diag_emit("  LAB_STATUS1     = 0x"); xzs_d8p2_hex8(lab_st_pow); xzs_diag_emit(" (VREG_OK=1)\n");
 	xzs_diag_emit("  IBB_STATUS1     = 0x"); xzs_d8p2_hex8(ibb_st_pow); xzs_diag_emit(" (VREG_OK=1)\n");
 	xzs_diag_emit("  PLL_STATUS      = 0x"); xzs_d8p1_hex32(pll_pow); xzs_diag_emit("\n");
@@ -801,7 +810,7 @@ xzs_d8m5_run(void)
 	xzs_diag_emit("  DSI_TIMEOUT     = 0x"); xzs_d8p1_hex32(timeout_pow); xzs_diag_emit("\n");
 	xzs_diag_emit("  DSI_CLK_STATUS  = 0x"); xzs_d8p1_hex32(clk_pow); xzs_diag_emit("\n");
 
-	if (g8_val == 0 || g51_val == 0 || !(lab_st_pow & LAB_STATUS1_VREG_OK) || !(ibb_st_pow & IBB_STATUS1_VREG_OK) ||
+	if (g8_val == 0 || g51_val != 0 || !(lab_st_pow & LAB_STATUS1_VREG_OK) || !(ibb_st_pow & IBB_STATUS1_VREG_OK) ||
 	    (pll_pow & 0x21u) != 0x21u || (ctrl_pow & 0x1u) == 0 || (lane_pow & 0x1f1fu) != 0x1f1fu) {
 		xzs_diag_emit("!!! FAIL: Powered-idle state verification failed!\n");
 		xzs_d8m5_power_down();

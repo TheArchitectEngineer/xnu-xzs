@@ -1371,7 +1371,14 @@ xzs_exc_common:
 	.globl EXT(xzs_spin_halt)
 LEXT(xzs_spin_halt)
 xzs_spin_halt:
-	adrp		x0, str_spin_halt@page
+	msr		DAIFSet, #0xf
+	adrp	x0, EXT(g_xzs_ttbr0)@page
+	add		x0, x0, EXT(g_xzs_ttbr0)@pageoff
+	ldr		x0, [x0]
+	cbz		x0, 1f
+	msr		TTBR0_EL1, x0
+	isb		sy
+1:	adrp	x0, str_spin_halt@page
 	add		x0, x0, str_spin_halt@pageoff
 	bl		EXT(xzs_early_puts)
 	// Flush entire persistent RAM buffers to physical DRAM (Point of Coherency)
@@ -1436,11 +1443,22 @@ xzs_spin_halt:
 LEXT(xzs_breadcrumb)
 xzs_breadcrumb:
 	// x0 = checkpoint, w1 = errno
-	stp		x29, x30, [sp, #-32]!
+	stp		x29, x30, [sp, #-48]!
 	stp		x19, x20, [sp, #16]
+	stp		x21, x22, [sp, #32]
 	mov		x19, x0
 	mov		w20, w1
-
+	mrs		x21, DAIF
+	msr		DAIFSet, #0xf
+	mov		x22, #0
+	adrp	x2, EXT(g_xzs_ttbr0)@page
+	add		x2, x2, EXT(g_xzs_ttbr0)@pageoff
+	ldr		x2, [x2]
+	cbz		x2, 1f
+	mrs		x22, TTBR0_EL1
+	msr		TTBR0_EL1, x2
+	isb		sy
+1:
 	// 0. Pre-seed Fastboot restart reason (0x77665500) so any reset boots to Fastboot
 	MOV64	x2, 0x066bf65c
 	MOV64	x3, 0x77665500
@@ -1486,8 +1504,13 @@ xzs_breadcrumb:
 	add		x0, x0, str_bc_end@pageoff
 	bl		EXT(xzs_early_puts)
 
+	cbz		x22, 2f
+	msr		TTBR0_EL1, x22
+	isb		sy
+2:	msr		DAIF, x21
+	ldp		x21, x22, [sp, #32]
 	ldp		x19, x20, [sp, #16]
-	ldp		x29, x30, [sp], #32
+	ldp		x29, x30, [sp], #48
 	ret
 
 	.globl EXT(xzs_watchdog_arm)
@@ -1729,7 +1752,15 @@ LEXT(xzs_early_putc)
 	mrs		x22, DAIF
 	msr		DAIFSet, #0xf			// Mask interrupts during character output
 	mov		w19, w0
-
+	mov		x21, #0
+	adrp	x20, EXT(g_xzs_ttbr0)@page
+	add		x20, x20, EXT(g_xzs_ttbr0)@pageoff
+	ldr		x20, [x20]
+	cbz		x20, 2f
+	mrs		x21, TTBR0_EL1
+	msr		TTBR0_EL1, x20
+	isb		sy
+2:
 	cmp		w19, #'\n'
 	bne		1f
 	mov		w0, #'\r'
@@ -1738,7 +1769,10 @@ LEXT(xzs_early_putc)
 1:
 	bl		xzs_raw_tx
 
-	msr		DAIF, x22			// Restore interrupts
+	cbz		x21, 3f
+	msr		TTBR0_EL1, x21
+	isb		sy
+3:	msr		DAIF, x22			// Restore interrupts
 	ldp		x21, x22, [sp, #32]
 	ldp		x19, x20, [sp, #16]
 	ldp		x29, x30, [sp], #48

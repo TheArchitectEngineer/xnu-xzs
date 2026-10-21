@@ -16,12 +16,13 @@
 /* Forward declarations of kernel utilities */
 extern void *ml_io_map(vm_offset_t phys_addr, vm_size_t size);
 extern void delay(int usec);
-extern void xzs_early_puts(const char *s);
-extern void xzs_early_puthex64(uint64_t val);
-extern void xzs_early_putc(char c);
+#define xzs_early_puts(s) do { (void)(s); } while(0)
+#define xzs_early_puthex64(v) do { (void)(v); } while(0)
+#define xzs_early_putc(c) do { (void)(c); } while(0)
 extern void xzs_watchdog_pet(void);
 extern void xzs_breadcrumb(uint32_t checkpoint, uint32_t error);
 extern void xzs_spin_halt(void);
+extern void xzs_diag_emit(const char *msg);
 
 /* Shared Memory & Register Addresses */
 #define RPM_TOC_SIZE                256U
@@ -167,6 +168,23 @@ static inline void xzs_rpm_kick(void)
 	xzs_rpm_wmb();
 	*(volatile uint32_t *)(g_apcs_ipc_base + RPM_APCS_IPC_REG_OFFSET) = RPM_APCS_IPC_MASK;
 	xzs_rpm_wmb();
+}
+
+/*
+ * Accurate architectural timer busy-wait (cntvct_el0 / cntfrq_el0).
+ * Never blocks the thread or calls scheduler thread_block().
+ * Continuously pets hardware watchdog.
+ */
+static inline void
+xzs_rpm_delay_us(uint32_t usec)
+{
+	uint64_t ticks = ((uint64_t)usec * 192ULL) / 10ULL;
+	uint64_t start, cur;
+	xzs_watchdog_pet();
+	__asm__ volatile ("isb\n\tmrs %0, cntvct_el0" : "=r" (start));
+	do {
+		__asm__ volatile ("mrs %0, cntvct_el0" : "=r" (cur));
+	} while ((cur - start) < ticks);
 }
 
 /* FIFO Space Calculations */
@@ -467,6 +485,7 @@ static int xzs_rpm_glink_poll_step(void)
 static int xzs_rpm_glink_handshake(void)
 {
 	xzs_early_puts("[XZS-RPM] INITIATING GLINK VERSION 1 NEGOTIATION...\n");
+	xzs_diag_emit("    [GLINK] step 1: send version cmd...\n");
 
 	/* Step 1: Send local VERSION_CMD */
 	struct glink_msg vmsg;
@@ -475,12 +494,14 @@ static int xzs_rpm_glink_handshake(void)
 	vmsg.param2 = GLINK_FEATURE_INTENTLESS;
 	if (xzs_rpm_tx_write(&vmsg, sizeof(vmsg), NULL, 0) != 0) {
 		xzs_early_puts("[XZS-RPM] [FAIL] TX FIFO FULL FOR VERSION_CMD\n");
+		xzs_diag_emit("    [GLINK] tx fifo full for version cmd\n");
 		return -1;
 	}
 
-	/* Poll for version settlement (up to 100 ms) */
-	for (int i = 0; i < 10000; i++) {
-		delay(10);
+	/* Poll for version settlement (up to 50 ms) */
+	for (int i = 0; i < 1000; i++) {
+		xzs_rpm_delay_us(50);
+		xzs_watchdog_pet();
 		while (xzs_rpm_glink_poll_step() > 0) {
 			if (g_version_settled) {
 				break;
@@ -493,12 +514,15 @@ static int xzs_rpm_glink_handshake(void)
 
 	if (!g_version_settled) {
 		xzs_early_puts("[XZS-RPM] [FAIL] GLINK VERSION NEGOTIATION TIMEOUT\n");
+		xzs_diag_emit("    [GLINK] version negotiation timeout\n");
 		return -2;
 	}
 	xzs_early_puts("[XZS-RPM] GLINK VERSION NEGOTIATION SETTLED (V1)\n");
+	xzs_diag_emit("    [GLINK] version settled (V1)\n");
 
 	/* Step 2: Open channel "rpm_requests" */
 	xzs_early_puts("[XZS-RPM] OPENING CHANNEL \"rpm_requests\" (lcid=1)...\n");
+	xzs_diag_emit("    [GLINK] step 2: open channel rpm_requests...\n");
 	const char *ch_name = GLINK_CHANNEL_NAME;
 	uint32_t name_len = 13; /* strlen("rpm_requests") + 1 */
 	uint32_t aligned_len = (name_len + 7U) & ~7U;
@@ -512,12 +536,14 @@ static int xzs_rpm_glink_handshake(void)
 
 	if (xzs_rpm_tx_write(&omsg, sizeof(omsg), name_payload, aligned_len) != 0) {
 		xzs_early_puts("[XZS-RPM] [FAIL] TX FIFO FULL FOR OPEN_CMD\n");
+		xzs_diag_emit("    [GLINK] tx fifo full for open cmd\n");
 		return -3;
 	}
 
-	/* Poll for channel open confirmation (up to 100 ms) */
-	for (int i = 0; i < 10000; i++) {
-		delay(10);
+	/* Poll for channel open confirmation (up to 50 ms) */
+	for (int i = 0; i < 1000; i++) {
+		xzs_rpm_delay_us(50);
+		xzs_watchdog_pet();
 		while (xzs_rpm_glink_poll_step() > 0) {
 			if (g_channel_open) {
 				break;
@@ -530,9 +556,93 @@ static int xzs_rpm_glink_handshake(void)
 
 	if (!g_channel_open) {
 		xzs_early_puts("[XZS-RPM] [FAIL] GLINK CHANNEL OPEN TIMEOUT\n");
+		xzs_diag_emit("    [GLINK] channel open timeout\n");
 		return -4;
 	}
 	xzs_early_puts("[XZS-RPM] GLINK CHANNEL \"rpm_requests\" CONFIRMED OPEN\n");
+	xzs_diag_emit("    [GLINK] channel rpm_requests open\n");
+	return 0;
+}
+
+/* Ensure RPM Message RAM and GLINK Transport are Initialized */
+static int xzs_rpm_ensure_init(void)
+{
+	xzs_diag_emit("  [RPM] ensure_init enter\n");
+	if (g_channel_open && g_tx_desc != NULL && g_rx_desc != NULL) {
+		xzs_diag_emit("  [RPM] already open\n");
+		return 0;
+	}
+
+	if (g_msgram_base == 0) {
+		xzs_diag_emit("  [RPM] mapping msgram...\n");
+		g_msgram_base = (uintptr_t)ml_io_map(RPM_MSGRAM_PHYS_BASE, RPM_MSGRAM_SIZE);
+		if (g_msgram_base == 0) {
+			xzs_early_puts("[XZS-RPM] [FATAL] FAILED TO MAP RPM MESSAGE RAM\n");
+			xzs_diag_emit("  [RPM] msgram map FAIL\n");
+			return -1;
+		}
+	}
+	if (g_apcs_ipc_base == 0) {
+		xzs_diag_emit("  [RPM] mapping apcs ipc...\n");
+		g_apcs_ipc_base = (uintptr_t)ml_io_map(RPM_APCS_IPC_PHYS_BASE, 0x1000);
+		if (g_apcs_ipc_base == 0) {
+			xzs_early_puts("[XZS-RPM] [FATAL] FAILED TO MAP APCS IPC DOORBELL\n");
+			xzs_diag_emit("  [RPM] apcs ipc map FAIL\n");
+			return -2;
+		}
+	}
+
+	xzs_diag_emit("  [RPM] reading toc...\n");
+	uintptr_t toc_addr = g_msgram_base + RPM_MSGRAM_SIZE - RPM_TOC_SIZE;
+	struct rpm_toc *toc = (struct rpm_toc *)toc_addr;
+	if (toc->magic != RPM_TOC_MAGIC) {
+		xzs_early_puts("[XZS-RPM] [FAIL] INVALID TOC MAGIC\n");
+		xzs_diag_emit("  [RPM] invalid toc magic\n");
+		return -3;
+	}
+
+	xzs_diag_emit("  [RPM] parsing toc...\n");
+	uint32_t tx_offset = 0, tx_size = 0;
+	uint32_t rx_offset = 0, rx_size = 0;
+	bool tx_found = false, rx_found = false;
+	for (uint32_t i = 0; i < toc->count; i++) {
+		if (toc->entries[i].id == RPM_TX_FIFO_ID) {
+			tx_offset = toc->entries[i].offset;
+			tx_size = toc->entries[i].size;
+			tx_found = true;
+		} else if (toc->entries[i].id == RPM_RX_FIFO_ID) {
+			rx_offset = toc->entries[i].offset;
+			rx_size = toc->entries[i].size;
+			rx_found = true;
+		}
+	}
+	if (!tx_found || !rx_found) {
+		xzs_early_puts("[XZS-RPM] [FAIL] FIFOS NOT FOUND IN TOC\n");
+		xzs_diag_emit("  [RPM] fifos not found\n");
+		return -4;
+	}
+
+	xzs_diag_emit("  [RPM] fifos found, setting descriptors...\n");
+	g_tx_desc = (volatile struct channel_desc *)(g_msgram_base + tx_offset);
+	g_tx_fifo = (volatile uint8_t *)(g_msgram_base + tx_offset + 8U);
+	g_tx_fifo_size = tx_size;
+	g_rx_desc = (volatile struct channel_desc *)(g_msgram_base + rx_offset);
+	g_rx_fifo = (volatile uint8_t *)(g_msgram_base + rx_offset + 8U);
+	g_rx_fifo_size = rx_size;
+
+	g_tx_desc->write_index = 0;
+	g_rx_desc->read_index = 0;
+	xzs_rpm_wmb();
+
+	xzs_diag_emit("  [RPM] starting glink handshake...\n");
+	int h_rc = xzs_rpm_glink_handshake();
+	if (h_rc != 0) {
+		xzs_early_puts("[XZS-RPM] [FAIL] GLINK HANDSHAKE FAILED\n");
+		xzs_diag_emit("  [RPM] glink handshake FAIL\n");
+		return -5;
+	}
+	xzs_early_puts("[XZS-RPM] [PASS] RPM GLINK TRANSPORT CHANNEL VERIFIED\n");
+	xzs_diag_emit("  [RPM] glink transport channel VERIFIED\n");
 	return 0;
 }
 
@@ -544,6 +654,11 @@ static int xzs_rpm_send_kvp_request_and_wait_ack(uint32_t set,
                                                  uint32_t num_kvps,
                                                  uint32_t *out_elapsed_us)
 {
+	int init_rc = xzs_rpm_ensure_init();
+	if (init_rc != 0) {
+		return init_rc;
+	}
+
 	uint32_t msg_id = g_rpm_msg_id++;
 	uint8_t tx_buf[128] __attribute__((aligned(8))) = { 0 };
 	uint32_t payload_len = 0;
@@ -587,41 +702,6 @@ static int xzs_rpm_send_kvp_request_and_wait_ack(uint32_t set,
 		payload_len = sizeof(*msg_hdr) + kvp_bytes;
 	}
 
-	/* Log complete request details before transmission */
-	xzs_early_puts("[XZS-RPM] ========================================================\n");
-	xzs_early_puts("[XZS-RPM] PREPARING RPM REQUEST (Mandatory Pre-Transmission Log):\n");
-	xzs_early_puts("  Format:        "); xzs_early_puts(g_rpm_msg_format == 0 ? "V0\n" : "V1\n");
-	xzs_early_puts("  msg_id:        0x"); xzs_early_puthex64((uint64_t)msg_id); xzs_early_puts("\n");
-	xzs_early_puts("  set:           ");
-	if (set == MSM_RPM_CTX_ACTIVE_SET) xzs_early_puts("ACTIVE (0)\n");
-	else if (set == MSM_RPM_CTX_SLEEP_SET) xzs_early_puts("SLEEP (1)\n");
-	else { xzs_early_puthex64((uint64_t)set); xzs_early_puts("\n"); }
-	xzs_early_puts("  resource_type: 0x"); xzs_early_puthex64((uint64_t)resource_type);
-	if (resource_type == QCOM_SMD_RPM_LDOA) xzs_early_puts(" (\"ldoa\")\n");
-	else if (resource_type == QCOM_SMD_RPM_CLK_BUF_A) xzs_early_puts(" (\"clka\")\n");
-	else xzs_early_puts("\n");
-	xzs_early_puts("  resource_id:   "); xzs_early_puthex64((uint64_t)resource_id); xzs_early_puts("\n");
-	xzs_early_puts("  KVPs (count="); xzs_early_puthex64((uint64_t)num_kvps); xzs_early_puts("):\n");
-	for (uint32_t k = 0; k < num_kvps; k++) {
-		xzs_early_puts("    ["); xzs_early_puthex64((uint64_t)k); xzs_early_puts("] key=0x");
-		xzs_early_puthex64((uint64_t)kvps[k].key);
-		if (kvps[k].key == QCOM_RPM_KEY_SWEN) xzs_early_puts(" (\"swen\")");
-		else if (kvps[k].key == QCOM_RPM_KEY_UV) xzs_early_puts(" (\"uv\")");
-		else if (kvps[k].key == QCOM_RPM_KEY_MA) xzs_early_puts(" (\"ma\")");
-		xzs_early_puts(" nbytes="); xzs_early_puthex64((uint64_t)kvps[k].nbytes);
-		xzs_early_puts(" val="); xzs_early_puthex64((uint64_t)kvps[k].value);
-		xzs_early_puts("\n");
-	}
-	xzs_early_puts("  Payload Size:  "); xzs_early_puthex64((uint64_t)payload_len); xzs_early_puts(" bytes\n");
-	xzs_early_puts("  Raw Request Bytes:\n    ");
-	for (uint32_t b = 0; b < payload_len; b++) {
-		if (b > 0 && (b % 16) == 0) xzs_early_puts("\n    ");
-		xzs_early_puts("0x");
-		xzs_early_puthex64((uint64_t)tx_buf[b]);
-		xzs_early_puts(" ");
-	}
-	xzs_early_puts("\n========================================================\n");
-
 	/* Build GLINK TX_DATA header */
 	struct glink_tx_data_hdr dhdr;
 	dhdr.cmd = GLINK_CMD_TX_DATA;
@@ -630,21 +710,23 @@ static int xzs_rpm_send_kvp_request_and_wait_ack(uint32_t set,
 	dhdr.chunk_size = payload_len;
 	dhdr.left_size = 0;
 
+	xzs_diag_emit("    [RPM-TX] transmitting request...\n");
 	if (xzs_rpm_tx_write(&dhdr, sizeof(dhdr), tx_buf, payload_len) != 0) {
-		xzs_early_puts("[XZS-RPM] [FAIL] TX FIFO FULL FOR RPM REQUEST\n");
+		xzs_diag_emit("    [RPM-TX] tx fifo full for rpm request\n");
 		return -1;
 	}
 
-	xzs_early_puts("[XZS-RPM] RPM REQUEST TRANSMITTED — WAITING FOR ACK...\n");
+	xzs_diag_emit("    [RPM-TX] polling for ACK...\n");
 
-	/* Bounded Poll for Matching ACK */
+	/* Bounded Poll for Matching ACK (up to 50 ms) */
 	uint32_t elapsed = 0;
 	bool ack_received = false;
 	int ack_status = -1;
 
-	for (int poll = 0; poll < 20000; poll++) {
-		delay(10);
-		elapsed += 10;
+	for (int poll = 0; poll < 1000; poll++) {
+		xzs_rpm_delay_us(50);
+		elapsed += 50;
+		xzs_watchdog_pet();
 
 		uint32_t avail = xzs_rpm_rx_avail();
 		if (avail < sizeof(struct glink_msg)) {
@@ -683,31 +765,18 @@ static int xzs_rpm_send_kvp_request_and_wait_ack(uint32_t set,
 		/* Parse ACK according to format */
 		if (g_rpm_msg_format == 0) {
 			struct msm_rpm_ack_msg_v0 *ack = (struct msm_rpm_ack_msg_v0 *)rx_payload;
-			xzs_early_puts("[XZS-RPM] PARSED ACK V0:\n");
-			xzs_early_puts("  req=0x"); xzs_early_puthex64((uint64_t)ack->req);
-			xzs_early_puts(" req_len="); xzs_early_puthex64((uint64_t)ack->req_len);
-			xzs_early_puts(" rsc_id=0x"); xzs_early_puthex64((uint64_t)ack->rsc_id);
-			xzs_early_puts(" msg_len="); xzs_early_puthex64((uint64_t)ack->msg_len);
-			xzs_early_puts(" id_ack=0x"); xzs_early_puthex64((uint64_t)ack->id_ack);
-			xzs_early_puts("\n");
-
 			if (ack->id_ack == msg_id) {
 				ack_received = true;
 				if (ack->req_len <= sizeof(struct msm_rpm_ack_msg_v0) - 8U) {
 					ack_status = 0; /* Success, no error payload */
 				} else {
 					ack_status = -2; /* RPM returned error payload */
-					xzs_early_puts("[XZS-RPM] [ERROR] RPM RETURNED ERROR IN ACK!\n");
+					xzs_diag_emit("    [RPM-TX] ERROR in ACK payload\n");
 				}
 				break;
 			}
 		} else {
 			struct msm_rpm_ack_msg_v1 *ack = (struct msm_rpm_ack_msg_v1 *)rx_payload;
-			xzs_early_puts("[XZS-RPM] PARSED ACK V1:\n");
-			xzs_early_puts("  request_hdr=0x"); xzs_early_puthex64((uint64_t)ack->request_hdr);
-			xzs_early_puts(" id_ack=0x"); xzs_early_puthex64((uint64_t)ack->id_ack);
-			xzs_early_puts("\n");
-
 			if (ack->id_ack == msg_id) {
 				ack_received = true;
 				ack_status = 0;
@@ -719,20 +788,16 @@ static int xzs_rpm_send_kvp_request_and_wait_ack(uint32_t set,
 	if (out_elapsed_us) *out_elapsed_us = elapsed;
 
 	if (!ack_received) {
-		xzs_early_puts("[XZS-RPM] [FAIL] TIMEOUT WAITING FOR RPM ACK\n");
+		xzs_diag_emit("    [RPM-TX] TIMEOUT waiting for ACK\n");
 		return -60; /* ETIMEDOUT */
 	}
 
 	if (ack_status != 0) {
-		xzs_early_puts("[XZS-RPM] [FAIL] RPM NACK / ERROR REPORTED\n");
+		xzs_diag_emit("    [RPM-TX] RPM NACK / ERROR REPORTED\n");
 		return -5; /* EIO */
 	}
 
-	xzs_early_puts("[XZS-RPM] [PASS] RPM ACK RECEIVED (msg_id=0x");
-	xzs_early_puthex64((uint64_t)msg_id);
-	xzs_early_puts(", elapsed=");
-	xzs_early_puthex64((uint64_t)elapsed);
-	xzs_early_puts(" us)\n");
+	xzs_diag_emit("    [RPM-TX] RPM ACK received successfully!\n");
 	return 0;
 }
 
