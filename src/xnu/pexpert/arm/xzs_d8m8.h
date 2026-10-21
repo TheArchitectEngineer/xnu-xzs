@@ -2092,15 +2092,15 @@ xzs_d8m8_stream_config(void)
 	/* Step 1: Ensure tear check disabled before reprogramming */
 	xzs_m8_write_reg("PP0_TEAR_CHECK_EN ", 0x00971000u, 0x00000000u, 0x00000000u, false);
 
-	/* Step 2: Program golden configuration with external HW TE trigger (BIT19=1, BIT20=1, vclks=0x93 per Qualcomm mdss_mdp_intf_cmd.c:204 & TWRP baseline) */
-	xzs_m8_write_reg("PP0_SYNC_CFG_VSYNC", 0x00971004u, 0x00180093u, 0x00180093u, false);
+	/* Step 2: Program Sony LK cold-boot configuration with autonomous 60Hz VSYNC counter (BIT19=1, BIT20=0, vclks=0x93 per Sony LK aboot.img:0xaa01e88c) */
+	xzs_m8_write_reg("PP0_SYNC_CFG_VSYNC", 0x00971004u, 0x00080093u, 0x00080093u, false);
 	uint32_t vsync_rb = d8p1_read32(0x00971004u);
-	xzs_diag_emit("  PP_SYNC_CONFIG_VSYNC_WRITE=0x00180093\n");
+	xzs_diag_emit("  PP_SYNC_CONFIG_VSYNC_WRITE=0x00080093\n");
 	xzs_diag_emit("  PP_SYNC_CONFIG_VSYNC_READBACK=0x"); xzs_d8p1_hex32(vsync_rb); xzs_diag_emit("\n");
-	bool vsync_rb_ok = ((vsync_rb & (1u << 20)) != 0) && ((vsync_rb & (1u << 19)) != 0) && ((vsync_rb & 0xffffu) == 0x0093u);
+	bool vsync_rb_ok = ((vsync_rb & (1u << 19)) != 0) && ((vsync_rb & 0xffffu) == 0x0093u);
 	xzs_diag_emit("  PP_SYNC_CONFIG_VSYNC_ACCEPTANCE=");
-	xzs_diag_emit(vsync_rb_ok ? "PASS (BIT19=1, BIT20=1, vclks=0x93)\n" : "FAIL\n");
-	xzs_diag_emit("  EXTERNAL_HW_TE_VSYNC_MODE=yes\n");
+	xzs_diag_emit(vsync_rb_ok ? "PASS (BIT19=1, vclks=0x93)\n" : "FAIL\n");
+	xzs_diag_emit("  AUTONOMOUS_60HZ_VSYNC_MODE=yes\n");
 
 	xzs_m8_write_reg("PP0_SYNC_CFG_HGHT ", 0x00971008u, 0x0000FFF0u, 0x0000FFF0u, false);
 	xzs_m8_write_reg("PP0_VSYNC_INIT_VAL", 0x00971010u, 0x00000780u, 0x00000780u, false);
@@ -2114,11 +2114,10 @@ xzs_d8m8_stream_config(void)
 	xzs_m8_write_reg("PP0_TEAR_CHECK_EN ", 0x00971000u, 0x00000001u, 0x00000001u, false);
 
 	/*
-	 * Panel 9 uses the normal one-shot command path.  Sony LK leaves
-	 * PP0_AUTOREFRESH at zero and issues CTL_START for the frame; bit 31 is
-	 * only used by Linux's separate autorefresh feature.
+	 * Sony LK cold boot autorefresh enable (aboot.img:0xaa01e8d8):
+	 * orr r2, r2, #0x80000000; str r2, [r3, #0x30] -> writes 0x80000001 to PP0_AUTOREFRESH_CONFIG.
 	 */
-	xzs_write_pp0_autorefresh("xzs_d8m8_stream_config", "STREAM_CONFIG", 0x00000000u);
+	xzs_write_pp0_autorefresh("xzs_d8m8_stream_config", "STREAM_CONFIG", 0x80000001u);
 	uint32_t ar_after_pp = d8p1_read32(0x00971030u);
 	xzs_diag_emit("AUTOREFRESH_AFTER_PP_CONFIG=0x"); xzs_d8p1_hex32(ar_after_pp); xzs_diag_emit("\n");
 
@@ -2139,19 +2138,19 @@ xzs_d8m8_stream_config(void)
 		return;
 	}
 
-	/* Align DSI_COMMAND_MODE_MDP_CTRL2 (0x009941b8) to TWRP active golden baseline (0x00000006) */
+	/* Align DSI_COMMAND_MODE_MDP_CTRL2 (0x009941b8) to TWRP active golden baseline (0x00010006, BIT16=1) */
 	uint32_t mdp_ctrl2_old = d8p1_read32(0x009941b8u);
-	uint32_t mdp_ctrl2_new = 0x00000006u;
+	uint32_t mdp_ctrl2_new = 0x00010006u;
 	xzs_m8_write_reg("DSI_CMD_MDP_CTRL2 ", 0x009941b8u, mdp_ctrl2_new, mdp_ctrl2_new, false);
 	xzs_diag_emit("  DSI_CMD_MDP_CTRL2_PRE = 0x"); xzs_d8p1_hex32(mdp_ctrl2_old); xzs_diag_emit("\n");
 	xzs_diag_emit("  DSI_CMD_MDP_CTRL2_POST= 0x"); xzs_d8p1_hex32(mdp_ctrl2_new); xzs_diag_emit("\n");
 
-	/* Align DSI STREAM registers to TWRP active golden baseline (0x0 for full-frame command mode, mdss_mdp_intf_cmd.c:802) */
-	xzs_m8_write_reg("DSI_STREAM0_CTRL  ", 0x00994058u, 0x00000000u, 0x00000000u, false);
-	xzs_m8_write_reg("DSI_STREAM0_TOTAL ", 0x0099405cu, 0x00000000u, 0x00000000u, false);
+	/* Align DSI STREAM registers to TWRP active golden baseline (1080x1920, 3241 bytes packet, 0x0ca90039 / 0x07800438) */
+	xzs_m8_write_reg("DSI_STREAM0_CTRL  ", 0x00994058u, 0x0ca90039u, 0x0ca90039u, false);
+	xzs_m8_write_reg("DSI_STREAM0_TOTAL ", 0x0099405cu, 0x07800438u, 0x07800438u, false);
 	/* Configure Stream 1 per TWRP active golden baseline */
-	d8p1_write32(0x00994060u, 0x00000000u);
-	d8p1_write32(0x00994064u, 0x00000000u);
+	d8p1_write32(0x00994060u, 0x0ca90039u);
+	d8p1_write32(0x00994064u, 0x07800438u);
 	xzs_m8_write_reg("DSI_TRIG_CTRL     ", 0x00994084u, 0x80000004u, 0x80000004u, false);
 
 	/* Command-mode panel clock lane operates in non-continuous LP mode (TWRP golden 0x009940ac == 0x0) */
@@ -2760,10 +2759,10 @@ xzs_d8m8_kickoff(void)
 	xzs_diag_emit("PRE_INTR_STATUS=0x"); xzs_d8p1_hex32(pre_intr); xzs_diag_emit("\n");
 	xzs_diag_emit("INTR_STATUS_PRE=0x"); xzs_d8p1_hex32(pre_intr); xzs_diag_emit("\n");
 
-	/* Keep the LK Panel-9 one-shot setting across the CTL_START boundary. */
-	xzs_write_pp0_autorefresh("xzs_d8m8_kickoff", "PRE_KICKOFF", 0x00000000u);
-	xzs_diag_emit("PANEL9_LK_PP_AUTOREFRESH_VALUE=0x00000000\n");
-	xzs_diag_emit("PANEL9_AUTOREFRESH_AUTONOMOUS_ENABLED=NO\n");
+	/* Maintain Sony LK authentic autorefresh setting across the CTL_START boundary (aboot.img:0xaa01e8d8). */
+	xzs_write_pp0_autorefresh("xzs_d8m8_kickoff", "PRE_KICKOFF", 0x80000001u);
+	xzs_diag_emit("PANEL9_LK_PP_AUTOREFRESH_VALUE=0x80000001\n");
+	xzs_diag_emit("PANEL9_AUTOREFRESH_AUTONOMOUS_ENABLED=YES\n");
 
 	g_f1_metrics.trig_ctrl_pre_kick = d8p1_read32(0x00994084u);
 	xzs_diag_emit("TRIG_CTRL_PRE_KICK=0x"); xzs_d8p1_hex32(g_f1_metrics.trig_ctrl_pre_kick); xzs_diag_emit("\n");
@@ -3088,6 +3087,12 @@ xzs_d8m8_kickoff(void)
 
 	uint32_t ar_post_ctl = d8p1_read32(0x00971030u);
 	xzs_diag_emit("AUTOREFRESH_POST_CTL_START=0x"); xzs_d8p1_hex32(ar_post_ctl); xzs_diag_emit("\n");
+
+	/* Transmit DISPON (0x29) while pipeline is armed with CTL_START=1 per Sony LK msm_display_on:0xaa01ee88 */
+	int armed_dispon_rc = xzs_d8m6_transmit_cmd(&s_cmd_dispon, 0);
+	g_m8_dispon_sent = (armed_dispon_rc == 0);
+	xzs_diag_emit("POST_ARMED_DISPON="); xzs_diag_emit(g_m8_dispon_sent ? "PASS\n" : "FAIL\n");
+	xzs_d8p2_delay_us(20000);
 
 	g_f1_metrics.trig_ctrl_post_ctl_start = d8p1_read32(0x00994084u);
 	xzs_diag_emit("TRIG_CTRL_POST_CTL_START=0x"); xzs_d8p1_hex32(g_f1_metrics.trig_ctrl_post_ctl_start); xzs_diag_emit("\n");

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Capture frame-synchronous TWRP baseline on physical Xperia XZs (BH905SX976).
 Boots TWRP via fastboot boot (RAM only, NO FLASH), samples active MDSS/PP0/DSI
-registers during live frame redraws, collects ftrace and interrupt counters,
+registers during live frame redraws, collects interrupt counters,
 saves all raw artifacts to artifacts/hw/d8m8/active-frame-twrp-baseline/,
 and returns device to fastboot.
 """
@@ -45,19 +45,23 @@ def read_mdp_regs(off_hex, count_hex):
     return regs, raw
 
 
-def read_dsi0_regs(off_hex, count_hex):
-    adb(f"echo '{off_hex} {count_hex}' > /sys/kernel/debug/mdp/dsi0_ctrl_off")
-    raw = adb("cat /sys/kernel/debug/mdp/dsi0_ctrl_reg")
+def read_dsi0_regs_full():
+    chunks = ["0 40", "40 40", "80 40", "c0 40", "100 40", "140 40", "180 40", "1c0 40"]
     regs = {}
-    for line in raw.splitlines():
-        if ":" in line:
-            parts = line.split(":")
-            base_addr = int(parts[0], 16)
-            words = parts[1].strip().split()
-            for idx, w in enumerate(words):
-                addr_str = f"0x{base_addr + idx * 4:08x}"
-                regs[addr_str] = f"0x{w}"
-    return regs, raw
+    raw_parts = []
+    for chunk in chunks:
+        adb(f"echo '{chunk}' > /sys/kernel/debug/mdp/dsi0_ctrl_off")
+        raw = adb("cat /sys/kernel/debug/mdp/dsi0_ctrl_reg")
+        raw_parts.append(raw)
+        for line in raw.splitlines():
+            if ":" in line:
+                parts = line.split(":")
+                base_addr = int(parts[0], 16)
+                words = parts[1].strip().split()
+                for idx, w in enumerate(words):
+                    addr_str = f"0x{base_addr + idx * 4:08x}"
+                    regs[addr_str] = f"0x{w}"
+    return regs, "\n".join(raw_parts)
 
 
 def main():
@@ -115,28 +119,17 @@ def main():
         intr_initial = adb("cat /proc/interrupts")
         (OUT_DIR / "interrupts_initial.txt").write_text(intr_initial + "\n")
 
-        # 4. Ftrace setup
-        print("\n--- 2. FTRACE SETUP ---", flush=True)
-        adb("echo nop > /sys/kernel/debug/tracing/current_tracer")
-        adb("echo 0 > /sys/kernel/debug/tracing/tracing_on")
-        adb("echo > /sys/kernel/debug/tracing/trace")
-        adb("echo 1 > /sys/kernel/debug/tracing/events/mdss/enable")
-        adb("echo 1 > /sys/kernel/debug/tracing/tracing_on")
-        print("Ftrace armed (all mdss events enabled).", flush=True)
-
-        # 5. Active Frame-Synchronous Sampling Script
-        # We write a standalone shell script that runs on target, samples PP0 and DSI registers
-        # tightly in a loop while triggering redraws via touch input swipe and recovery restart.
-        print("\n--- 3. ACTIVE FRAME SAMPLING DURING SCREEN REDRAWS ---", flush=True)
+        # 4. Active Frame-Synchronous Sampling Script
+        print("\n--- 2. ACTIVE FRAME SAMPLING DURING SCREEN REDRAWS ---", flush=True)
         target_script = """#!/sbin/sh
 OUT=/tmp/active_samples.txt
 rm -f $OUT
-for i in $(seq 1 60); do
+for i in $(seq 1 100); do
     # Sample MDP PP0 (0x71000..0x71040)
     echo "71000 40" > /sys/kernel/debug/mdp/off
     PP_RAW=$(cat /sys/kernel/debug/mdp/reg)
 
-    # Sample MDP Top & CTL0 (0x1000..0x1030, 0x2000..0x2030)
+    # Sample MDP Top & CTL0 (0x1010..0x1020, 0x2000..0x2030)
     echo "1010 10" > /sys/kernel/debug/mdp/off
     INTR_RAW=$(cat /sys/kernel/debug/mdp/reg)
     echo "2000 30" > /sys/kernel/debug/mdp/off
@@ -146,13 +139,13 @@ for i in $(seq 1 60); do
     echo "5000 40" > /sys/kernel/debug/mdp/off
     RGB_RAW=$(cat /sys/kernel/debug/mdp/reg)
 
-    # Sample DSI0 CTRL (0x0..0x100)
-    echo "0 100" > /sys/kernel/debug/mdp/dsi0_ctrl_off
-    DSI_RAW=$(cat /sys/kernel/debug/mdp/dsi0_ctrl_reg)
-
-    # Sample DSI0 CTRL2 (0x180..0x200)
-    echo "180 80" > /sys/kernel/debug/mdp/dsi0_ctrl_off
-    DSI2_RAW=$(cat /sys/kernel/debug/mdp/dsi0_ctrl_reg)
+    # Sample DSI0 CTRL (0x0..0x40, 0x40..0x80, 0x80..0xc0, 0x180..0x1c0)
+    echo "40 40" > /sys/kernel/debug/mdp/dsi0_ctrl_off
+    DSI40_RAW=$(cat /sys/kernel/debug/mdp/dsi0_ctrl_reg)
+    echo "80 40" > /sys/kernel/debug/mdp/dsi0_ctrl_off
+    DSI80_RAW=$(cat /sys/kernel/debug/mdp/dsi0_ctrl_reg)
+    echo "180 40" > /sys/kernel/debug/mdp/dsi0_ctrl_off
+    DSI180_RAW=$(cat /sys/kernel/debug/mdp/dsi0_ctrl_reg)
 
     echo "=== SAMPLE $i ===" >> $OUT
     echo "PP:" >> $OUT
@@ -163,10 +156,12 @@ for i in $(seq 1 60); do
     echo "$CTL_RAW" >> $OUT
     echo "RGB:" >> $OUT
     echo "$RGB_RAW" >> $OUT
-    echo "DSI:" >> $OUT
-    echo "$DSI_RAW" >> $OUT
-    echo "DSI2:" >> $OUT
-    echo "$DSI2_RAW" >> $OUT
+    echo "DSI40:" >> $OUT
+    echo "$DSI40_RAW" >> $OUT
+    echo "DSI80:" >> $OUT
+    echo "$DSI80_RAW" >> $OUT
+    echo "DSI180:" >> $OUT
+    echo "$DSI180_RAW" >> $OUT
 
     usleep 5000 2>/dev/null || sleep 0.01 2>/dev/null
 done
@@ -179,39 +174,32 @@ done
         sample_proc = subprocess.Popen(["adb", "-s", SERIAL, "shell", "/sbin/sh /tmp/sample_active.sh"])
         time.sleep(0.05)
 
-        # Trigger rapid screen redraws using twrp print and recovery restart
+        # Trigger rapid screen redraws using twrp print, swipe, tap, and echo
         print("Triggering UI redraws on screen...", flush=True)
-        adb("pkill -9 recovery")
-        for sw in range(5):
+        for sw in range(15):
             adb(f"twrp print 'ACTIVE_FRAME_COMMIT_{sw}'")
-            time.sleep(0.05)
+            adb("input swipe 200 800 200 300 50")
+            time.sleep(0.02)
 
-        sample_proc.wait(timeout=20)
+        sample_proc.wait(timeout=25)
         print("Active sampling complete. Pulling data...", flush=True)
 
         samples_txt = adb("cat /tmp/active_samples.txt")
         (OUT_DIR / "active_frame_samples.txt").write_text(samples_txt + "\n")
 
-        # 6. Collect Ftrace
-        print("\n--- 4. FTRACE RETRIEVAL ---", flush=True)
-        adb("echo 0 > /sys/kernel/debug/tracing/tracing_on")
-        trace_txt = adb("cat /sys/kernel/debug/tracing/trace")
-        (OUT_DIR / "ftrace_mdss.txt").write_text(trace_txt + "\n")
-
-        # 7. Final Interrupts
+        # 5. Final Interrupts
         intr_final = adb("cat /proc/interrupts")
         (OUT_DIR / "interrupts_final.txt").write_text(intr_final + "\n")
 
-        # 8. Complete Single Detailed Snapshot of MDP & DSI
-        print("\n--- 5. FULL SUBSYSTEM AUDIT SNAPSHOT ---", flush=True)
+        # 6. Complete Detailed Register Dump of MDP & DSI
+        print("\n--- 3. FULL SUBSYSTEM AUDIT SNAPSHOT ---", flush=True)
         mdp_top, mdp_top_raw = read_mdp_regs("0", "20")
         mdp_intr, mdp_intr_raw = read_mdp_regs("1010", "10")
         ctl0, ctl0_raw = read_mdp_regs("2000", "30")
         pp0, pp0_raw = read_mdp_regs("71000", "40")
         rgb0, rgb0_raw = read_mdp_regs("5000", "40")
         lm0, lm0_raw = read_mdp_regs("45000", "20")
-        dsi0, dsi0_raw = read_dsi0_regs("0", "100")
-        dsi0_ctrl2, dsi0_ctrl2_raw = read_dsi0_regs("180", "80")
+        dsi0, dsi0_raw = read_dsi0_regs_full()
 
         full_dump = {
             "MDP_TOP": mdp_top,
@@ -221,7 +209,6 @@ done
             "RGB0": rgb0,
             "LM0": lm0,
             "DSI0": dsi0,
-            "DSI0_CTRL2": dsi0_ctrl2,
         }
         (OUT_DIR / "twrp_active_registers.json").write_text(json.dumps(full_dump, indent=2))
         (OUT_DIR / "twrp_active_registers_raw.txt").write_text(
@@ -231,14 +218,13 @@ done
             f"=== PP0 ===\n{pp0_raw}\n\n"
             f"=== RGB0 ===\n{rgb0_raw}\n\n"
             f"=== LM0 ===\n{lm0_raw}\n\n"
-            f"=== DSI0 ===\n{dsi0_raw}\n\n"
-            f"=== DSI0 CTRL2 ===\n{dsi0_ctrl2_raw}\n"
+            f"=== DSI0 FULL ===\n{dsi0_raw}\n"
         )
 
         print(f"\nSuccessfully captured frame-synchronous TWRP baseline to: {OUT_DIR}", flush=True)
 
     finally:
-        # 9. Guardrail: Return device to Fastboot
+        # Guardrail: Return device to Fastboot
         print("\n--- GUARDRAIL: RETURNING DEVICE TO FASTBOOT ---", flush=True)
         adb("reboot bootloader")
         time.sleep(4)
