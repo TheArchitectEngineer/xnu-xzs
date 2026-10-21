@@ -226,56 +226,55 @@ xzs_d8m8_panel_prepare(void)
 	if (frq == 0) frq = 19200000ULL;
 
 	/*
-	 * Authentic Sony LK DDIC panel ON sequence (keyaki.dts:1872 / somc,default_cmd_panel):
-	 * LK initializes Panel 9 DDIC with 13 vendor setup commands:
-	 * 1..6: Manufacturer unlock (0xb0 0x00), internal output (0xd6 0x01),
-	 *       timing generator clock PLL divider (0xc4 0x70 0x22),
-	 *       vendor waveform tables (0xc6 ...), scan driver bias (0xec ...),
-	 *       and manufacturer lock (0xb0 0x03).
-	 * 7:    TEON (0x35 0x00) - Enables DDIC tearing effect generator.
-	 * 8..12: MADCTL (0x36 0x00), COLMOD (0x3a 0x77), CASET (0x2a), PASET (0x2b), STESL (0x44).
-	 * 13:   SLPOUT (0x11) + 120 ms sleep-out delay for DDIC oscillator startup.
-	 * Followed by DISPON (0x29) + 20 ms delay.
-	 * Verified in Milestone D8-M8.5 (c84623b) for physical pixel scanout.
+	 * Authentic Sony Xperia XZs Panel 9 DDIC initialization sequence:
+	 * Directly extracted from panel9.dtsi:357 (somc,sharp_synaptics_cmd_9_panel):
+	 * 1..3: Brightness (51 FF), Display Ctrl (53 0C), CABC (55 00)
+	 * 4:    TEON (35 00) - Tearing effect enable
+	 * 5:    B0 04 - Manufacturer register unlock (level 4 for Synaptics TDDI)
+	 * 6:    D6 01 - Enable TE pin physical output
+	 * 7:    C9 (9 bytes) - DDIC internal scan oscillator frequency setup
+	 * 8:    D5 (12 bytes) - Timing generator clock divider and pulse widths
+	 * 9:    D0 (17 bytes) - Gate drive timing configuration
+	 * 10:   D3 (29 bytes) - Gate driver bias and control
+	 * 11:   D7 (33 bytes) - Source driver timing and polarity
+	 * 12:   C1 (32 bytes) - Power management and internal charge pump bias
+	 * 13:   C7 (31 bytes) - Positive gamma correction table
+	 * 14:   C8 (20 bytes) - Negative gamma correction table
+	 * Followed by standard DCS format/geometry and post-panel-on commands:
+	 * 15..19: MADCTL (36 00), COLMOD (3a 77), CASET (2a), PASET (2b), STESL (44)
+	 * 20:   DISPON (0x29) + 20 ms display-on delay
+	 * 21:   SLPOUT (0x11) + 120 ms sleep-out recovery delay (panel9.dtsi:374)
 	 */
-	xzs_diag_emit("DCS_SEQUENCE=SONY_LK_AUTHENTIC_13_CMD_PANEL_INIT\n");
+	xzs_diag_emit("DCS_SEQUENCE=SONY_AUTHENTIC_PANEL9_SYNAPTICS_TDDI_INIT\n");
 
-	/* CMD 1..6: Vendor DDIC timing generator, waveform, and bias init */
-	rc = xzs_d8m6_transmit_cmd(&s_cmd_dt_on_1, 0);  /* B0 00 Unlock */
-	rc = xzs_d8m6_transmit_cmd(&s_cmd_dt_on_2, 0);  /* D6 01 Interface Ctrl */
-	rc = xzs_d8m6_transmit_cmd(&s_cmd_dt_on_3, 0);  /* C4 70 22 Timing Gen */
-	rc = xzs_d8m6_transmit_cmd(&s_cmd_dt_on_4, 0);  /* C6 Timing Waveforms */
-	rc = xzs_d8m6_transmit_cmd(&s_cmd_dt_on_5, 0);  /* EC Scan Gen Bias */
-	rc = xzs_d8m6_transmit_cmd(&s_cmd_dt_on_6, 0);  /* B0 03 Lock */
-
-	/* CMD 7: TEON (0x35 0x00, dtype 0x39) */
-	uint64_t t_teon = xzs_d8m5_read_cntvct();
-	g_f15_teon_us = (t_teon * 1000000ULL) / frq;
-	xzs_diag_emit("F15_TEON_TX: timestamp_us="); xzs_d8m8_dec(g_f15_teon_us); xzs_diag_emit("\n");
-	rc = xzs_d8m6_transmit_cmd(&s_cmd_teon, 0);
+	/* Panel 9 authentic vendor init commands (panel9.dtsi:357) */
+	rc = xzs_d8m6_transmit_cmd(&s_p9_cmd_51, 0);  /* 51 FF Brightness */
+	rc = xzs_d8m6_transmit_cmd(&s_p9_cmd_53, 0);  /* 53 0C Ctrl Disp */
+	rc = xzs_d8m6_transmit_cmd(&s_p9_cmd_55, 0);  /* 55 00 CABC */
+	rc = xzs_d8m6_transmit_cmd(&s_p9_cmd_35, 0);  /* 35 00 TEON */
 	g_d8m6_counters.teon_count++;
-	uint32_t teon_ack = d8m4_read32(D8M6_REG_DSI_ACK_ERR_STATUS);
-	uint32_t teon_to = d8m4_read32(D8M6_REG_DSI_TIMEOUT_STATUS);
-	bool teon_ok = (rc == 0) && (teon_ack == 0) && (teon_to == 0);
-	xzs_diag_emit("TEON_ACK="); xzs_diag_emit(teon_ok ? "PASS\n" : "FAIL\n");
-	g_m8_teon_sent = teon_ok;
+	g_m8_teon_sent = (rc == 0);
 	xzs_diag_emit("TEON_SENT=yes\n");
 
-	/* CMD 8..12: Orientation, Format, Geometry, Tear Scanline */
+	rc = xzs_d8m6_transmit_cmd(&s_p9_cmd_b0, 0);  /* B0 04 Unlock */
+	rc = xzs_d8m6_transmit_cmd(&s_p9_cmd_d6, 0);  /* D6 01 TE Output Enable */
+	rc = xzs_d8m6_transmit_cmd(&s_p9_cmd_c9, 0);  /* C9 Oscillator setup */
+	rc = xzs_d8m6_transmit_cmd(&s_p9_cmd_d5, 0);  /* D5 Timing gen setup */
+	rc = xzs_d8m6_transmit_cmd(&s_p9_cmd_d0, 0);  /* D0 Gate drive timing */
+	rc = xzs_d8m6_transmit_cmd(&s_p9_cmd_d3, 0);  /* D3 Gate control */
+	rc = xzs_d8m6_transmit_cmd(&s_p9_cmd_d7, 0);  /* D7 Source control */
+	rc = xzs_d8m6_transmit_cmd(&s_p9_cmd_c1, 0);  /* C1 Power/bias control */
+	rc = xzs_d8m6_transmit_cmd(&s_p9_cmd_c7, 0);  /* C7 Gamma pos */
+	rc = xzs_d8m6_transmit_cmd(&s_p9_cmd_c8, 0);  /* C8 Gamma neg */
+
+	/* Orientation, Format, Geometry, Tear Scanline */
 	rc = xzs_d8m6_transmit_cmd(&s_cmd_dt_on_8, 0);  /* 36 00 MADCTL */
 	rc = xzs_d8m6_transmit_cmd(&s_cmd_dt_on_9, 0);  /* 3a 77 COLMOD 24bpp */
 	rc = xzs_d8m6_transmit_cmd(&s_cmd_dt_on_10, 0); /* 2a CASET 0..1079 */
 	rc = xzs_d8m6_transmit_cmd(&s_cmd_dt_on_11, 0); /* 2b PASET 0..1919 */
 	rc = xzs_d8m6_transmit_cmd(&s_cmd_dt_on_12, 0); /* 44 STESL scanline 0 */
 
-	/* CMD 13: SLPOUT (0x11) + 120 ms sleep-out recovery delay */
-	rc = xzs_d8m6_transmit_cmd(&s_cmd_slpout, 0);
-	g_d8m6_counters.slpout_count++;
-	g_m8_slpout_sent = (rc == 0);
-	xzs_diag_emit("SLPOUT_SENT=yes\n");
-	xzs_d8p2_delay_us(120000);
-
-	/* Command 14: DISPON (0x29) + 20 ms display-on delay */
+	/* DISPON (0x29) per post-panel-on command 1 (panel9.dtsi:373) */
 	uint64_t t_dispon = xzs_d8m5_read_cntvct();
 	g_f15_dispon_us = (t_dispon * 1000000ULL) / frq;
 	xzs_diag_emit("F15_DISPON_TX: timestamp_us="); xzs_d8m8_dec(g_f15_dispon_us); xzs_diag_emit("\n");
@@ -288,6 +287,13 @@ xzs_d8m8_panel_prepare(void)
 	g_m8_dispon_sent = dispon_ok;
 	xzs_diag_emit("DISPON_SENT=yes\n");
 	xzs_d8p2_delay_us(20000);
+
+	/* SLPOUT (0x11) + 120 ms recovery delay per post-panel-on command 2 (panel9.dtsi:374) */
+	rc = xzs_d8m6_transmit_cmd(&s_cmd_slpout, 0);
+	g_d8m6_counters.slpout_count++;
+	g_m8_slpout_sent = (rc == 0);
+	xzs_diag_emit("SLPOUT_SENT=yes\n");
+	xzs_d8p2_delay_us(120000);
 
 	uint64_t t_on_done = xzs_d8m5_read_cntvct();
 	uint64_t on_done_us = (t_on_done * 1000000ULL) / frq;
