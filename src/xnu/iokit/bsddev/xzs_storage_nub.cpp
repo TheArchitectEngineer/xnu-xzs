@@ -45,7 +45,7 @@ xzs_storage_nub_publish(int bsd_major, int bsd_minor)
 	nub->setProperty(kIOBSDNameKey, "disk0");
 	nub->setProperty(kIOBSDMajorKey, (unsigned long long)bsd_major, 32);
 	nub->setProperty(kIOBSDMinorKey, (unsigned long long)bsd_minor, 32);
-	nub->registerService();
+	nub->registerService(kIOServiceSynchronous);
 
 	return 0;
 }
@@ -62,7 +62,7 @@ xzs_storage_nub_find_bsd_name(const char *name, char *out_name, size_t out_name_
 		return ENOENT;
 	}
 
-	IOService *service = IOService::waitForMatchingService(matching, 1000000); // 1s timeout
+	IOService *service = IOService::waitForMatchingService(matching, 5ULL * kSecondScale); // 5s timeout in ns
 	matching->release();
 	if (!service) {
 		return ENOENT;

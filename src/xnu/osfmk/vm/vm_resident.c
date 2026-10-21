@@ -2471,6 +2471,10 @@ pmap_startup(
 
 		++vm_pages_count;
 		vm_page_init(vm_page_get(i), phys_page);
+		if (pmap_is_bad_ram(phys_page)) {
+			vm_page_get(i)->vmp_error = true;
+			continue;
+		}
 		if (fillval) {
 			fillPage(phys_page, fillval);
 		}

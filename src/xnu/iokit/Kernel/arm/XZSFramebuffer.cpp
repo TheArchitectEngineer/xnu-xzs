@@ -37,6 +37,10 @@
 #include "XZSSurface.h"
 
 #if defined(SWEET) || defined(XZS)
+extern "C" {
+void xzs_fb_present_kick(void);
+void xzs_fbcon_detach(void);
+}
 #include <IOKit/IOService.h>
 #include <IOKit/IOUserClient.h>
 #include <IOKit/IOKitKeys.h>
@@ -161,12 +165,12 @@ AppleCLCD::start(IOService *provider)
 	fHeight = (uint32_t)video.v_height;
 	fRowBytes = (uint32_t)video.v_rowBytes;
 	if (fPhys == 0 || fWidth == 0 || fHeight == 0 || fRowBytes < fWidth * 4) {
-		/* Fallback to unified physical framebuffer memory at 0x98000000 */
+		/* Fallback to unified physical framebuffer memory at 0x98000000 (stride 4352 = 0x1100) */
 		fPhys = 0x98000000ULL;
 		fWidth = 1080;
 		fHeight = 1920;
-		fRowBytes = 1080 * 4;
-		IOLog("XZS FB: using fallback cont_splash_mem at 0x%llx (%ux%u)\n", fPhys, fWidth, fHeight);
+		fRowBytes = 4352;
+		IOLog("XZS FB: using fallback cont_splash_mem at 0x%llx (%ux%u stride %u)\n", fPhys, fWidth, fHeight, fRowBytes);
 	}
 	if (fPhys == 0 || fWidth == 0 || fHeight == 0 || fRowBytes < fWidth * 4) {
 		IOLog("SWEET FB: no boot framebuffer\n");
@@ -244,6 +248,7 @@ AppleCLCD::vsyncFired(OSObject *owner, IOTimerEventSource *sender)
 					row[x] = step < 6 ? (row[x] >> 1) & 0x7f7f7f7f : 0;
 				}
 			}
+			xzs_fb_present_kick();
 		}
 		sender->setTimeoutUS(SWEET_FB_VSYNC_US);
 		return;
@@ -320,6 +325,7 @@ AppleCLCD::present(const uint8_t *rec)
 			PE_Video video;
 			PE_current_console(&video);
 			PE_initialize_console(&video, kPEDisableScreen);
+			xzs_fbcon_detach();
 		}
 	}
 
@@ -398,6 +404,7 @@ AppleCLCD::present(const uint8_t *rec)
 		}
 		s->release();
 	}
+	xzs_fb_present_kick();
 }
 
 bool

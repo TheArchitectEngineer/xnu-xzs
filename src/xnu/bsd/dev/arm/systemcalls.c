@@ -104,14 +104,14 @@ unix_syscall(
 
 #if CONFIG_XZS_BRINGUP
 	extern void xzs_bringup_console_write(const void *buf, int len);
-	if (proc && proc_pid(proc) == 1 && code == 3 && saved_state64(state)->x[0] == 0) {
+	extern volatile boolean_t xzs_d6m4_probe_armed;
+	if (xzs_d6m4_probe_armed && proc && proc_pid(proc) == 1 && code == 3 && saved_state64(state)->x[0] == 0) {
 		char scm[128];
 		int scl = snprintf(scm, sizeof(scm),
 		    "[XZS-T4F] SHELL_PROMPT_SYSCALL_ENTER pid=1 code=3 r0=0x0 r1=0x%llx\n",
 		    (unsigned long long)saved_state64(state)->x[1]);
 		xzs_bringup_console_write(scm, scl);
 	}
-	extern volatile boolean_t xzs_d6m4_probe_armed;
 	extern thread_t xzs_d6m4_target_thread;
 	extern struct xzs_d6m4_r650_telemetry xzs_d6m4_r650_telemetry;
 	boolean_t xzs_d6m5_target_write = xzs_d6m4_probe_armed &&
@@ -354,7 +354,8 @@ unix_syscall_return(int error)
 	}
 
 #if CONFIG_XZS_BRINGUP
-	{
+	extern volatile boolean_t xzs_d6m4_probe_armed;
+	if (xzs_d6m4_probe_armed) {
 		extern void xzs_bringup_console_write(const void *buf, int len);
 		arm_saved_state64_t *s64 = (regs && is_saved_state64(regs)) ? saved_state64(regs) : NULL;
 		char retm[128];

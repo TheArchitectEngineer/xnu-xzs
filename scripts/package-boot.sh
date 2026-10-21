@@ -5,13 +5,9 @@ mkdir -p artifacts/builds
 
 echo "=== Packaging artifacts/builds/xzs-xnu-boot.img ==="
 
-# 1. Use proven working-bootshim.bin if available, otherwise rebuild
+# 1. Always rebuild bootshim from current source
 BOOTSHIM_SRC="src/xzs-bootshim/bootshim.bin"
-if [ -f "artifacts/builds/working-bootshim.bin" ]; then
-    BOOTSHIM_SRC="artifacts/builds/working-bootshim.bin"
-else
-    make -C src/xzs-bootshim all
-fi
+make -C src/xzs-bootshim clean all
 
 # 2. Compress bootshim with gzip and append genuine DTB (matching TWRP Image.gz-dtb format)
 gzip -n -9 -c "${BOOTSHIM_SRC}" > artifacts/builds/bootshim.bin.gz

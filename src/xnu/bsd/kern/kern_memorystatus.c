@@ -2168,11 +2168,11 @@ memorystatus_init(void)
 	 */
 	static uint8_t xzs_memorystatus_jetsam_snapshot_buf[
 	    sizeof(memorystatus_jetsam_snapshot_t) +
-	    (sizeof(memorystatus_jetsam_snapshot_entry_t) * 2)] __attribute__((aligned(64)));
+	    (sizeof(memorystatus_jetsam_snapshot_entry_t) * 256)] __attribute__((aligned(64)));
 	static bool memorystatus_jetsam_snapshot_is_static = true;
 #pragma unused(memorystatus_jetsam_snapshot_is_static)
 
-	memorystatus_jetsam_snapshot_max = 2;
+	memorystatus_jetsam_snapshot_max = 256;
 	memorystatus_jetsam_snapshot_size = sizeof(xzs_memorystatus_jetsam_snapshot_buf);
 	memset(xzs_memorystatus_jetsam_snapshot_buf, 0, memorystatus_jetsam_snapshot_size);
 	memorystatus_jetsam_snapshot = (memorystatus_jetsam_snapshot_t *)(void *)xzs_memorystatus_jetsam_snapshot_buf;

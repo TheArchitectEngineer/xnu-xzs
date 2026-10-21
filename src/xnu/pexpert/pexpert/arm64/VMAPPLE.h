@@ -39,6 +39,8 @@
 #define APPLEVIRTUALPLATFORM      1
 #define CONFIG_XZS_BRINGUP        1
 #define XZS                       1
+#define ARM64_BOARD_CONFIG_SWEET  1
+#define SWEET                     1
 
 #define CPU_HAS_APPLE_PAC         0
 /* #define HAS_PARAVIRTUALIZED_PAC   1 */

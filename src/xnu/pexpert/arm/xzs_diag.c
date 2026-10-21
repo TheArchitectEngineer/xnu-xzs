@@ -1121,6 +1121,54 @@ xzs_display_bringup_auto(void)
 	/* 1. MMAGIC & MDSS GDSC Power Domains & Clocks (Fabric prerequisite) */
 	xzs_d8m2_ensure_aboot_mmss_fabric();
 	xzs_diag_emit("\n[XZS-DISP] MMSS/BIMC FABRIC READY FOR DISPLAY BRINGUP\n");
+
+	char rd_arg[32] = "";
+	int d8m10_auto = 0;
+	(void)PE_parse_boot_argn("d8m10_auto", &d8m10_auto, sizeof(d8m10_auto));
+	bool is_md0 = !PE_parse_boot_argn("rd", rd_arg, sizeof(rd_arg)) ||
+	    strncmp(rd_arg, "md", 2) == 0;
+
+	if (!is_md0 || d8m10_auto != 0) {
+		/* Full automatic display & USB console bringup for iOS 16 RootFS boot */
+		xzs_d8m2_critical_on("CLK-MMAGIC-AHB-001", XZS_MMCC_MMAGIC_AHB, 0);
+		xzs_d8m2_critical_on("CLK-MMAGIC-CFG-001", XZS_MMCC_CFG_AHB, 0);
+		xzs_d8m2_critical_on("CLK-MMAGIC-NOC-001", XZS_MMCC_MMAGIC_MDSS_NOC, 1);
+		xzs_d8m2_critical_on("CLK-MMAGIC-AXI-001", XZS_MMCC_MMAGIC_MDSS_AXI, 2);
+		xzs_d8m2_mdss_on();
+		xzs_d8m2_branch_on("CLK-AHB-001", XZS_MMCC_MDSS_AHB);
+		xzs_d8m2_branch_on("CLK-AXI-001", XZS_MMCC_MDSS_AXI);
+		xzs_d8m2_branch_on("CLK-MDP-001", XZS_MMCC_MDSS_MDP);
+
+		xzs_d8m3_run(2);
+		xzs_d8m4_run(2);
+		xzs_d8p1_run(1);
+		xzs_d8m8_panel_prepare();
+		xzs_d8m8_fb_init();
+		xzs_d8m8_c1_rate();
+		xzs_d8m8_rgb0_config();
+		xzs_d8m8_lm0_config();
+		xzs_d8m8_stream_config();
+		xzs_d8m8_ctl_config();
+		xzs_d8m8_flush_config();
+		xzs_d8m8_prekick_status();
+		xzs_d8m8_kickoff();
+
+		xzs_diag_emit("\n[XZS-DISP] AUTO EARLY DISPLAY BRINGUP COMPLETE - LCD ACTIVE!\n");
+
+		extern int xzs_usb_init(void);
+		extern int xzs_usb_t1z_service(void);
+		(void)xzs_usb_init();
+		(void)xzs_usb_t1z_service();
+		xzs_diag_emit("[XZS-USB] AUTO EARLY USB CDC CONSOLE ONLINE!\n");
+	}
+}
+
+void
+xzs_fb_present_kick(void)
+{
+	if (g_m8_ctl_configured && g_m8_stream_configured) {
+		(void)xzs_d8m8_kick_frame_ex(false);
+	}
 }
 
 void

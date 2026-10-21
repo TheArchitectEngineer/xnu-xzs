@@ -1457,10 +1457,6 @@ check_user_asts:
 	msr		DAIFSet, #DAIFSC_ALL				// Disable exceptions
 	ldr		x4, [x3, ACT_CPUDATAP]				// Get current CPU data pointer
 	ldr		w0, [x4, CPU_PENDING_AST]			// Get ASTs
-#if CONFIG_XZS_BRINGUP
-	and		w0, w0, #0x20						// Only allow AST_APC (thread termination)
-	str		wzr, [x4, CPU_PENDING_AST]
-#endif
 	cbz		w0, no_asts							// If no asts, skip ahead
 
 	cbz		x28, user_take_ast					// If we don't need to check PFZ, just handle asts

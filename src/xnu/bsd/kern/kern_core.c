@@ -83,7 +83,7 @@ kern_return_t thread_getstatus(thread_t act, int flavor,
     thread_state_t tstate, mach_msg_type_number_t *count);
 void task_act_iterate_wth_args(task_t, void (*)(thread_t, void *), void *);
 
-#ifdef SECURE_KERNEL
+#if defined(SECURE_KERNEL) || defined(ARM64_BOARD_CONFIG_SWEET) || defined(XZS)
 __XNU_PRIVATE_EXTERN int do_coredump = 0;       /* default: don't dump cores */
 #else
 __XNU_PRIVATE_EXTERN int do_coredump = 1;       /* default: dump cores */

@@ -19,6 +19,9 @@
 set -euo pipefail
 
 [[ $# -ge 4 ]] || { sed -n '2,12p' "$0"; exit 2; }
+if [[ "$(uname -s)" == "Darwin" ]]; then
+	exec python3 "$(dirname "$0")/mkiosroot-macos.py" "$@"
+fi
 os=$(realpath "$1") sysos=$(realpath "$2") appos=$(realpath "$3") out=$4 size=${5:-16G}
 [[ ! -e $out ]] || { echo "refusing to overwrite $out" >&2; exit 1; }
 

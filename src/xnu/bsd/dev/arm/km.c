@@ -452,12 +452,13 @@ kmoutput(struct tty * tp)
 		}
 #if CONFIG_XZS_BRINGUP
 		xzs_console_write(buf, cc);
-#endif
+#else
 		if (cc > 1) {
 			console_write((char *)buf, cc);
 		} else {
 			kmputc(tp->t_dev, *buf);
 		}
+#endif
 	}
 	/*
 	 * XXX This is likely not necessary, as the tty output queue is not

@@ -966,7 +966,7 @@ xzs_tx_enqueue(uint8_t byte)
 static void
 xzs_tx_kick(void)
 {
-	if (s_tx_call != NULL) {
+	if (s_tx_call != NULL && ml_get_interrupts_enabled()) {
 		(void)thread_call_enter(s_tx_call);
 	}
 }
@@ -1946,6 +1946,12 @@ xzs_t1z_on_out_complete(void)
 	uint32_t i;
 
 	xzs_dma_invalidate_poc((vm_offset_t)s_bulk_out_buf, sizeof(s_bulk_out_buf));
+	if (length >= 16 && memcmp(s_bulk_out_buf, "__XZS_FASTBOOT__", 16) == 0) {
+		extern void xzs_display_quiesce_for_reboot(void);
+		extern void xzs_spin_halt(void);
+		xzs_display_quiesce_for_reboot();
+		xzs_spin_halt();
+	}
 	if (s_t1z_phase == XZS_T1Z_PHASE_DONE && g_xzs_usb_tty_bridge) {
 		for (i = 0; i < length; i++) {
 			xzs_rx_enqueue(s_bulk_out_buf[i]);

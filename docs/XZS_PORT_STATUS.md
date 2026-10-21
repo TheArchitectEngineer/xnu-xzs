@@ -1,6 +1,6 @@
 # Sony Xperia XZs (MSM8996) — Port Status
 
-Current sealed display milestones are D8-M1..M6, D8-P1, D8-P2, D8-M8, D8-M8.5, and D8-M10. Milestone D8-M10 (Early Boot Framebuffer Console & Interactive Shell Display on Physical LCD) is **COMPLETE / SEALED / HARDWARE PROVEN** on physical silicon (`BH905SX976`, reports `docs/XZS_D8_M10_HARDWARE_EVALUATION.md` and `docs/DISPLAY_REGRESSION_BISECT_RESULT.md`). Phase D9 (Apple Compatibility Services Layer) is INTEGRATED under the hybrid architecture blueprint (`docs/XZS_IOS_HYBRID_ARCHITECTURE.md`).
+Current sealed display milestones are D8-M1..M6, D8-P1, D8-P2, D8-M8, D8-M8.5, and D8-M10. Milestone D8-M10 (Early Boot Framebuffer Console & Interactive Shell Display on Physical LCD) is **COMPLETE / SEALED / HARDWARE PROVEN** on physical silicon (`BH905SX976`, reports `docs/XZS_D8_M10_HARDWARE_EVALUATION.md` and `docs/DISPLAY_REGRESSION_BISECT_RESULT.md`). Phase D9 (Apple Compatibility Services Layer & Kernel Subsystems) and Phase D10-M1 (14 GB HFS+ iOS 16.7.16 RootFS Creation, Flash & Live Hardware Mount on `/dev/disk0s54`) are **COMPLETE & VERIFIED** under the hybrid architecture blueprint (`docs/XZS_IOS_HYBRID_ARCHITECTURE.md`).
 
 ```text
 D7-T1   = PASS (USB transport)
@@ -16,10 +16,11 @@ D8-M6   = PASS (Panel vendor/DCS initialization sequence; COMPLETE & SEALED)
 D8-M8   = PASS (MDP scanout / command transport; COMPLETE & SEALED)
 D8-M8.5 = PASS (First Visible Display: WLED Backlight + Visible Frame; COMPLETE & SEALED)
 D8-M10  = PASS (1080x1920 Physical LCD Console Log + 8 Color Bars Visible & Verified across 2/2 RAM boots; COMPLETE & SEALED)
-D9-M1   = COMPLETE (AppleCLCD & IOCoreSurfaceRoot / XZSFramebuffer & XZSSurface integrated)
-D9-M2   = COMPLETE (xzs_amfi.c permissive Sandbox & AMFI MAC policies integrated)
-D9-M3   = COMPLETE (XZSKeyStore.cpp AppleKeyStore stub integrated)
-D10     = NEXT (Generate HFS+ userdata rootfs and boot authentic iOS launchd)
+D9-M1   = COMPLETE (AppleCLCD & IOCoreSurfaceRoot / XZSFramebuffer & XZSSurface + SweetHID + SweetBattery integrated)
+D9-M2   = COMPLETE (xzs_amfi.c permissive Sandbox & AMFI MAC policies + sweet_libpthread + sweet_bearssl integrated)
+D9-M3   = COMPLETE (XZSKeyStore.cpp AppleKeyStore stub + sweet_hfs Case-Sensitive Journaled HFS+ VFS integrated)
+D10-M1  = PASS (14 GB HFS+ iOS 16.7.16 RootFS flashed to userdata /dev/disk0s54, mounted as /, /dev mounted, PID 1 created on BH905SX976)
+D10-M2  = ACTIVE (Boot with AST_BSD unmasked in locore.s to execute /sbin/launchd -> backboardd -> SpringBoard)
 ```
 
 D8-M3 hardware verification summary:

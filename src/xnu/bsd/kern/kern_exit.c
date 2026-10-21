@@ -2641,9 +2641,16 @@ proc_exit(proc_t p)
 		    pid, exitval, 0, 0, 0);
 #if CONFIG_XZS_BRINGUP
 		{
+			extern volatile boolean_t xzs_d6m4_probe_armed;
 			extern void xzs_bringup_console_write(const void *buf, int len);
 			char zmsg[96];
-			int zlen = snprintf(zmsg, sizeof(zmsg), "[XZS-T4R] CP=T4R-70 ROLE=CHILD PID=%d CHILD_REAPABLE\n", proc_pid(p));
+			int zlen;
+			if (xzs_d6m4_probe_armed) {
+				zlen = snprintf(zmsg, sizeof(zmsg), "[XZS-T4R] CP=T4R-70 ROLE=CHILD PID=%d CHILD_REAPABLE\n", proc_pid(p));
+			} else {
+				zlen = snprintf(zmsg, sizeof(zmsg), "[XZS-EXIT] pid=%d(%s) exitval=0x%x\n",
+				    proc_pid(p), p->p_comm, exitval);
+			}
 			xzs_bringup_console_write(zmsg, zlen);
 		}
 #endif
@@ -2657,11 +2664,14 @@ proc_exit(proc_t p)
 
 #if CONFIG_XZS_BRINGUP
 		{
-			extern void xzs_bringup_console_write(const void *buf, int len);
-			char wmsg[112];
-			int wlen = snprintf(wmsg, sizeof(wmsg), "[XZS-T4R] CP=T4R-80 ROLE=PARENT PARENT_WAIT4_WAKE parent_pid=%d child_pid=%d\n",
-			    proc_pid(pp), proc_pid(p));
-			xzs_bringup_console_write(wmsg, wlen);
+			extern volatile boolean_t xzs_d6m4_probe_armed;
+			if (xzs_d6m4_probe_armed) {
+				extern void xzs_bringup_console_write(const void *buf, int len);
+				char wmsg[112];
+				int wlen = snprintf(wmsg, sizeof(wmsg), "[XZS-T4R] CP=T4R-80 ROLE=PARENT PARENT_WAIT4_WAKE parent_pid=%d child_pid=%d\n",
+				    proc_pid(pp), proc_pid(p));
+				xzs_bringup_console_write(wmsg, wlen);
+			}
 		}
 #endif
 		/* and now wakeup the parent */
@@ -2906,10 +2916,13 @@ wait1continue(int result)
 
 #if CONFIG_XZS_BRINGUP
 	{
-		extern void xzs_bringup_console_write(const void *buf, int len);
-		char cmsg[96];
-		int clen = snprintf(cmsg, sizeof(cmsg), "[XZS-T4R] CP=WAIT1CONT_ENTER result=%d\n", result);
-		xzs_bringup_console_write(cmsg, clen);
+		extern volatile boolean_t xzs_d6m4_probe_armed;
+		if (xzs_d6m4_probe_armed) {
+			extern void xzs_bringup_console_write(const void *buf, int len);
+			char cmsg[96];
+			int clen = snprintf(cmsg, sizeof(cmsg), "[XZS-T4R] CP=WAIT1CONT_ENTER result=%d\n", result);
+			xzs_bringup_console_write(cmsg, clen);
+		}
 	}
 #endif
 
@@ -2928,10 +2941,13 @@ wait1continue(int result)
 
 #if CONFIG_XZS_BRINGUP
 	{
-		extern void xzs_bringup_console_write(const void *buf, int len);
-		char cmsg[96];
-		int clen = snprintf(cmsg, sizeof(cmsg), "[XZS-T4R] CP=WAIT1CONT_RETURN ret=%d\n", ret);
-		xzs_bringup_console_write(cmsg, clen);
+		extern volatile boolean_t xzs_d6m4_probe_armed;
+		if (xzs_d6m4_probe_armed) {
+			extern void xzs_bringup_console_write(const void *buf, int len);
+			char cmsg[96];
+			int clen = snprintf(cmsg, sizeof(cmsg), "[XZS-T4R] CP=WAIT1CONT_RETURN ret=%d\n", ret);
+			xzs_bringup_console_write(cmsg, clen);
+		}
 	}
 #endif
 
@@ -2980,11 +2996,14 @@ wait4_nocancel(proc_t q, struct wait4_nocancel_args *uap, int32_t *retval)
 
 #if CONFIG_XZS_BRINGUP
 	{
-		extern void xzs_bringup_console_write(const void *buf, int len);
-		char wemsg[96];
-		int welen = snprintf(wemsg, sizeof(wemsg), "[XZS-T4R] CP=WAIT4_ENTER PARENT_PID=%d target_pid=%d\n",
-		    proc_pid(q), (int)uap->pid);
-		xzs_bringup_console_write(wemsg, welen);
+		extern volatile boolean_t xzs_d6m4_probe_armed;
+		if (xzs_d6m4_probe_armed) {
+			extern void xzs_bringup_console_write(const void *buf, int len);
+			char wemsg[96];
+			int welen = snprintf(wemsg, sizeof(wemsg), "[XZS-T4R] CP=WAIT4_ENTER PARENT_PID=%d target_pid=%d\n",
+			    proc_pid(q), (int)uap->pid);
+			xzs_bringup_console_write(wemsg, welen);
+		}
 	}
 #endif
 
@@ -3093,11 +3112,14 @@ loop1:
 
 #if CONFIG_XZS_BRINGUP
 			{
-				extern void xzs_bringup_console_write(const void *buf, int len);
-				char wrmsg[96];
-				int wrlen = snprintf(wrmsg, sizeof(wrmsg), "[XZS-T4R] CP=WAIT4_REAP PARENT_PID=%d CHILD_PID=%d\n",
-				    proc_pid(q), proc_getpid(p));
-				xzs_bringup_console_write(wrmsg, wrlen);
+				extern volatile boolean_t xzs_d6m4_probe_armed;
+				if (xzs_d6m4_probe_armed) {
+					extern void xzs_bringup_console_write(const void *buf, int len);
+					char wrmsg[96];
+					int wrlen = snprintf(wrmsg, sizeof(wrmsg), "[XZS-T4R] CP=WAIT4_REAP PARENT_PID=%d CHILD_PID=%d\n",
+					    proc_pid(q), proc_getpid(p));
+					xzs_bringup_console_write(wrmsg, wrlen);
+				}
 			}
 #endif
 			/* Clean up */
@@ -3105,11 +3127,14 @@ loop1:
 
 #if CONFIG_XZS_BRINGUP
 			{
-				extern void xzs_bringup_console_write(const void *buf, int len);
-				char wretmsg[128];
-				int wretlen = snprintf(wretmsg, sizeof(wretmsg), "[XZS-T4R] CP=T4R-90 ROLE=PARENT PID=%d PARENT_WAIT4_RETURN child_pid=%d thread=%p\n",
-				    proc_pid(q), retval[0], (void *)current_thread());
-				xzs_bringup_console_write(wretmsg, wretlen);
+				extern volatile boolean_t xzs_d6m4_probe_armed;
+				if (xzs_d6m4_probe_armed) {
+					extern void xzs_bringup_console_write(const void *buf, int len);
+					char wretmsg[128];
+					int wretlen = snprintf(wretmsg, sizeof(wretmsg), "[XZS-T4R] CP=T4R-90 ROLE=PARENT PID=%d PARENT_WAIT4_RETURN child_pid=%d thread=%p\n",
+					    proc_pid(q), retval[0], (void *)current_thread());
+					xzs_bringup_console_write(wretmsg, wretlen);
+				}
 			}
 #endif
 			return 0;
@@ -3186,10 +3211,13 @@ loop1:
 	thread_set_pending_block_hint(current_thread(), kThreadWaitOnProcess);
 #if CONFIG_XZS_BRINGUP
 	{
-		extern void xzs_bringup_console_write(const void *buf, int len);
-		char wsmsg[96];
-		int wslen = snprintf(wsmsg, sizeof(wsmsg), "[XZS-T4R] CP=WAIT4_SLEEP PARENT_PID=%d\n", proc_pid(q));
-		xzs_bringup_console_write(wsmsg, wslen);
+		extern volatile boolean_t xzs_d6m4_probe_armed;
+		if (xzs_d6m4_probe_armed) {
+			extern void xzs_bringup_console_write(const void *buf, int len);
+			char wsmsg[96];
+			int wslen = snprintf(wsmsg, sizeof(wsmsg), "[XZS-T4R] CP=WAIT4_SLEEP PARENT_PID=%d\n", proc_pid(q));
+			xzs_bringup_console_write(wsmsg, wslen);
+		}
 	}
 #endif
 	if ((error = msleep0((caddr_t)q, &proc_list_mlock, PWAIT | PCATCH | PDROP, "wait", 0, wait1continue))) {

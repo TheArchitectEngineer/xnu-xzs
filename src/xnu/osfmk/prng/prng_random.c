@@ -566,6 +566,25 @@ static struct {
 };
 
 static struct cckprng_ctx xzs_opaque_ctx;
+static volatile uint32_t xzs_prng_spinlock = 0;
+
+static inline boolean_t
+xzs_prng_lock(void)
+{
+	boolean_t intr = ml_set_interrupts_enabled(FALSE);
+	while (__atomic_test_and_set(&xzs_prng_spinlock, __ATOMIC_ACQUIRE)) {
+		__builtin_arm_wfe();
+	}
+	return intr;
+}
+
+static inline void
+xzs_prng_unlock(boolean_t intr)
+{
+	__atomic_clear(&xzs_prng_spinlock, __ATOMIC_RELEASE);
+	__builtin_arm_sev();
+	ml_set_interrupts_enabled(intr);
+}
 
 static void
 xzs_prng_init_with_getentropy(struct cckprng_ctx *ctx __unused,
@@ -626,17 +645,17 @@ xzs_prng_generate(struct cckprng_ctx *ctx __unused,
     size_t nbytes,
     void *out)
 {
-	extern void xzs_early_puts(const char *s);
-	extern void xzs_early_puthex64(uint64_t v);
 	uint8_t *buffer_bytes = (uint8_t *)out;
 	int rc;
 
 	while (nbytes > 0) {
 		size_t n = MIN(nbytes, PAGE_SIZE);
+		boolean_t intr = xzs_prng_lock();
 
 		rc = ccdrbg_generate(&xzs_prng.drbg_info,
 		    (struct ccdrbg_state *)xzs_prng.drbg_state,
 		    n, buffer_bytes, 0, NULL);
+		xzs_prng_unlock(intr);
 		if (rc != CCDRBG_STATUS_OK) {
 			panic("xzs_prng ccdrbg_generate error %d", rc);
 		}
@@ -651,13 +670,13 @@ xzs_prng_reseed(struct cckprng_ctx *ctx __unused,
     size_t nbytes,
     const void *seed)
 {
-	extern void xzs_early_puts(const char *s);
 	int rc;
+	boolean_t intr = xzs_prng_lock();
 
-	xzs_early_puts("  [xzs_prng] reseed ENTER\n");
 	rc = ccdrbg_reseed(&xzs_prng.drbg_info,
 	    (struct ccdrbg_state *)xzs_prng.drbg_state,
 	    nbytes, seed, 0, NULL);
+	xzs_prng_unlock(intr);
 
 	if (rc != CCDRBG_STATUS_OK) {
 		panic("xzs_prng ccdrbg_reseed error %d", rc);

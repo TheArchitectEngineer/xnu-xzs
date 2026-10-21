@@ -3357,10 +3357,12 @@ bsd_ast(thread_t thread)
 	proc_t p = current_proc();
 	struct uthread *ut = get_bsdthread_info(thread);
 	int     signum;
-#if CONFIG_XZS_BRINGUP
-	static int bsd_init_done = 1;
-#else
 	static int bsd_init_done = 0;
+#if CONFIG_XZS_BRINGUP
+	extern volatile boolean_t xzs_d6m4_probe_armed;
+	if (xzs_d6m4_probe_armed) {
+		bsd_init_done = 1;
+	}
 #endif
 
 	if (p == NULL) {

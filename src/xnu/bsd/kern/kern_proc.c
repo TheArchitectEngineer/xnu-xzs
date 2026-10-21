@@ -6517,7 +6517,7 @@ out:
 	return error;
 }
 
-#if !XNU_TARGET_OS_OSX
+#if !XNU_TARGET_OS_OSX || defined(ARM64_BOARD_CONFIG_SWEET) || defined(XZS)
 /*
  * Freeze the specified process (provided in args->pid), or find and freeze a PID.
  * When a process is specified, this call is blocking, otherwise we wake up the
@@ -6539,11 +6539,13 @@ pid_hibernate(struct proc *p __unused, struct pid_hibernate_args *args, int *ret
 	}
 
 #ifndef CONFIG_FREEZE
+#if !defined(ARM64_BOARD_CONFIG_SWEET) && !defined(XZS)
 	if (pid != -2) {
 		os_log(OS_LOG_DEFAULT, "%s: pid %d not supported when freezer is disabled.",
 		    __func__, pid);
 		error = ENOTSUP;
 	}
+#endif
 #else
 
 	/*

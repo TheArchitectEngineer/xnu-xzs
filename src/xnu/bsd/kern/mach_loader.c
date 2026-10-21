@@ -714,7 +714,8 @@ load_machfile(
 		return LOAD_BADMACHO;
 	}
 
-	{
+	extern volatile boolean_t xzs_d6m4_probe_armed;
+	if (xzs_d6m4_probe_armed) {
 		char xline[128];
 		extern void xzs_bringup_console_write(const void *buf, int len);
 		#define XZS_LOADER_EMIT(s) do { int _l = 0; while ((s)[_l]) _l++; xzs_bringup_console_write((s), _l); } while(0)
@@ -742,6 +743,13 @@ load_machfile(
 		XZS_LOADER_EMIT(xline);
 		snprintf(xline, sizeof(xline), "EXEC_CONTROL_IS_NULL=%s\n", (exec_ctrl == MEMORY_OBJECT_CONTROL_NULL) ? "yes" : "no");
 		XZS_LOADER_EMIT(xline);
+	} else {
+		char xline[128];
+		extern void xzs_bringup_console_write(const void *buf, int len);
+		int xlen = snprintf(xline, sizeof(xline), "[XZS-EXEC] load_machfile: %s (sz=%llu)\n",
+		    (imgp->ip_startargv && imgp->ip_startargv[0]) ? imgp->ip_startargv : "?",
+		    (unsigned long long)file_size);
+		xzs_bringup_console_write(xline, xlen);
 	}
 
 	result->is_64bit_addr = ((imgp->ip_flags & IMGPF_IS_64BIT_ADDR) == IMGPF_IS_64BIT_ADDR);
@@ -1211,7 +1219,8 @@ parse_machfile(
 	 */
 	control = ubc_getobject(vp, UBC_FLAGS_NONE);
 
-	{
+	extern volatile boolean_t xzs_d6m4_probe_armed;
+	if (xzs_d6m4_probe_armed) {
 		char xline[128];
 		extern void xzs_bringup_console_write(const void *buf, int len);
 		#define XZS_LOADER_EMIT_C(s) do { int _l = 0; while ((s)[_l]) _l++; xzs_bringup_console_write((s), _l); } while(0)
@@ -2212,11 +2221,12 @@ map_segment(
 		vmk_flags.vmkf_translated_allow_execute = TRUE;
 	}
 
+	extern volatile boolean_t xzs_d6m4_probe_armed;
 	const char *map_api = NULL;
 	extern int xzs_diag_map_nentries(vm_map_t map);
 	extern void xzs_diag_inspect_map_entry(vm_map_t map, mach_vm_offset_t addr);
-	int nentries_before = xzs_diag_map_nentries(map);
-	boolean_t is_text_map = (vm_start <= 0x1000002f0ULL && vm_end > 0x1000002f0ULL);
+	boolean_t is_text_map = xzs_d6m4_probe_armed && (vm_start <= 0x1000002f0ULL && vm_end > 0x1000002f0ULL);
+	int nentries_before = is_text_map ? xzs_diag_map_nentries(map) : 0;
 
 	if (control != MEMORY_OBJECT_CONTROL_NULL) {
 		map_api = "vm_map_enter_mem_object_control";
@@ -2378,7 +2388,8 @@ load_segment(
 		    scp->flags));
 	}
 
-	if (strncmp(scp->segname, "__TEXT", 6) == 0) {
+	extern volatile boolean_t xzs_d6m4_probe_armed;
+	if (xzs_d6m4_probe_armed && strncmp(scp->segname, "__TEXT", 6) == 0) {
 		char xline[128];
 		extern void xzs_bringup_console_write(const void *buf, int len);
 		#define XZS_LOADER_EMIT_S(s) do { int _l = 0; while ((s)[_l]) _l++; xzs_bringup_console_write((s), _l); } while(0)

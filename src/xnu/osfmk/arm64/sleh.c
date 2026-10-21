@@ -2244,6 +2244,7 @@ handle_user_abort(arm_saved_state_t *state, uint64_t esr, vm_offset_t fault_addr
 	}
 
 	extern void xzs_bringup_console_write(const void *buf, int len);
+	extern volatile boolean_t xzs_d6m4_probe_armed;
 	#define XZS_ABORT_EMIT(s) do { int _l = 0; while ((s)[_l]) _l++; xzs_bringup_console_write((s), _l); } while(0)
 
 	extern struct proc *current_proc(void);
@@ -2259,13 +2260,16 @@ handle_user_abort(arm_saved_state_t *state, uint64_t esr, vm_offset_t fault_addr
 	}
 
 	char xabort_line[160];
-	snprintf(xabort_line, sizeof(xabort_line), "[XZS-ABORT] pid=%d(%s) PC=0x%llx FAR=0x%llx ESR=0x%llx map=%p entries=%d\n",
-	    cur_pid, cur_pname,
-	    (unsigned long long)get_saved_state_pc(state), (unsigned long long)fault_addr, (unsigned long long)esr,
-	    (void *)thread->map, thread->map ? thread->map->hdr.nentries : 0);
-	XZS_ABORT_EMIT(xabort_line);
+	boolean_t is_hello_entry = xzs_d6m4_probe_armed &&
+	    (fault_addr == 0x1000002f0ULL || get_saved_state_pc(state) == 0x1000002f0ULL);
 
-	boolean_t is_hello_entry = (fault_addr == 0x1000002f0ULL || get_saved_state_pc(state) == 0x1000002f0ULL);
+	if (xzs_d6m4_probe_armed) {
+		snprintf(xabort_line, sizeof(xabort_line), "[XZS-ABORT] pid=%d(%s) PC=0x%llx FAR=0x%llx ESR=0x%llx map=%p entries=%d\n",
+		    cur_pid, cur_pname,
+		    (unsigned long long)get_saved_state_pc(state), (unsigned long long)fault_addr, (unsigned long long)esr,
+		    (void *)thread->map, thread->map ? thread->map->hdr.nentries : 0);
+		XZS_ABORT_EMIT(xabort_line);
+	}
 
 	if (is_hello_entry) {
 		char line[128];
@@ -2304,14 +2308,20 @@ handle_user_abort(arm_saved_state_t *state, uint64_t esr, vm_offset_t fault_addr
 			    fault_type, (fault_code == FSC_ACCESS_FLAG_FAULT_L3), TRUE);
 		}
 		if (result != KERN_SUCCESS) {
-			XZS_ABORT_EMIT("[XZS-ABORT] calling vm_fault\n");
+			if (xzs_d6m4_probe_armed) {
+				XZS_ABORT_EMIT("[XZS-ABORT] calling vm_fault\n");
+			}
 			result = vm_fault(map, vm_fault_addr, fault_type,
 			    /* change_wiring */ FALSE, VM_KERN_MEMORY_NONE, THREAD_ABORTSAFE,
 			    /* caller_pmap */ NULL, /* caller_pmap_addr */ 0);
-			XZS_ABORT_EMIT("[XZS-ABORT] vm_fault returned\n");
+			if (xzs_d6m4_probe_armed) {
+				XZS_ABORT_EMIT("[XZS-ABORT] vm_fault returned\n");
+			}
 		}
-		snprintf(xabort_line, sizeof(xabort_line), "[XZS-ABORT-RESULT] res=%d\n", result);
-		XZS_ABORT_EMIT(xabort_line);
+		if (xzs_d6m4_probe_armed) {
+			snprintf(xabort_line, sizeof(xabort_line), "[XZS-ABORT-RESULT] res=%d\n", result);
+			XZS_ABORT_EMIT(xabort_line);
+		}
 		if (is_hello_entry) {
 			char line[128];
 			extern volatile uint32_t g_xzs_vnop_pagein_called;
@@ -2320,20 +2330,30 @@ handle_user_abort(arm_saved_state_t *state, uint64_t esr, vm_offset_t fault_addr
 			snprintf(line, sizeof(line), "VNOP_PAGEIN_REACHED=%s\n", g_xzs_vnop_pagein_called ? "yes" : "no");
 			XZS_ABORT_EMIT(line);
 		}
-		if (result != KERN_SUCCESS) {
-			static uint64_t s_last_fail_pc = 0;
-			static int s_fail_repeat_count = 0;
-			if (get_saved_state_pc(state) == s_last_fail_pc) {
-				s_fail_repeat_count++;
+		if (result != KERN_SUCCESS && result != KERN_ABORTED) {
+			if (!xzs_d6m4_probe_armed) {
+				snprintf(xabort_line, sizeof(xabort_line),
+				    "[XZS-EXC] EXC_BAD_ACCESS pid=%d(%s) PC=0x%llx FAR=0x%llx ESR=0x%llx kr=%d\n",
+				    cur_pid, cur_pname,
+				    (unsigned long long)get_saved_state_pc(state),
+				    (unsigned long long)fault_addr,
+				    (unsigned long long)esr, result);
+				XZS_ABORT_EMIT(xabort_line);
 			} else {
-				s_last_fail_pc = get_saved_state_pc(state);
-				s_fail_repeat_count = 1;
-			}
-			if (s_fail_repeat_count >= 5) {
-				if (s_fail_repeat_count == 5) {
-					XZS_ABORT_EMIT("[XZS-ABORT] MAX UNRESOLVED FAULTS REACHED, HALTING THREAD\n");
+				static uint64_t s_last_fail_pc = 0;
+				static int s_fail_repeat_count = 0;
+				if (get_saved_state_pc(state) == s_last_fail_pc) {
+					s_fail_repeat_count++;
+				} else {
+					s_last_fail_pc = get_saved_state_pc(state);
+					s_fail_repeat_count = 1;
 				}
-				thread_block(THREAD_CONTINUE_NULL);
+				if (s_fail_repeat_count >= 5) {
+					if (s_fail_repeat_count == 5) {
+						XZS_ABORT_EMIT("[XZS-ABORT] MAX UNRESOLVED FAULTS REACHED, HALTING THREAD\n");
+					}
+					thread_block(THREAD_CONTINUE_NULL);
+				}
 			}
 		}
 		if (thread->t_rr_state.trr_fault_state != TRR_FAULT_NONE) {
@@ -3106,19 +3126,25 @@ sleh_irq(arm_saved_state_t *state)
 			extern volatile uint32_t g_xzs_secondary_timer_fired;
 			g_xzs_secondary_timer_fired = 1;
 
-			// Mask CNTV timer on secondary core
-			uint64_t ctl = 0;
-			__asm__ volatile("mrs %0, CNTV_CTL_EL0" : "=r"(ctl));
-			ctl |= 2; // IMASK = 1
-			__asm__ volatile("msr CNTV_CTL_EL0, %0\nisb" :: "r"(ctl));
+			if (cdp == NULL || (cdp->cpu_flags & 0x1000 /* StartedState */) == 0) {
+				// Mask CNTV timer on non-scheduler secondary core
+				uint64_t ctl = 0;
+				__asm__ volatile("mrs %0, CNTV_CTL_EL0" : "=r"(ctl));
+				ctl |= 2; // IMASK = 1
+				__asm__ volatile("msr CNTV_CTL_EL0, %0\nisb" :: "r"(ctl));
 
-			__asm__ volatile("msr ICC_EOIR1_EL1, %0\nisb" :: "r"(iar));
-			entropy_collect();
-			sleh_interrupt_handler_epilogue();
-			return;
+				__asm__ volatile("msr ICC_EOIR1_EL1, %0\nisb" :: "r"(iar));
+				entropy_collect();
+				sleh_interrupt_handler_epilogue();
+				return;
+			}
+		} else {
+			g_xzs_timer_irq_count++;
+			if ((g_xzs_timer_irq_count & 0x3fu) == 0) {
+				extern void xzs_watchdog_pet(void);
+				xzs_watchdog_pet();
+			}
 		}
-
-		g_xzs_timer_irq_count++;
 
 		cdp->cpu_decrementer = -1;
 		ml_interrupt_masked_debug_start(rtclock_intr, DBG_INTR_TYPE_TIMER);
@@ -3127,7 +3153,7 @@ sleh_irq(arm_saved_state_t *state)
 
 		// [TEST INSTRUMENTATION]
 		// Reprogram decrementer while running the 100-timer test; quiesce afterward
-		if (g_xzs_timer_irq_count < 105) {
+		if (core_id == 0 && g_xzs_timer_irq_count < 105) {
 			ml_set_decrementer(96000);
 		}
 

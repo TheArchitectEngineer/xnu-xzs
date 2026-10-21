@@ -13,6 +13,11 @@ iokit/Kernel/arm/XZSFramebuffer.cpp				optional iokitcpp
 iokit/Kernel/arm/XZSKeyStore.cpp				optional iokitcpp
 iokit/Kernel/arm/XZSWatchdog.cpp				optional iokitcpp
 iokit/Kernel/arm/XZSEntitlements.cpp				optional iokitcpp
+iokit/Kernel/arm/SweetBattery.cpp				optional iokitcpp
+iokit/Kernel/arm/hid/SweetHID.cpp				optional iokitcpp
+iokit/Kernel/arm/hid/IOHIDEvent.cpp				optional iokitcpp
+iokit/Kernel/arm/hid/IOHIDEventServiceQueue.cpp			optional iokitcpp
+iokit/Kernel/arm/hid/IOHIDEventServiceUserClient.cpp		optional iokitcpp
 
 # tightbeamc generated implementation files
 ./Exclaves/IOService.tightbeam.c		optional iokitcpp config_exclaves

@@ -2735,8 +2735,18 @@ static bool need_ram_ranges_init = true;
  * @param ppn page number to check
  */
 bool
-pmap_is_bad_ram(__unused ppnum_t ppn)
+pmap_is_bad_ram(ppnum_t ppn)
 {
+	pmap_paddr_t pa = ptoa(ppn);
+	if (pa >= 0x85800000ULL && pa < 0x92000000ULL) {
+		return true;
+	}
+	if (pa >= 0x98000000ULL && pa < 0x9a000000ULL) {
+		return true;
+	}
+	if (pa >= 0xa0000000ULL && pa < 0xb4000000ULL) {
+		return true;
+	}
 	return false;
 }
 

@@ -625,13 +625,15 @@ Lkernelcache_base_found:
 	/*
 	 * Setup the V=P bootstrap mapping
 	 * x5 - total number of L2 entries to allocate
+	 * Cap bootstrap mapping to 1 L2 block (32MB: 0x82000000 - 0x83ffffff)
+	 * so TTBR0/bootstrap never maps Qualcomm XPU carveouts above 0x85800000.
 	 */
-	lsr		x5,  x24, #(ARM_TT_L2_SHIFT)
+	mov		x5, #1
 	/* create_bootstrap_mapping(vbase, pbase, num_ents, L1 table, freeptr) */
 	create_bootstrap_mapping x0,  x4,  x5, x1, x2, x6, x10, x11, x12, x13
 
 	/* Setup the KVA bootstrap mapping */
-	lsr		x5,  x24, #(ARM_TT_L2_SHIFT)
+	mov		x5, #1
 	create_bootstrap_mapping x14, x15, x5, x3, x2, x9, x10, x11, x12, x13
 	/*
 	 * In 16KB granule with 47-bit VA, L1 entry 0 covers 0x0 - 0x0fffffffff (first 64GB).

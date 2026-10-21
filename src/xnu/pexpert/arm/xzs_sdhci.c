@@ -9588,6 +9588,10 @@ xzs_emmc_read_blocks_sync(uint64_t start_lba, uint32_t count, void *buffer)
 
 	uint8_t *dst = (uint8_t *)buffer;
 	for (uint32_t i = 0; i < count; i++) {
+		if ((i & 0x3fu) == 0) {
+			extern void xzs_watchdog_pet(void);
+			xzs_watchdog_pet();
+		}
 		int rc = xzs_emmc_read_sector_sync(start_lba + (uint64_t)i, dst + ((size_t)i * 512));
 		if (rc != 0) {
 			return rc;
@@ -9969,6 +9973,128 @@ static uint64_t g_xzs_controller_lock_acquire_count = 0;
 static uint32_t g_xzs_slice_read_count = 0;
 static uint32_t g_xzs_partition_content_reads = 0;
 static uint32_t g_xzs_dkiocsetblocksize_call_count = 0;
+static int      g_xzs_emmc_userdata_rw = 0;
+static uint64_t g_xzs_strategy_total_sectors_written = 0;
+
+int
+xzs_sdhci_get_bdev_major(void)
+{
+	return g_xzs_bdev_major;
+}
+
+static boolean_t
+xzs_is_userdata_minor(int m)
+{
+	if (!g_xzs_d4_gpt_map_initialized || m <= 0 || m > (int)g_xzs_d4_used_count) {
+		return FALSE;
+	}
+	uint32_t slot = g_xzs_minor_to_gpt_slot[m];
+	return (slot == 53 && strcmp(g_xzs_d4_parsed_entries[slot].name_canonical, "userdata") == 0);
+}
+
+static int
+xzs_emmc_write_sector_pio(uint32_t lba, const uint8_t in[512])
+{
+	if (in == NULL || !g_xzs_emmc_userdata_rw || !g_xzs_d4_gpt_map_initialized) {
+		return -1;
+	}
+	/* Hardware safety fence: ONLY allow writes inside GPT slot 53 (userdata) */
+	uint64_t ud_start = g_xzs_d4_parsed_entries[53].start_lba;
+	uint64_t ud_end   = g_xzs_d4_parsed_entries[53].end_lba;
+	if (ud_start == 0 || (uint64_t)lba < ud_start || (uint64_t)lba > ud_end) {
+		xzs_early_puts("[XZS-SDHCI] SECURITY BLOCK: Rejected write outside userdata LBA!\n");
+		return -2;
+	}
+
+	for (uint32_t wait_idle = 0; wait_idle < 500000; wait_idle++) {
+		uint32_t pstate = xzs_sdhci_hc_read32(SDHCI_PRESENT_STATE);
+		if ((pstate & (SDHCI_CMD_INHIBIT | SDHCI_DATA_INHIBIT)) == 0) {
+			break;
+		}
+		delay(1);
+	}
+
+	xzs_sdhci_hc_write16(SDHCI_BLOCK_SIZE, 0x0200U);
+	xzs_sdhci_hc_write16(SDHCI_BLOCK_COUNT, 0x0001U);
+	xzs_sdhci_hc_write32(SDHCI_ARGUMENT, lba);
+	xzs_sdhci_hc_write16(SDHCI_TRANSFER_MODE, 0x0000U); /* Single block write */
+
+	xzs_sdhci_hc_write32(SDHCI_INT_ENABLE, 0xFFFF8013U);
+	xzs_sdhci_hc_write32(SDHCI_SIGNAL_ENABLE, 0x00000000U);
+	xzs_sdhci_hc_write32(SDHCI_INT_STATUS, 0xFFFFFFFFU);
+
+	/* CMD24: WRITE_SINGLE_BLOCK */
+	xzs_sdhci_hc_write16(SDHCI_COMMAND, SDHCI_MAKE_CMD(24, SDHCI_CMD_RESP_48 | SDHCI_CMD_CRC | SDHCI_CMD_INDEX | SDHCI_CMD_DATA));
+
+	boolean_t cmd_done = FALSE;
+	boolean_t bwr_done = FALSE;
+	boolean_t tc_done  = FALSE;
+	const uint32_t MAX_POLLS = 2000000;
+
+	for (uint32_t p = 0; p < MAX_POLLS; p++) {
+		uint32_t st = xzs_sdhci_hc_read32(SDHCI_INT_STATUS);
+		if ((st & (SDHCI_INT_ERROR | 0xFFFF0000U)) != 0) {
+			xzs_sdhci_hc_write32(SDHCI_INT_STATUS, 0xFFFFFFFFU);
+			return -4;
+		}
+		if (!cmd_done && (st & SDHCI_INT_RESPONSE) != 0) {
+			cmd_done = TRUE;
+			(void)xzs_sdhci_hc_read32(SDHCI_RESPONSE_0);
+			xzs_sdhci_hc_write32(SDHCI_INT_STATUS, SDHCI_INT_RESPONSE);
+		}
+		if (!bwr_done && (st & 0x00000010U /* SDHCI_INT_SPACE_AVAIL */) != 0) {
+			bwr_done = TRUE;
+			for (uint32_t w = 0; w < 128; w++) {
+				uint32_t val32 = ((uint32_t)in[w * 4 + 0]) |
+				                 (((uint32_t)in[w * 4 + 1]) << 8) |
+				                 (((uint32_t)in[w * 4 + 2]) << 16) |
+				                 (((uint32_t)in[w * 4 + 3]) << 24);
+				xzs_sdhci_hc_write32(SDHCI_BUFFER, val32);
+			}
+			xzs_sdhci_hc_write32(SDHCI_INT_STATUS, 0x00000010U);
+		}
+		if (bwr_done && !tc_done && (st & SDHCI_INT_DATA_END) != 0) {
+			tc_done = TRUE;
+			xzs_sdhci_hc_write32(SDHCI_INT_STATUS, SDHCI_INT_DATA_END);
+		}
+		if (cmd_done && bwr_done && tc_done) {
+			break;
+		}
+	}
+
+	if (!cmd_done || !bwr_done || !tc_done) {
+		return -5;
+	}
+
+	for (uint32_t wait_idle = 0; wait_idle < 500000; wait_idle++) {
+		uint32_t pstate = xzs_sdhci_hc_read32(SDHCI_PRESENT_STATE);
+		if ((pstate & (SDHCI_CMD_INHIBIT | SDHCI_DATA_INHIBIT)) == 0) {
+			break;
+		}
+		delay(1);
+	}
+	return 0;
+}
+
+static int
+xzs_emmc_write_blocks_sync(uint64_t start_lba, uint32_t count, const void *buffer)
+{
+	if (!g_xzs_emmc_ctx.initialized || buffer == NULL || count == 0) {
+		return -1;
+	}
+	const uint8_t *src = (const uint8_t *)buffer;
+	for (uint32_t i = 0; i < count; i++) {
+		if ((i & 0x1fu) == 0) {
+			extern void xzs_watchdog_pet(void);
+			xzs_watchdog_pet();
+		}
+		int rc = xzs_emmc_write_sector_pio((uint32_t)(start_lba + (uint64_t)i), src + ((size_t)i * 512));
+		if (rc != 0) {
+			return rc;
+		}
+	}
+	return 0;
+}
 
 static int
 xzs_bdev_open(dev_t dev, int flags, __unused int devtype, __unused struct proc *p)
@@ -9982,7 +10108,9 @@ xzs_bdev_open(dev_t dev, int flags, __unused int devtype, __unused struct proc *
 		return ENXIO;
 	}
 	if (flags & FWRITE) {
-		return EROFS;
+		if (!g_xzs_emmc_userdata_rw || !xzs_is_userdata_minor(m)) {
+			return EROFS;
+		}
 	}
 	if (!(flags & FREAD)) {
 		return EINVAL;
@@ -10039,6 +10167,9 @@ xzs_bdev_ioctl(dev_t dev, u_long cmd, caddr_t data, __unused int fflag, __unused
 	if (!g_xzs_emmc_ctx.initialized) {
 		return ENXIO;
 	}
+	if (cmd == DKIOCSYNCHRONIZE || cmd == DKIOCSYNCHRONIZECACHE) {
+		return 0;
+	}
 	if (data == NULL) {
 		return EINVAL;
 	}
@@ -10068,8 +10199,8 @@ xzs_bdev_ioctl(dev_t dev, u_long cmd, caddr_t data, __unused int fflag, __unused
 		return 0;
 	}
 	case DKIOCISWRITABLE: {
-		uint32_t ro_flag = 0;
-		memcpy(data, &ro_flag, sizeof(uint32_t));
+		uint32_t wr_flag = (g_xzs_emmc_userdata_rw && xzs_is_userdata_minor(m)) ? 1U : 0U;
+		memcpy(data, &wr_flag, sizeof(uint32_t));
 		return 0;
 	}
 	default:
@@ -10101,12 +10232,15 @@ xzs_bdev_strategy(struct buf *bp)
 		return;
 	}
 
-	if ((buf_flags(bp) & B_READ) == 0) {
-		g_xzs_bdev_strategy_write_reject_count++;
-		buf_seterror(bp, EROFS);
-		buf_setresid(bp, buf_count(bp));
-		buf_biodone(bp);
-		return;
+	boolean_t is_read = ((buf_flags(bp) & B_READ) != 0);
+	if (!is_read) {
+		if (!g_xzs_emmc_userdata_rw || !xzs_is_userdata_minor(m)) {
+			g_xzs_bdev_strategy_write_reject_count++;
+			buf_seterror(bp, EROFS);
+			buf_setresid(bp, buf_count(bp));
+			buf_biodone(bp);
+			return;
+		}
 	}
 
 	if (!g_xzs_emmc_ctx.initialized) {
@@ -10189,15 +10323,24 @@ xzs_bdev_strategy(struct buf *bp)
 	lck_mtx_lock(&g_xzs_emmc_mtx);
 	g_xzs_controller_lock_acquire_count++;
 
-	int rc = xzs_emmc_read_blocks_sync(target_start_lba, sector_count, (void *)io_addr);
+	int rc;
+	if (is_read) {
+		rc = xzs_emmc_read_blocks_sync(target_start_lba, sector_count, (void *)io_addr);
+	} else {
+		rc = xzs_emmc_write_blocks_sync(target_start_lba, sector_count, (const void *)io_addr);
+	}
 
 	lck_mtx_unlock(&g_xzs_emmc_mtx);
 
 	buf_unmap(bp);
 
 	if (rc == 0) {
-		g_xzs_bdev_strategy_read_count++;
-		g_xzs_strategy_total_sectors_read += (uint64_t)sector_count;
+		if (is_read) {
+			g_xzs_bdev_strategy_read_count++;
+			g_xzs_strategy_total_sectors_read += (uint64_t)sector_count;
+		} else {
+			g_xzs_strategy_total_sectors_written += (uint64_t)sector_count;
+		}
 		buf_setresid(bp, 0);
 		buf_seterror(bp, 0);
 	} else {
@@ -10840,6 +10983,57 @@ xzs_sdhci_phase_d4_probe(void)
 	/* 0x90: Final snapshot */
 	xzs_breadcrumb(0xD420, 0x90);
 	xzs_early_puts("[XZS-SDHCI] 7. PHASE D4 COMPLETE & VERIFIED (PASS)\n");
+
+	(void)PE_parse_boot_argn("emmcrw", &g_xzs_emmc_userdata_rw, sizeof(g_xzs_emmc_userdata_rw));
+	if (g_xzs_emmc_userdata_rw) {
+		xzs_early_puts("[XZS-SDHCI] D10: emmcrw=1 enabled (R/W strictly confined to disk0s54 / userdata)\n");
+	}
+
+	/*
+	 * D10 High-Speed Clock Upgrade (400 kHz -> 19.2 MHz XO bypass):
+	 * Per SDHCI spec §2.2.14, gate SD_CLOCK_ENABLE (bit 2) before switching
+	 * RCG2 to 19.2 MHz XO bypass (CFG_RCGR=0x00000000), then re-enable card clock
+	 * and verify LBA 1 CRC32 (0xD3A34BC1). Falls back to 400 kHz if needed.
+	 */
+	char rd_arg[32] = "";
+	if (PE_parse_boot_argn("rd", rd_arg, sizeof(rd_arg)) && strncmp(rd_arg, "md", 2) != 0) {
+		xzs_early_puts("[XZS-SDHCI] D10: Upgrading SDCC1 clock 400 kHz -> 19.2 MHz XO...\n");
+		xzs_sdhci_hc_write16(SDHCI_CLOCK_CONTROL, ABOOT_CLOCK_FIRST_WRITE);
+		delay(50);
+		xzs_gcc_write32_local(SDCC1_APPS_CFG_RCGR_OFFSET, 0x00000000U);
+		xzs_gcc_write32_local(SDCC1_APPS_CMD_RCGR_OFFSET, 0x00000001U);
+		for (uint32_t i = 0; i < 1000; i++) {
+			if ((xzs_gcc_read32_local(SDCC1_APPS_CMD_RCGR_OFFSET) & 0x00000001U) == 0) {
+				break;
+			}
+			delay(1);
+		}
+		if (xzs_sdhci_hc_read8(SDHCI_POWER_CONTROL) != ABOOT_POWER_SECOND_WRITE) {
+			xzs_sdhci_hc_write8(SDHCI_POWER_CONTROL, ABOOT_POWER_FIRST_WRITE);
+			delay(50);
+			xzs_sdhci_hc_write8(SDHCI_POWER_CONTROL, ABOOT_POWER_SECOND_WRITE);
+			delay(50);
+		}
+		xzs_sdhci_hc_write16(SDHCI_CLOCK_CONTROL, ABOOT_CLOCK_FIRST_WRITE);
+		for (uint32_t i = 0; i < 1000; i++) {
+			if ((xzs_sdhci_hc_read16(SDHCI_CLOCK_CONTROL) & SDHCI_CLOCK_INT_STABLE) != 0) {
+				break;
+			}
+			delay(1);
+		}
+		xzs_sdhci_hc_write16(SDHCI_CLOCK_CONTROL, ABOOT_CLOCK_FINAL_VAL);
+		delay(100);
+
+		int rc_hs = xzs_d4_read_via_strategy(dev0, 1, 512, g_xzs_d4_scratch_buf);
+		uint32_t crc_hs = (rc_hs == 0) ? crc32(0, g_xzs_d4_scratch_buf, 512) : 0;
+		if (rc_hs == 0 && crc_hs == 0xD3A34BC1) {
+			xzs_early_puts("[XZS-SDHCI] D10: 19.2 MHz clock VERIFIED (LBA1 CRC32=0xD3A34BC1, 48x speedup)!\n");
+		} else {
+			xzs_early_puts("[XZS-SDHCI] D10: 19.2 MHz LBA1 readback mismatch, restoring 400 kHz...\n");
+			g_xzs_emmc_ctx.initialized = false;
+			(void)xzs_emmc_init_persistent();
+		}
+	}
 
 	xzs_early_puts("[XZS-SDHCI] D5-M2-R4: D4 acceptance complete, proceeding to setconf() / RAMDisk...\n\n");
 	return;

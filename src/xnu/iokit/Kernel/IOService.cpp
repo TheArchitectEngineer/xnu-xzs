@@ -5390,7 +5390,9 @@ IOService::publishHiddenMedia(IOService * parent)
 	bool                wasHiding;
 
 	iomediaClass = OSMetaClass::getMetaClassWithName(gIOMediaKey);
+#if !defined(ARM64_BOARD_CONFIG_SWEET) && !defined(XZS) && !CONFIG_XZS_BRINGUP
 	assert(iomediaClass);
+#endif
 
 	LOCKWRITENOTIFY();
 	wasHiding = gIOServiceHideIOMedia;
@@ -5398,6 +5400,10 @@ IOService::publishHiddenMedia(IOService * parent)
 		gIOServiceHideIOMedia = false;
 	}
 	UNLOCKNOTIFY();
+
+	if (!iomediaClass) {
+		wasHiding = false;
+	}
 
 	FindRootMediaContext ctx = { .services = NULL, .parent = parent };
 

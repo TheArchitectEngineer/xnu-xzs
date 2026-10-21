@@ -2,15 +2,15 @@
 
 ```text
 CURRENT_PHASE=D10_IOS_ROOTFS_AND_LAUNCHD_BRINGUP
-CURRENT_MILESTONE=XZS_D8_M10_COMPLETE_AND_SEALED_ON_HARDWARE
-HARDWARE_STATUS=BH905SX976 (1080x1920 PHYSICAL LCD ACTIVE: CONSOLE LOG + 8 COLOR BARS VISIBLE, WLED 50%, USB CDC CONSOLE OK, PAC=0 VERIFIED)
+CURRENT_MILESTONE=XZS_D10_M1_HFS_ROOTFS_MOUNT_AND_PID1_VERIFIED_ON_HARDWARE
+HARDWARE_STATUS=BH905SX976 (1080x1920 PHYSICAL LCD ACTIVE, 14GB HFS+ iOS 16.7.16 ROOTFS FLASHED & MOUNTED ON /dev/disk0s54, /dev MOUNTED, PID 1 CREATED, PAC=0 VERIFIED)
 REFERENCE_PROJECT_INTEGRATED=ios-sweet (MIRRORED_AND_GITIGNORED)
 ARCHITECTURAL_BLUEPRINT=docs/XZS_IOS_HYBRID_ARCHITECTURE.md (CREATED_AND_APPROVED)
 HARDWARE_EVALUATION_REPORT=docs/XZS_D8_M10_HARDWARE_EVALUATION.md (COMPLETE_AND_SEALED)
 REGRESSION_BISECT_REPORT=docs/DISPLAY_REGRESSION_BISECT_RESULT.md (RESOLVED_AND_SEALED)
-IPSW_STATUS=DOWNLOADED_AND_EXTRACTED (iPhone10,3_16.7.16_20H392)
-COMPAT_SERVICES=XZSSurface, XZSFramebuffer, XZSKeyStore, XZSWatchdog, XZSEntitlements, XZSPlatformExpert, xzs_amfi (COMPILED_AND_INTEGRATED)
-NEXT_OBJECTIVE=Generate HFS+ userdata rootfs from extracted DMGs and boot to iOS launchd
+IPSW_STATUS=DOWNLOADED_EXTRACTED_AND_FLASHED_TO_USERDATA (iPhone10,3_16.7.16_20H392 -> /dev/disk0s54)
+COMPAT_SERVICES=XZSSurface, XZSFramebuffer, XZSKeyStore, XZSWatchdog, XZSEntitlements, XZSPlatformExpert, SweetHID, SweetBattery, sweet_hfs, sweet_libpthread, sweet_bearssl, xzs_amfi (COMPILED_AND_INTEGRATED)
+NEXT_OBJECTIVE=Boot with AST_BSD unmasked in locore.s to execute /sbin/launchd -> backboardd -> SpringBoard
 ```
 
 ---
@@ -31,13 +31,23 @@ NEXT_OBJECTIVE=Generate HFS+ userdata rootfs from extracted DMGs and boot to iOS
     4. `CTL_FLUSH = 0x40022048` (`BIT(30) INTF_1 | BIT(17) CTL_0 | BIT(13) DSPP_0/PP_0 | BIT(6) LM_0 | BIT(3) RGB_0`).
     5. Synchronized `xzs_d8m8_kick_frame_ex()` waiting for `PP0_DONE` + `DSI_STATUS` idle before re-triggering `CTL_START`.
     6. `iso_font` LSB-first glyph rendering (`0x01..0x80`) in `xzs_fbcon_draw_glyph_raw()`.
-- **D9 (Apple Compatibility Services Layer)**: Drivers compiled & verified without PAC violations:
-  - `XZSFramebuffer` (`AppleCLCD` / `IOMobileFramebuffer`)
+- **D9 (Apple Compatibility Services Layer & Kernel Subsystems)**: Drivers & subsystems compiled & verified (`PAC=0`):
+  - `XZSFramebuffer` (`AppleCLCD` / `IOMobileFramebuffer` with `1080x1920` BGRX scanout & `registerFramebufferTick` 60 Hz MDP5 kick)
   - `XZSSurface` (`IOCoreSurfaceRoot` / `IOSurface`)
   - `XZSKeyStore` (`AppleKeyStore` bypass)
   - `XZSWatchdog` (`AppleWatchdog` bypass)
   - `XZSEntitlements` / `XZSPlatformExpert`
-  - `xzs_amfi` (permissive sandbox MAC policy)
+  - `SweetHID` (`AppleEmbeddedButton`, `AppleHydroTouch`, `AppleARMBacklight`) & `SweetBattery` (`AppleSmartBatteryManager`)
+  - `sweet_hfs` (Case-Sensitive Journaled HFS+ VFS with `FSIOC_CAS_BSDFLAGS` and `FSIOC_KERNEL_ROOTAUTH` bypass)
+  - `sweet_libpthread` (In-kernel `pthread_kext_register` workqueue & QoS synchronization)
+  - `sweet_bearssl` (In-kernel `corecrypto` AES/SHA1/SHA2/MD5 & Fortuna PRNG provider)
+  - `xzs_amfi` (Permissive Sandbox & AMFI MAC policy + `cs_OPS_ENTITLEMENTS_BLOB` synthesis)
+- **D10-M1 (14 GB HFS+ iOS 16.7.16 RootFS Creation, Flash & Hardware Mount on `/dev/disk0s54`)**: **COMPLETE & VERIFIED on physical silicon (`BH905SX976`)**:
+  - Built 14 GB Case-Sensitive Journaled HFS+ RootFS (`artifacts/builds/ios16-root.img`) from iOS 16.7.16 (`20H392`, `iPhone10,3` / `D22AP`) via `tools/mkiosroot-macos.py` + `tools/xzs-root-tweaks.py`, verified clean with `/sbin/fsck_hfs -fn`.
+  - Converted to Android sparse image (`artifacts/builds/ios16-root.simg`, `10.82 GiB`, 45 chunks) via `tools/raw2simg.py` and flashed to `userdata` (`/dev/disk0s54`).
+  - Expanded XPU-safe contiguous DRAM in `src/xzs-bootshim/main.c` and `src/xnu/osfmk/arm64/arm_vm_init.c` (`0x80000000..0x85900000` + `0x8ac00000..0xdac00000` = `1,368 MB` total RAM) and integrated authentic `D22AP` (`iPhone10,3`) Apple Device Tree properties in `src/xzs-bootshim/adt.c`.
+  - Verified live on `BH905SX976` that XNU enumerates eMMC GPT partitions, publishes `IOMedia` `disk0s54`, mounts `/dev/disk0s54` as `/` via `sweet_hfs`, mounts `/dev` (`devfs`), and bootstraps PID 1 (`bsd_utaskbootstrap` -> `task_wait_to_return`).
+  - Fixed `locore.s` `return_to_user` AST mask (`and w0, w0, #0x20`) that had blocked `AST_BSD` (`0x80`) from invoking `bsd_ast()` -> `bsdinit_task()` -> `load_init_program("/sbin/launchd")`.
 
 ### 1.2 Display Pipeline Architecture (CPU vs. GPU / Hardware Display Engine)
 - **Pixel Rendering (vẽ vào RAM Framebuffer `0x98000000`)**: Hiện thực hiện bằng **CPU** (nhân ARM64 Kryo ghi font chữ 8x16 và dải màu 32-bit `XRGB8888` vào vùng nhớ Framebuffer; ở tầng iOS `backboardd` / `SpringBoard` / `RenderServer` theo kiến trúc `ios-sweet` cũng sử dụng CPU software rasterization qua `IOSurface` + `IOMobileFramebuffer`). GPU Adreno 530 chưa cần dùng ở giai đoạn này.

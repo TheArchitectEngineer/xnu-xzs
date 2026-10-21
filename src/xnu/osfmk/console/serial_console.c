@@ -284,6 +284,11 @@ _cnputs(char *c, int size, bool poll)
 
 	assert(c != NULL);
 
+#if CONFIG_XZS_BRINGUP
+	extern void xzs_bringup_console_write(const void *buf, int len);
+	xzs_bringup_console_write(c, size);
+#endif
+
 	while (size-- > 0) {
 		_cnputc(*c, poll);
 		c++;

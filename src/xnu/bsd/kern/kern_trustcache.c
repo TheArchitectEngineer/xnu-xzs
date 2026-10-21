@@ -807,6 +807,10 @@ check_trust_cache_runtime_for_uuid(
 		return KERN_INVALID_ARGUMENT;
 	}
 
+	if (trust_cache_rt == NULL) {
+		return KERN_NOT_FOUND;
+	}
+
 #if CONFIG_SPTM
 	ret = txm_check_trust_cache_runtime_for_uuid(check_uuid);
 #elif PMAP_CS_PPL_MONITOR
@@ -929,6 +933,10 @@ load_trust_cache_with_type(
 		}
 	}
 
+	if (trust_cache_rt == NULL || img4if == NULL) {
+		return KERN_NOT_SUPPORTED;
+	}
+
 	/*
 	 * If we don't have an external manifest provided, we expect the img4_object to have
 	 * the manifest embedded. In this case, we need to extract the different artifacts
@@ -1047,6 +1055,10 @@ load_legacy_trust_cache(
 		panic("overflow on the module: %p | %lu", module_data, module_size);
 	}
 
+	if (trust_cache_rt == NULL) {
+		return KERN_NOT_SUPPORTED;
+	}
+
 #if CONFIG_SPTM
 	ret = txm_load_legacy_trust_cache(module_data, module_size);
 #elif PMAP_CS_PPL_MONITOR
@@ -1075,6 +1087,13 @@ query_trust_cache(
 	if (cdhash == NULL) {
 		printf("unable to query trust caches: no cdhash provided\n");
 		return KERN_INVALID_ARGUMENT;
+	}
+
+	if (trust_cache_rt == NULL) {
+		if (query_type >= kTCQueryTypeTotal) {
+			return KERN_INVALID_ARGUMENT;
+		}
+		return KERN_NOT_FOUND;
 	}
 
 #if CONFIG_SPTM
@@ -1311,6 +1330,10 @@ static_trust_cache_capabilities(
 	*num_static_trust_caches_ret = 0;
 	*capabilities0_ret = kTCCapabilityNone;
 	*capabilities1_ret = kTCCapabilityNone;
+
+	if (trust_cache_rt == NULL) {
+		return KERN_NOT_SUPPORTED;
+	}
 
 	/* Ensure static trust caches have been initialized */
 	if (trust_cache_static_init == false) {

@@ -452,8 +452,8 @@ void bootshim_main(uint64_t dtb_phys, uint64_t current_el, uint64_t mpidr) {
      * boot-args contract in sync with /chosen/dram-size: the low 88 MB ends
      * before the first MSM8996 firmware carveout at 0x85800000.
      */
-    ba->memSize = 0x05800000ULL;
-    ba->memSizeActual = 0x05800000ULL;
+    ba->memSize = 0x78000000ULL;
+    ba->memSizeActual = 0x78000000ULL;
     ba->topOfKernelData = macho_base + 0x01800000ULL; /* 24 MB kernel space */
 
     ba->deviceTreeP = (void *)ADT_BASE_ADDR;
@@ -461,12 +461,12 @@ void bootshim_main(uint64_t dtb_phys, uint64_t current_el, uint64_t mpidr) {
 
     ba->Video.v_baseAddr = 0x98000001ULL; /* Bit 0=1 indicates physical address to XNU initialize_screen */
     ba->Video.v_display = 1;
-    ba->Video.v_rowBytes = 1080 * 4;
+    ba->Video.v_rowBytes = 4352;
     ba->Video.v_width = 1080;
     ba->Video.v_height = 1920;
     ba->Video.v_depth = 32;
 
-    copy_string(ba->CommandLine, "console=ttyMSM0,115200 debug=0x4e serial=2 -v keepsyms=1 wdt=-1 -noprogress rd=md0", sizeof(ba->CommandLine));
+    copy_string(ba->CommandLine, "console=ttyMSM0,115200 debug=0x4e serial=3 -v keepsyms=1 wdt=-1 -noprogress rd=disk0s54 rootrw=1 emmcrw=1 cs_enforcement_disable=1 amfi_get_out_of_my_way=1 PE_i_can_has_debugger=1", sizeof(ba->CommandLine));
 
     ba->machineType = 0;
     ba->bootFlags = 0;

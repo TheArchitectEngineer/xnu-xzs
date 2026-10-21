@@ -837,6 +837,25 @@ IOFindBSDRoot( char * rootName, unsigned int rootNameSize,
 		}
 	}
 
+#if defined(XZS) || CONFIG_XZS_BRINGUP
+	if (strncmp(rdBootVar, "disk0s", 6) == 0 || strncmp(rdBootVar, "emmcroot", 8) == 0) {
+		extern int xzs_sdhci_get_bdev_major(void);
+		int bmaj = xzs_sdhci_get_bdev_major();
+		int bmin = 54; /* default to userdata = disk0s54 (GPT slot 53) */
+		if (strncmp(rdBootVar, "disk0s", 6) == 0 && rdBootVar[6] >= '0' && rdBootVar[6] <= '9') {
+			bmin = (int)strtol(rdBootVar + 6, NULL, 10);
+		}
+		if (bmaj >= 0 && bmin >= 0) {
+			OSSafeReleaseNULL(matching);
+			*root = makedev(bmaj, bmin);
+			snprintf(rootName, rootNameSize, "disk0s%d", bmin);
+			IOLog("BSD root (XZS eMMC): %s, major %d, minor %d\n", rootName, major(*root), minor(*root));
+			*oflags = 0;
+			goto iofrootx;
+		}
+	}
+#endif
+
 	if ((!matching) && rdBootVar[0]) {
 		// by BSD name
 		look = rdBootVar;

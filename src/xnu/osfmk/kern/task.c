@@ -1009,14 +1009,14 @@ task_wait_to_return(void)
 	uint8_t returnwaitflags;
 
 #if CONFIG_XZS_BRINGUP
-	extern void xzs_bringup_console_write(const void *buf, int len);
-	char twmsg[96];
-	int twlen = snprintf(twmsg, sizeof(twmsg), "[XZS-TWTR] task_wait_to_return ENTER task=%p thread=%p\n", (void *)task, (void *)thread);
-	xzs_bringup_console_write(twmsg, twlen);
-#endif
-#if CONFIG_XZS_BRINGUP
 	extern volatile boolean_t xzs_d6m4_probe_armed;
 	extern thread_t xzs_d6m4_target_thread;
+	if (xzs_d6m4_probe_armed) {
+		extern void xzs_bringup_console_write(const void *buf, int len);
+		char twmsg[96];
+		int twlen = snprintf(twmsg, sizeof(twmsg), "[XZS-TWTR] task_wait_to_return ENTER task=%p thread=%p\n", (void *)task, (void *)thread);
+		xzs_bringup_console_write(twmsg, twlen);
+	}
 	boolean_t xzs_d6m4_target = xzs_d6m4_probe_armed &&
 	    thread == xzs_d6m4_target_thread;
 	if (xzs_d6m4_target) {

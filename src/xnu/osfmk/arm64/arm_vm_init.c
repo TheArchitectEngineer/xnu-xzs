@@ -990,6 +990,37 @@ update_or_defer_tte(tt_entry_t *ttep, tt_entry_t entry, pmap_paddr_t pa, vm_map_
  * considered an ARM "guarded" page. This enables BTI enforcement for a region.
  */
 
+static inline bool
+xzs_pa_is_reserved(pmap_paddr_t pa)
+{
+	if (pa >= 0x85800000ULL && pa < 0x92000000ULL) {
+		return true;
+	}
+	if (pa >= 0x98000000ULL && pa < 0x9a000000ULL) {
+		return true;
+	}
+	if (pa >= 0xa0000000ULL && pa < 0xb4000000ULL) {
+		return true;
+	}
+	return false;
+}
+
+static inline bool
+xzs_pa_block_overlaps_reserved(pmap_paddr_t pa, pmap_paddr_t size)
+{
+	pmap_paddr_t end = pa + size;
+	if (pa < 0x92000000ULL && end > 0x85800000ULL) {
+		return true;
+	}
+	if (pa < 0x9a000000ULL && end > 0x98000000ULL) {
+		return true;
+	}
+	if (pa < 0xb4000000ULL && end > 0xa0000000ULL) {
+		return true;
+	}
+	return false;
+}
+
 static void
 arm_vm_page_granular_helper(vm_offset_t start, vm_offset_t _end, vm_offset_t va, pmap_paddr_t pa_offset,
     int pte_prot_APX, int pte_prot_XN, unsigned granule, __unused unsigned int guarded,
@@ -1007,6 +1038,11 @@ arm_vm_page_granular_helper(vm_offset_t start, vm_offset_t _end, vm_offset_t va,
 		pa = va - gVirtBase + gPhysBase - pa_offset;
 
 		if (pa >= real_avail_end) {
+			return;
+		}
+
+		/* If the entire 32MB L2 block falls inside a reserved carveout, leave it unmapped. */
+		if (xzs_pa_is_reserved(pa) && xzs_pa_is_reserved(pa + ARM_TT_L2_SIZE - ARM_PGBYTES)) {
 			return;
 		}
 
@@ -1044,7 +1080,7 @@ arm_vm_page_granular_helper(vm_offset_t start, vm_offset_t _end, vm_offset_t va,
 		vm_offset_t rounded_end = round_page(_end);
 		/* Apply the desired protections to the specified page range */
 		for (i = 0; i <= (ARM_TT_L3_INDEX_MASK >> ARM_TT_L3_SHIFT); i++) {
-			if ((start <= va) && (va < rounded_end)) {
+			if ((start <= va) && (va < rounded_end) && !xzs_pa_is_reserved(pa)) {
 				ptmp = pa | ARM_PTE_AF | ARM_PTE_SH(SH_OUTER_MEMORY) | ARM_PTE_TYPE_VALID;
 				ptmp = ptmp | ARM_PTE_ATTRINDX(CACHE_ATTRINDX_DEFAULT);
 				ptmp = ptmp | ARM_PTE_AP(pte_prot_APX);
@@ -1125,9 +1161,11 @@ arm_vm_page_granular_prot(vm_offset_t start, unsigned long size, pmap_paddr_t pa
 	arm_vm_page_granular_helper(start, align_start, start, pa_offset, pte_prot_APX, pte_prot_XN, granule, guarded, deferred_ttep_pair, deferred_tte_pair);
 
 	while ((_end - align_start) >= ARM_TT_L2_SIZE) {
-		if (!(granule & ARM64_GRANULE_ALLOW_BLOCK)) {
+		pmap_paddr_t block_pa = align_start - gVirtBase + gPhysBase - pa_offset;
+		if (!(granule & ARM64_GRANULE_ALLOW_BLOCK) ||
+		    xzs_pa_block_overlaps_reserved(block_pa, ARM_TT_L2_SIZE)) {
 			arm_vm_page_granular_helper(align_start, align_start + ARM_TT_L2_SIZE, align_start + 1, pa_offset,
-			    pte_prot_APX, pte_prot_XN, granule, guarded, deferred_ttep_pair, deferred_tte_pair);
+			    pte_prot_APX, pte_prot_XN, granule & ~ARM64_GRANULE_ALLOW_HINT, guarded, deferred_ttep_pair, deferred_tte_pair);
 		} else {
 			pmap_paddr_t pa = align_start - gVirtBase + gPhysBase - pa_offset;
 			assert((pa & ARM_TT_L2_OFFMASK) == 0);
@@ -2198,6 +2236,11 @@ arm_vm_init(uint64_t memory_size, boot_args * args)
 
 	sane_size = mem_size - (avail_start - gPhysBase);
 	max_mem = mem_size;
+	if (mem_size > 0x34000000ULL) {
+		/* Subtract the 552 MB of reserved MSM8996 XPU/display/bootloader carveouts */
+		sane_size -= 0x22800000ULL;
+		max_mem -= 0x22800000ULL;
+	}
 	vm_kernel_slid_base = segLOWESTTEXT;
 	// vm_kernel_slide is set by arm_init()->arm_slide_rebase_and_sign_image()
 	vm_kernel_stext = segTEXTB;

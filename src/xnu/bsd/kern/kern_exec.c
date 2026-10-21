@@ -1321,7 +1321,11 @@ SYSCTL_PROC(_vm, OID_AUTO, shared_region_control,
 void
 xzs_exec_mark(const char *tag)
 {
+	extern volatile boolean_t xzs_d6m4_probe_armed;
 	extern void xzs_early_puts(const char *s);
+	if (!xzs_d6m4_probe_armed) {
+		return;
+	}
 	xzs_early_puts("[XZS-PROC] ");
 	xzs_early_puts(tag);
 	xzs_early_puts("\n");
@@ -2142,7 +2146,9 @@ cleanup_rosetta_fp:
 	exec_prefault_data(p, imgp, &load_result);
 
 #if CONFIG_XZS_BRINGUP
-	if (load_result.entry_point >= 0x100000000ULL &&
+	extern volatile boolean_t xzs_d6m4_probe_armed;
+	if (xzs_d6m4_probe_armed &&
+	    load_result.entry_point >= 0x100000000ULL &&
 	    load_result.entry_point < 0x100004000ULL) {
 		extern kern_return_t xzs_promote_launchd_text_exec(pmap_t,
 		    vm_map_address_t, vm_map_size_t);
@@ -2186,6 +2192,17 @@ cleanup_rosetta_fp:
 	p->p_acflag &= ~AFORK;
 
 	set_proc_name(imgp, p);
+
+#if CONFIG_XZS_BRINGUP
+	{
+		char emsg[128];
+		int elen = snprintf(emsg, sizeof(emsg), "[XZS-EXEC] pid=%d(%s) entry=0x%llx mach_header=0x%llx\n",
+		    proc_getpid(p), p->p_name[0] ? p->p_name : p->p_comm,
+		    (unsigned long long)load_result.entry_point,
+		    (unsigned long long)load_result.mach_header);
+		xzs_bringup_console_write(emsg, elen);
+	}
+#endif
 
 #if CONFIG_SECLUDED_MEMORY
 	if (secluded_for_apps &&
@@ -5510,9 +5527,14 @@ __mac_execve(proc_t p, struct __mac_execve_args *uap, int32_t *retval __unused)
 	 * Warning: If activation failed after point of no return, it returns error
 	 * as 0 and pretends the call succeeded.
 	 */
-	xzs_bringup_console_write("[XZS-EXEC] EXEC-05 PRE_ACTIVATE\n", 32);
+	extern volatile boolean_t xzs_d6m4_probe_armed;
+	if (xzs_d6m4_probe_armed) {
+		xzs_bringup_console_write("[XZS-EXEC] EXEC-05 PRE_ACTIVATE\n", 32);
+	}
 	error = exec_activate_image(imgp);
-	xzs_bringup_console_write("[XZS-EXEC] EXEC-06 POST_ACTIVATE\n", 33);
+	if (xzs_d6m4_probe_armed) {
+		xzs_bringup_console_write("[XZS-EXEC] EXEC-06 POST_ACTIVATE\n", 33);
+	}
 	/* thread and task ref returned for vfexec case */
 
 	if (imgp->ip_new_thread != NULL) {

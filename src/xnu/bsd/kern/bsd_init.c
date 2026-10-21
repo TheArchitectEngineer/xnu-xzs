@@ -730,6 +730,10 @@ bsd_init(void)
 	xzs_breadcrumb(0xD40, 0);
 	bsd_init_kprintf("calling vfsinit\n");
 	vfsinit();
+#if defined(SWEET_HFS) || defined(ARM64_BOARD_CONFIG_SWEET)
+	extern void sweet_hfs_register(void);
+	sweet_hfs_register();
+#endif
 	xzs_early_puts("[XZS-BOOT] [D41] VFS INIT COMPLETE\n");
 	xzs_breadcrumb(0xD41, 0);
 
@@ -740,13 +744,13 @@ bsd_init(void)
 #endif
 
 #if CONFIG_XZS_BRINGUP
-	/* Phase D4: Read-Only BSD Block Storage & Integration */
-	extern void xzs_sdhci_phase_d4_probe(void);
-	xzs_sdhci_phase_d4_probe();
-
 	/* Milestone D8-M10: Automatic Hardware Display Bringup & Scanout */
 	extern void xzs_display_bringup_auto(void);
 	xzs_display_bringup_auto();
+
+	/* Phase D4: Read-Only BSD Block Storage & Integration */
+	extern void xzs_sdhci_phase_d4_probe(void);
+	xzs_sdhci_phase_d4_probe();
 #endif
 
 
@@ -942,13 +946,16 @@ bsd_init(void)
 	xzs_early_puts("[XZS-BOOT] [D46] loopattach ENTER\n");
 	xzs_watchdog_pet();
 #if CONFIG_XZS_BRINGUP
-	/*
-	 * [XZS-WORKAROUND] Defer loopback interface initialization during Phase D1 bringup.
-	 * loopattach() initializes the network loopback interface (lo0), which creates
-	 * worker threads, multicast joins (IGMP/MLD), and BPF taps.
-	 * Phase D1 aims to verify rootfs block-device boundary and does not require lo0.
-	 */
-	xzs_early_puts("[XZS-BOOT] [XZS-WORKAROUND] loopattach/lo0 DEFERRED\n");
+	{
+		char rd_arg[32] = "";
+		if (!PE_parse_boot_argn("rd", rd_arg, sizeof(rd_arg)) ||
+		    strncmp(rd_arg, "md", 2) == 0) {
+			xzs_early_puts("[XZS-BOOT] [XZS-WORKAROUND] loopattach/lo0 DEFERRED\n");
+		} else {
+			bsd_init_kprintf("calling loopattach\n");
+			loopattach();
+		}
+	}
 #else
 	bsd_init_kprintf("calling loopattach\n");
 	loopattach();                   /* XXX */
@@ -1113,26 +1120,30 @@ bsd_init(void)
 		 * ================================================================
 		 */
 		extern void xzs_d5m2_r8_seal(dev_t root_dev, const char *root_name);
-		xzs_d5m2_r8_seal(rootdev, rootdevice);
+		if (rootdev == makedev(2, 0)) {
+			xzs_d5m2_r8_seal(rootdev, rootdevice);
+		}
 
 #if CONFIG_XZS_BRINGUP
-		/*
-		 * ================================================================
-		 * PHASE D5-M4: Real XZSFS Mount + Root Vnode
-		 * ================================================================
-		 */
-		extern void xzs_breadcrumb(uint32_t cp, uint32_t err);
-		/* Checkpoint 0xD530/00: D5-M4 enter */
-		xzs_breadcrumb(0xD530, 0x00);
-		xzs_early_puts("[XZS-BOOT] [D5-M4] D5-M4 ENTER\n");
+		if (rootdev == makedev(2, 0)) {
+			/*
+			 * ================================================================
+			 * PHASE D5-M4: Real XZSFS Mount + Root Vnode
+			 * ================================================================
+			 */
+			extern void xzs_breadcrumb(uint32_t cp, uint32_t err);
+			/* Checkpoint 0xD530/00: D5-M4 enter */
+			xzs_breadcrumb(0xD530, 0x00);
+			xzs_early_puts("[XZS-BOOT] [D5-M4] D5-M4 ENTER\n");
 
-		/* Register XZSFS filesystem */
-		extern int xzsfs_vfs_register(void);
-		xzsfs_vfs_register();
+			/* Register XZSFS filesystem */
+			extern int xzsfs_vfs_register(void);
+			xzsfs_vfs_register();
 
-		/* Checkpoint 0xD530/10: root mount path enter */
-		xzs_breadcrumb(0xD530, 0x10);
-		xzs_early_puts("[XZS-BOOT] [D5-M4] ROOT MOUNT PATH ENTER\n");
+			/* Checkpoint 0xD530/10: root mount path enter */
+			xzs_breadcrumb(0xD530, 0x10);
+			xzs_early_puts("[XZS-BOOT] [D5-M4] ROOT MOUNT PATH ENTER\n");
+		}
 #endif
 
 		xzs_early_puts("[XZS-BOOT] [D51] vfs_mountroot ENTER\n");
@@ -1200,16 +1211,18 @@ bsd_init(void)
 	init_rootvnode = NULLVP;  /* use rootvnode after this point */
 
 #if CONFIG_XZS_BRINGUP
-	/* Phase D5-M4: Real XZSFS Mount & Root Vnode verification. */
-	extern int xzsfs_d5m4_probe(dev_t rootdev);
-	xzsfs_d5m4_probe(rootdev);
+	if (rootdev == makedev(2, 0)) {
+		/* Phase D5-M4: Real XZSFS Mount & Root Vnode verification. */
+		extern int xzsfs_d5m4_probe(dev_t rootdev);
+		xzsfs_d5m4_probe(rootdev);
 
-	/*
-	 * Phase D5-M5 pre-devfs probe: exercise canonical namei against the
-	 * installed root.  The devfs half runs at the normal bsd_init mount site.
-	 */
-	extern int xzsfs_d5m5_predevfs_probe(void);
-	xzsfs_d5m5_predevfs_probe();
+		/*
+		 * Phase D5-M5 pre-devfs probe: exercise canonical namei against the
+		 * installed root.  The devfs half runs at the normal bsd_init mount site.
+		 */
+		extern int xzsfs_d5m5_predevfs_probe(void);
+		xzsfs_d5m5_predevfs_probe();
+	}
 #endif
 
 
@@ -1229,9 +1242,20 @@ bsd_init(void)
 		if (require_rootauth) {
 			/* enforce sealedness */
 			int autherr = VNOP_IOCTL(rootvnode, FSIOC_KERNEL_ROOTAUTH, NULL, 0, vfs_context_kernel());
+#if defined(ARM64_BOARD_CONFIG_SWEET)
+			/*
+			 * SWEET has no chain of trust to extend: the kernel itself is
+			 * booted unsigned and there is no Image4/AMFI, and its HFS root
+			 * cannot be a sealed volume. Report it instead of panicking.
+			 */
+			if (autherr) {
+				printf("SWEET: root volume is not authenticated (error %d); continuing unsealed\n", autherr);
+			}
+#else
 			if (autherr) {
 				panic("rootvp not authenticated after mounting");
 			}
+#endif
 		}
 	}
 
@@ -1290,7 +1314,9 @@ bsd_init(void)
 		xzs_breadcrumb(0xD540, 0x30);
 		xzs_early_puts("[XZSFS] canonical devfs_kernel_mount('/dev') ENTER\n");
 		int devfs_mount_error = devfs_kernel_mount(mounthere);
-		xzsfs_d5m5_postdevfs_probe(devfs_mount_error);
+		if (rootdev == makedev(2, 0)) {
+			xzsfs_d5m5_postdevfs_probe(devfs_mount_error);
+		}
 #else
 		devfs_kernel_mount(mounthere);
 #endif
@@ -1397,6 +1423,10 @@ bsdinit_task(void)
 
 	bsd_init_kprintf("bsd_do_post - done");
 
+#if CONFIG_XZS_BRINGUP
+	extern void xzs_bringup_console_write(const void *buf, int len);
+	xzs_bringup_console_write("[XZS-BOOT] [D10] bsdinit_task: calling load_init_program(/sbin/launchd)\n", 72);
+#endif
 	load_init_program(p);
 	lock_trace = 1;
 }
@@ -1613,14 +1643,21 @@ bsd_utaskbootstrap(void)
 
 	ut = (struct uthread *)get_bsdthread_info(thread);
 	ut->uu_sigmask = 0;
-#if !CONFIG_XZS_BRINGUP
+#if CONFIG_XZS_BRINGUP
+	if (rootdev != makedev(2, 0)) {
+		act_set_astbsd(thread);
+	}
+#else
 	act_set_astbsd(thread);
 #endif
 
 	task_t task = get_threadtask(thread);
 #if CONFIG_XZS_BRINGUP
-	xzs_d6m1_post_bootstrap(initproc, task, thread);
-	return;
+	if (rootdev == makedev(2, 0)) {
+		xzs_d6m1_post_bootstrap(initproc, task, thread);
+		return;
+	}
+	xzs_early_puts("[XZS-BOOT] [D10] Standard iOS PID 1 (/sbin/launchd) bootstrap armed!\n");
 #endif
 	vm_map_setup(get_task_map(task), task);
 	ipc_task_enable(task);
