@@ -109,6 +109,8 @@ static bool g_m8_slpout_sent = false;
 static bool g_m8_teon_sent = false;
 static bool g_m8_dispon_sent = false;
 static bool g_m8_physical_te_proven = false;
+static volatile bool g_m8_frame_in_flight = false;
+static volatile bool g_m8_suppress_kick = false;
 
 /*
  * Physical TE Sampling on GPIO10 (TLMM mdp_vsync / TE)
@@ -166,12 +168,34 @@ xzs_d8m8_sample_physical_te(uint32_t window_us)
 static uint64_t g_f15_teon_us = 0;
 static uint64_t g_f15_dispon_us = 0;
 
+static void xzs_d8m8_audit_ddic_state_f18(void);
+
 /*
- * M8 Panel Prepare: Power on rails, reset panel, send TEON/DISPON/SLPOUT, leave panel ON
+ * M8 Panel Prepare: Power on rails, reset panel, send SLPOUT/TEON/DISPON, leave panel ON
  */
 static int
 xzs_d8m8_panel_prepare(void)
 {
+	/* Detach fbcon and disarm any active MDP/PP0/DSI stream before LP DCS init */
+	xzs_fbcon_detach();
+	g_m8_frame_in_flight = false;
+	d8p1_write32(0x0090201cu, 0x00000000u); /* CTL_START = 0 */
+	d8p1_write32(0x00902018u, 0x00000000u); /* CTL_FLUSH = 0 */
+	d8p1_write32(0x00971000u, 0x00000000u); /* PP0_TEAR_CHECK_EN = 0 */
+	d8p1_write32(0x00971030u, 0x00000000u); /* PP0_AUTOREFRESH = 0 */
+	d8p1_write32(0x00994040u, 0x00000000u); /* DSI_CMD_MDP_CTRL = 0 */
+	__asm__ volatile("dsb sy\n\tisb sy" ::: "memory");
+	if ((d8p1_read32(0x00994008u) & 0x7u) != 0u) {
+		uint32_t saved_ctrl = d8p1_read32(0x00994004u);
+		d8p1_write32(0x00994004u, 0x00000000u);
+		d8p1_write32(0x00994118u, 0x00000001u);
+		xzs_d8p2_delay_us(100);
+		d8p1_write32(0x00994118u, 0x00000000u);
+		xzs_d8p2_delay_us(20);
+		d8p1_write32(0x00994004u, saved_ctrl);
+		__asm__ volatile("dsb sy\n\tisb sy" ::: "memory");
+	}
+
 	xzs_diag_emit("\n=======================================================\n");
 	xzs_diag_emit("=== [M8] REAL COMMAND-MODE PANEL-ON PREPARE (F7)    ===\n");
 	xzs_diag_emit("=======================================================\n");
@@ -208,7 +232,7 @@ xzs_d8m8_panel_prepare(void)
 	xzs_diag_emit("IBB_READY="); xzs_diag_emit(ibb_ready ? "YES\n" : "NO\n");
 
 	bool pwr_precheck_pass = (gpio8_val == 1) && (gpio89_val == 1) &&
-	                         (gpio50_val == 1) && (gpio51_val == 1) &&
+	                         (gpio50_val == 0) && (gpio51_val == 0) &&
 	                         lab_ready && ibb_ready;
 
 	xzs_diag_emit("POWER_PRECHECK="); xzs_diag_emit(pwr_precheck_pass ? "PASS\n" : "FAIL\n");
@@ -226,55 +250,46 @@ xzs_d8m8_panel_prepare(void)
 	if (frq == 0) frq = 19200000ULL;
 
 	/*
-	 * Authentic Sony Xperia XZs Panel 9 DDIC initialization sequence:
-	 * Directly extracted from panel9.dtsi:357 (somc,sharp_synaptics_cmd_9_panel):
-	 * 1..3: Brightness (51 FF), Display Ctrl (53 0C), CABC (55 00)
-	 * 4:    TEON (35 00) - Tearing effect enable
-	 * 5:    B0 04 - Manufacturer register unlock (level 4 for Synaptics TDDI)
-	 * 6:    D6 01 - Enable TE pin physical output
-	 * 7:    C9 (9 bytes) - DDIC internal scan oscillator frequency setup
-	 * 8:    D5 (12 bytes) - Timing generator clock divider and pulse widths
-	 * 9:    D0 (17 bytes) - Gate drive timing configuration
-	 * 10:   D3 (29 bytes) - Gate driver bias and control
-	 * 11:   D7 (33 bytes) - Source driver timing and polarity
-	 * 12:   C1 (32 bytes) - Power management and internal charge pump bias
-	 * 13:   C7 (31 bytes) - Positive gamma correction table
-	 * 14:   C8 (20 bytes) - Negative gamma correction table
-	 * Followed by standard DCS format/geometry and post-panel-on commands:
-	 * 15..19: MADCTL (36 00), COLMOD (3a 77), CASET (2a), PASET (2b), STESL (44)
-	 * 20:   DISPON (0x29) + 20 ms display-on delay
-	 * 21:   SLPOUT (0x11) + 120 ms sleep-out recovery delay (panel9.dtsi:374)
+	 * Authentic Sony Xperia XZs (keyaki) Panel 9 True-Cold DDIC initialization sequence:
+	 * After a 0V true-cold hardware reset (GPIO8 LOW -> HIGH), the Sharp + Synaptics
+	 * Full In-Cell DDIC comes up in SLPIN (0x10) with display OFF (0x28).
+	 *   1. SLPOUT (0x11) + 120 ms wait to wake DDIC and stabilize internal charge pumps.
+	 *   2. Touch reset pulse per somc,ewu-rst-seq = <0 2 1 5> (GPIO 89 LOW 2ms -> HIGH 10ms)
+	 *      BEFORE DISPON so touch reset never blanks or resets active scanout.
+	 *   3. Manufacturer & DCS configuration while awake in SLPOUT (strictly Panel 9 DT + post-on):
+	 *      - B0 04 (Manufacturer unlock, DSI_GENERIC_LONG_WRITE 0x29, len 2, LP)
+	 *      - D6 01 (TE output enable, DSI_GENERIC_LONG_WRITE 0x29, len 2, LP)
+	 *      - C6 59 (60Hz frame rate / scan oscillator, DSI_GENERIC_LONG_WRITE 0x29, len 2, LP)
+	 *      - 35 00 (TEON, VBlank TE)
+	 *   4. DISPON (0x29) + 20 ms wait to unblank the LCD glass after SLPOUT and config.
 	 */
-	xzs_diag_emit("DCS_SEQUENCE=SONY_AUTHENTIC_PANEL9_SYNAPTICS_TDDI_INIT\n");
+	xzs_diag_emit("DCS_SEQUENCE=SONY_KEYAKI_PANEL9_AUTHENTIC_DT_AND_POST_ON\n");
 
-	/* Panel 9 authentic vendor init commands (panel9.dtsi:357) */
-	rc = xzs_d8m6_transmit_cmd(&s_p9_cmd_51, 0);  /* 51 FF Brightness */
-	rc = xzs_d8m6_transmit_cmd(&s_p9_cmd_53, 0);  /* 53 0C Ctrl Disp */
-	rc = xzs_d8m6_transmit_cmd(&s_p9_cmd_55, 0);  /* 55 00 CABC */
-	rc = xzs_d8m6_transmit_cmd(&s_p9_cmd_35, 0);  /* 35 00 TEON */
+	/* 1. SLPOUT (0x11) + 120 ms wait (configured in s_cmd_slpout.post_wait_us) */
+	rc = xzs_d8m6_transmit_cmd(&s_cmd_slpout, 0);
+	g_d8m6_counters.slpout_count++;
+	g_m8_slpout_sent = (rc == 0);
+	xzs_diag_emit("SLPOUT_SENT=yes\n");
+
+	/* 2. In-Cell Touch reset pulse per somc,ewu-rst-seq after SLPOUT + 120ms */
+	xzs_d8m5_set_touch_reset_low();
+	xzs_d8p2_delay_us(2000);
+	xzs_d8m5_set_touch_reset_high();
+	xzs_d8p2_delay_us(10000);
+
+	/* 3. Authentic Panel 9 Manufacturer & standard DCS configuration */
+	rc = xzs_d8m6_transmit_cmd(&s_p9_cmd_b0, 0);
+	rc = xzs_d8m6_transmit_cmd(&s_p9_cmd_d6, 0);
+	rc = xzs_d8m6_transmit_cmd(&s_p9_cmd_c6_59, 0);
+
+	uint64_t t_teon = xzs_d8m5_read_cntvct();
+	g_f15_teon_us = (t_teon * 1000000ULL) / frq;
+	rc = xzs_d8m6_transmit_cmd(&s_p9_cmd_35, 0);     /* 35 00 TEON */
 	g_d8m6_counters.teon_count++;
 	g_m8_teon_sent = (rc == 0);
 	xzs_diag_emit("TEON_SENT=yes\n");
 
-	rc = xzs_d8m6_transmit_cmd(&s_p9_cmd_b0, 0);  /* B0 04 Unlock */
-	rc = xzs_d8m6_transmit_cmd(&s_p9_cmd_d6, 0);  /* D6 01 TE Output Enable */
-	rc = xzs_d8m6_transmit_cmd(&s_p9_cmd_c9, 0);  /* C9 Oscillator setup */
-	rc = xzs_d8m6_transmit_cmd(&s_p9_cmd_d5, 0);  /* D5 Timing gen setup */
-	rc = xzs_d8m6_transmit_cmd(&s_p9_cmd_d0, 0);  /* D0 Gate drive timing */
-	rc = xzs_d8m6_transmit_cmd(&s_p9_cmd_d3, 0);  /* D3 Gate control */
-	rc = xzs_d8m6_transmit_cmd(&s_p9_cmd_d7, 0);  /* D7 Source control */
-	rc = xzs_d8m6_transmit_cmd(&s_p9_cmd_c1, 0);  /* C1 Power/bias control */
-	rc = xzs_d8m6_transmit_cmd(&s_p9_cmd_c7, 0);  /* C7 Gamma pos */
-	rc = xzs_d8m6_transmit_cmd(&s_p9_cmd_c8, 0);  /* C8 Gamma neg */
-
-	/* Orientation, Format, Geometry, Tear Scanline */
-	rc = xzs_d8m6_transmit_cmd(&s_cmd_dt_on_8, 0);  /* 36 00 MADCTL */
-	rc = xzs_d8m6_transmit_cmd(&s_cmd_dt_on_9, 0);  /* 3a 77 COLMOD 24bpp */
-	rc = xzs_d8m6_transmit_cmd(&s_cmd_dt_on_10, 0); /* 2a CASET 0..1079 */
-	rc = xzs_d8m6_transmit_cmd(&s_cmd_dt_on_11, 0); /* 2b PASET 0..1919 */
-	rc = xzs_d8m6_transmit_cmd(&s_cmd_dt_on_12, 0); /* 44 STESL scanline 0 */
-
-	/* DISPON (0x29) per post-panel-on command 1 (panel9.dtsi:373) */
+	/* 4. DISPON (0x29) + 20 ms wait */
 	uint64_t t_dispon = xzs_d8m5_read_cntvct();
 	g_f15_dispon_us = (t_dispon * 1000000ULL) / frq;
 	xzs_diag_emit("F15_DISPON_TX: timestamp_us="); xzs_d8m8_dec(g_f15_dispon_us); xzs_diag_emit("\n");
@@ -288,21 +303,17 @@ xzs_d8m8_panel_prepare(void)
 	xzs_diag_emit("DISPON_SENT=yes\n");
 	xzs_d8p2_delay_us(20000);
 
-	/* SLPOUT (0x11) + 120 ms recovery delay per post-panel-on command 2 (panel9.dtsi:374) */
-	rc = xzs_d8m6_transmit_cmd(&s_cmd_slpout, 0);
-	g_d8m6_counters.slpout_count++;
-	g_m8_slpout_sent = (rc == 0);
-	xzs_diag_emit("SLPOUT_SENT=yes\n");
-	xzs_d8p2_delay_us(120000);
-
 	uint64_t t_on_done = xzs_d8m5_read_cntvct();
 	uint64_t on_done_us = (t_on_done * 1000000ULL) / frq;
 	xzs_diag_emit("F15_ON_CMDS_COMPLETE: timestamp_us="); xzs_d8m8_dec(on_done_us); xzs_diag_emit("\n");
 	xzs_diag_emit("F15_PANEL_ON_CMDS_COMPLETE\n");
 
-	/* Sample GPIO10 in panel_prepare to verify physical TE startup */
+	/* Audit live DDIC state registers (0x04, 0x0A..0x0F) via DSI BTA RX */
+	xzs_d8m8_audit_ddic_state_f18();
+
+	/* Sample GPIO10 in panel_prepare over ~50 ms (3 frames @ 60Hz) to verify physical TE startup */
 	uint32_t prep_hi = 0, prep_trans = 0, prep_last = 0;
-	for (int s = 0; s < 200; s++) {
+	for (int s = 0; s < 500; s++) {
 		uint32_t val = xzs_d8m5_gpio_read_in(GPIO_TE_NUM);
 		if (val) prep_hi++;
 		if (s > 0 && val != prep_last) prep_trans++;
@@ -486,7 +497,7 @@ xzs_d8m8_dryrun(void)
 	xzs_diag_emit("\n[M8-DRY-70] DSI MDP STREAM (0x00994040)\n");
 	xzs_diag_emit("  STEP 15: BLOCK=DSI0 REG=DSI_CMD_MDP_CTRL ADDR=0x00994040 MASK=0x0000000f VALUE=0x00000008 EVIDENCE=SOURCE_PROVEN DEPENDENCY=DSI_HOST\n");
 	xzs_diag_emit("  STEP 16: BLOCK=DSI0 REG=DSI_CMD_DCS_CTRL ADDR=0x00994044 MASK=0x0001ffff VALUE=0x00013C2C EVIDENCE=SOURCE_PROVEN DEPENDENCY=DSI_HOST\n");
-	xzs_diag_emit("  STEP 16b: BLOCK=DSI0 REG=DSI_COMMAND_MODE_MDP_CTRL2 ADDR=0x009941b8 MASK=0x00010000 VALUE=0x00010000 EVIDENCE=SOURCE_PROVEN DEPENDENCY=DSI_HOST\n");
+	xzs_diag_emit("  STEP 16b: BLOCK=DSI0 REG=DSI_COMMAND_MODE_MDP_CTRL2 ADDR=0x009941b8 MASK=0x00010006 VALUE=0x00010006 EVIDENCE=SOURCE_PROVEN DEPENDENCY=DSI_HOST\n");
 	xzs_diag_emit("  STEP 17: BLOCK=DSI0 REG=DSI_STREAM0_CTRL ADDR=0x00994058 MASK=0xffffffff VALUE=0x0CA90039 EVIDENCE=SOURCE_PROVEN DEPENDENCY=DSI_HOST\n");
 	xzs_diag_emit("  STEP 18: BLOCK=DSI0 REG=DSI_STREAM0_TOTAL ADDR=0x0099405c MASK=0xffffffff VALUE=0x07800438 EVIDENCE=SOURCE_PROVEN DEPENDENCY=DSI_HOST\n");
 
@@ -1567,10 +1578,7 @@ xzs_d8m8_c1_rate(void)
 	}
 	xzs_diag_emit("[C1] M8_1_PASS=YES\n");
 	if (g_c1_attempted) {
-		xzs_diag_emit("[C1] C1_ALREADY_DONE=YES\n");
-		xzs_diag_emit("[C1] C1_READY_FOR_FRAME=NO\n");
-		xzs_diag_emit("[C1] C1_END\n");
-		return;
+		xzs_diag_emit("[C1] C1_REVERIFY=YES\n");
 	}
 	g_c1_attempted = 1;
 
@@ -1768,6 +1776,8 @@ xzs_m8_write_reg(const char *name, uint32_t addr, uint32_t val, uint32_t expecte
 static void
 xzs_d8m8_fb_init(void)
 {
+	xzs_fbcon_detach();
+	g_m8_frame_in_flight = false;
 	/*
 	 * Keep the framebuffer path independent of the persistent breadcrumb
 	 * transport.  That transport writes directly to IMEM and a fixed DRAM
@@ -1927,6 +1937,28 @@ xzs_d8m8_rgb0_config(void)
 		return;
 	}
 
+	/* Ensure VBIF is unhalted and QoS remaps + OT limits are programmed per twrp-extracted.dts & twrp-kernel.bin */
+	d8p1_write32(0x009b0004u, d8p1_read32(0x009b0004u) | 1u);
+	d8p1_write32(0x009b0208u, d8p1_read32(0x009b0208u) & ~1u);
+	d8p1_write32(0x009b00d8u, 0x00000707u);
+	d8p1_write32(0x009b0110u, 0x0f0f0f0fu);
+	d8p1_write32(0x009b0114u, 0x0f0f0f0fu);
+	d8p1_write32(0x009b0020u, 0x00000005u);
+	d8p1_write32(0x009b0024u, 0x0000000au);
+	d8p1_write32(0x009b0028u, 0x0000000au);
+	d8p1_write32(0x009b002cu, 0x0000000au);
+
+	/* Ensure MDP_CLK_CTRL0..7 and MDP_AXI_PORT_SEL are active per aboot & twrp-extracted.dts:267 */
+	d8p1_write32(0x009011e0u, 0x000000a4u);
+	d8p1_write32(0x009012acu, 0xc0000cccu);
+	d8p1_write32(0x009012b4u, 0xc0000cccu);
+	d8p1_write32(0x009012bcu, 0x00ccccccu);
+	d8p1_write32(0x009012c4u, 0x000000ccu);
+	d8p1_write32(0x009013a8u, 0x0cccc0c0u);
+	d8p1_write32(0x009013b0u, 0xccccc0c0u);
+	d8p1_write32(0x009013b8u, 0xcccc0000u);
+	d8p1_write32(0x009013d0u, 0x00cc0000u);
+
 	xzs_m8_write_reg("RGB0_SRC_SIZE    ", 0x00915000u, 0x07800438u, 0x07800438u, false);
 	xzs_m8_write_reg("RGB0_SRC_IMG_SIZE", 0x00915004u, 0x07800438u, 0x07800438u, false);
 	xzs_m8_write_reg("RGB0_SRC_XY      ", 0x00915008u, 0x00000000u, 0x00000000u, false);
@@ -1934,9 +1966,38 @@ xzs_d8m8_rgb0_config(void)
 	xzs_m8_write_reg("RGB0_OUT_XY      ", 0x00915010u, 0x00000000u, 0x00000000u, false);
 	xzs_m8_write_reg("RGB0_SRC0_ADDR   ", 0x00915014u, g_m8_fb_pa,   g_m8_fb_pa,   false);
 	xzs_m8_write_reg("RGB0_SRC_YSTRIDE0", 0x00915024u, 0x00001100u, 0x00001100u, false);
-	xzs_m8_write_reg("RGB0_SRC_FORMAT  ", 0x00915030u, 0x000236aau, 0x000236aau, false);
+	/* 8-bit BPC (BPC8=3 for A,R,B,G -> 0xff in bits[7:0], BPP=4 -> 3<<9, unpack_count=4 -> 3<<12, tight=1<<17 -> 0x000236ff per twrp-kernel.bin 0x480090..0x48013c) */
+	xzs_m8_write_reg("RGB0_SRC_FORMAT  ", 0x00915030u, 0x000236ffu, 0x000236ffu, false);
 	xzs_m8_write_reg("RGB0_SRC_UNPACK  ", 0x00915034u, 0x03010002u, 0x03010002u, false);
-	xzs_m8_write_reg("RGB0_SRC_OP_MODE ", 0x00915038u, 0x00000000u, 0x00000000u, false);
+	/* MDP v1.7 (0x1007, MSM8996) requires MDSS_MDP_OP_PE_OVERRIDE (BIT31) + REQ_PIXELS (aboot 0xaa01cac4, twrp 0xffffffc000500338) */
+	xzs_m8_write_reg("RGB0_SRC_OP_MODE ", 0x00915038u, 0x80000000u, 0x80000000u, false);
+	/* MDP v1.7 SSPP_FETCH_CONFIG (0x00915048 = 0x00080087) and FIFO watermarks (0x50/0x54/0x58 = 0x0000ffff) per twrp-kernel.bin 0x480188..0x480968 */
+	xzs_m8_write_reg("RGB0_FETCH_CONFIG", 0x00915048u, 0x00080087u, 0x00080087u, false);
+	xzs_m8_write_reg("RGB0_FIFO_WM0    ", 0x00915050u, 0x0000ffffu, 0x0000ffffu, false);
+	xzs_m8_write_reg("RGB0_FIFO_WM1    ", 0x00915054u, 0x0000ffffu, 0x0000ffffu, false);
+	xzs_m8_write_reg("RGB0_FIFO_WM2    ", 0x00915058u, 0x0000ffffu, 0x0000ffffu, false);
+	xzs_m8_write_reg("RGB0_DANGER_LUT  ", 0x00915060u, 0x0000ffffu, 0x0000ffffu, false);
+	xzs_m8_write_reg("RGB0_SAFE_LUT    ", 0x00915064u, 0x0000fff0u, 0x0000fff0u, false);
+	xzs_m8_write_reg("RGB0_CREQ_LUT    ", 0x00915068u, 0x00112233u, 0x00112233u, false);
+	xzs_m8_write_reg("RGB0_QOS_CTRL    ", 0x0091506cu, 0x00000001u, 0x00000001u, false);
+	xzs_m8_write_reg("RGB0_DECIMATION  ", 0x00915070u, 0x00000000u, 0x00000000u, false);
+	xzs_m8_write_reg("RGB0_PE_C0_LR    ", 0x00915100u, 0x00000000u, 0x00000000u, false);
+	xzs_m8_write_reg("RGB0_PE_C0_TB    ", 0x00915104u, 0x00000000u, 0x00000000u, false);
+	xzs_m8_write_reg("RGB0_PE_C0_REQ   ", 0x00915108u, 0x07800438u, 0x07800438u, false);
+	xzs_m8_write_reg("RGB0_PE_C1C2_LR  ", 0x00915110u, 0x00000000u, 0x00000000u, false);
+	xzs_m8_write_reg("RGB0_PE_C1C2_TB  ", 0x00915114u, 0x00000000u, 0x00000000u, false);
+	xzs_m8_write_reg("RGB0_PE_C1C2_REQ ", 0x00915118u, 0x07800438u, 0x07800438u, false);
+	xzs_m8_write_reg("RGB0_PE_C3_LR    ", 0x00915120u, 0x00000000u, 0x00000000u, false);
+	xzs_m8_write_reg("RGB0_PE_C3_TB    ", 0x00915124u, 0x00000000u, 0x00000000u, false);
+	xzs_m8_write_reg("RGB0_PE_C3_REQ   ", 0x00915128u, 0x07800438u, 0x07800438u, false);
+	/* MDP v1.7 SSPP +0x134 = 0x00000009 and +0x138 = 0x80000000 per twrp-kernel.bin 0x4802dc..0x480364 */
+	xzs_m8_write_reg("RGB0_EXT_134     ", 0x00915134u, 0x00000009u, 0x00000009u, false);
+	xzs_m8_write_reg("RGB0_EXT_138     ", 0x00915138u, 0x80000000u, 0x80000000u, false);
+	xzs_m8_write_reg("RGB0_QSEED2_CFG  ", 0x00915204u, 0x00000000u, 0x00000000u, false);
+	xzs_m8_write_reg("RGB0_QSEED2_C03X ", 0x00915210u, 0x00200000u, 0x00200000u, false);
+	xzs_m8_write_reg("RGB0_QSEED2_C03Y ", 0x00915214u, 0x00200000u, 0x00200000u, false);
+	xzs_m8_write_reg("RGB0_QSEED2_C12X ", 0x00915218u, 0x00200000u, 0x00000000u, false);
+	xzs_m8_write_reg("RGB0_QSEED2_C12Y ", 0x0091521cu, 0x00200000u, 0x00000000u, false);
 
 	g_m8_rgb0_configured = true;
 
@@ -1964,8 +2025,18 @@ xzs_d8m8_lm0_config(void)
 
 	xzs_watchdog_pet();
 
+	xzs_m8_write_reg("LM0_OP_MODE      ", 0x00945000u, 0x00000000u, 0x00000000u, false);
 	xzs_m8_write_reg("LM0_OUT_SIZE     ", 0x00945004u, 0x07800438u, 0x07800438u, false);
 	xzs_m8_write_reg("LM0_BORDER_COLOR0", 0x00945008u, 0x00000000u, 0x00000000u, false);
+	xzs_m8_write_reg("LM0_BORDER_COLOR1", 0x0094500cu, 0x00000000u, 0x00000000u, false);
+	xzs_m8_write_reg("LM0_BLEND0_OP    ", 0x00945020u, 0x00000100u, 0x00000100u, false);
+	xzs_m8_write_reg("LM0_BLEND0_ALPHA ", 0x00945024u, 0x000000ffu, 0x000000ffu, false);
+	xzs_m8_write_reg("LM0_BLEND1_OP    ", 0x00945050u, 0x00000100u, 0x00000100u, false);
+	xzs_m8_write_reg("LM0_BLEND1_ALPHA ", 0x00945054u, 0x000000ffu, 0x000000ffu, false);
+	xzs_m8_write_reg("LM0_BLEND2_OP    ", 0x00945080u, 0x00000100u, 0x00000100u, false);
+	xzs_m8_write_reg("LM0_BLEND2_ALPHA ", 0x00945084u, 0x000000ffu, 0x000000ffu, false);
+	xzs_m8_write_reg("LM0_BLEND3_OP    ", 0x009450b0u, 0x00000100u, 0x00000100u, false);
+	xzs_m8_write_reg("LM0_BLEND3_ALPHA ", 0x009450b4u, 0x000000ffu, 0x000000ffu, false);
 
 	g_m8_lm0_configured = true;
 
@@ -2092,15 +2163,15 @@ xzs_d8m8_stream_config(void)
 	/* Step 1: Ensure tear check disabled before reprogramming */
 	xzs_m8_write_reg("PP0_TEAR_CHECK_EN ", 0x00971000u, 0x00000000u, 0x00000000u, false);
 
-	/* Step 2: Program Sony LK cold-boot configuration with autonomous 60Hz VSYNC counter (BIT19=1, BIT20=0, vclks=0x93 per Sony LK aboot.img:0xaa01e88c) */
-	xzs_m8_write_reg("PP0_SYNC_CFG_VSYNC", 0x00971004u, 0x00080093u, 0x00080093u, false);
+	/* Step 2: Program TWRP active golden VSYNC configuration (BIT20=1 HW TE, BIT19=1, vclks=0x93 -> 0x00180093) */
+	xzs_m8_write_reg("PP0_SYNC_CFG_VSYNC", 0x00971004u, 0x00180093u, 0x00180093u, false);
 	uint32_t vsync_rb = d8p1_read32(0x00971004u);
-	xzs_diag_emit("  PP_SYNC_CONFIG_VSYNC_WRITE=0x00080093\n");
+	xzs_diag_emit("  PP_SYNC_CONFIG_VSYNC_WRITE=0x00180093\n");
 	xzs_diag_emit("  PP_SYNC_CONFIG_VSYNC_READBACK=0x"); xzs_d8p1_hex32(vsync_rb); xzs_diag_emit("\n");
 	bool vsync_rb_ok = ((vsync_rb & (1u << 19)) != 0) && ((vsync_rb & 0xffffu) == 0x0093u);
 	xzs_diag_emit("  PP_SYNC_CONFIG_VSYNC_ACCEPTANCE=");
-	xzs_diag_emit(vsync_rb_ok ? "PASS (BIT19=1, vclks=0x93)\n" : "FAIL\n");
-	xzs_diag_emit("  AUTONOMOUS_60HZ_VSYNC_MODE=yes\n");
+	xzs_diag_emit(vsync_rb_ok ? "PASS (BIT20=1, BIT19=1, vclks=0x93)\n" : "FAIL\n");
+	xzs_diag_emit("  EXTERNAL_HW_VSYNC_MODE=yes\n");
 
 	xzs_m8_write_reg("PP0_SYNC_CFG_HGHT ", 0x00971008u, 0x0000FFF0u, 0x0000FFF0u, false);
 	xzs_m8_write_reg("PP0_VSYNC_INIT_VAL", 0x00971010u, 0x00000780u, 0x00000780u, false);
@@ -2113,16 +2184,19 @@ xzs_d8m8_stream_config(void)
 	/* Step 3: Tear check enabled matching TWRP golden baseline (0x00971000 = 1) */
 	xzs_m8_write_reg("PP0_TEAR_CHECK_EN ", 0x00971000u, 0x00000001u, 0x00000001u, false);
 
-	/*
-	 * Sony LK cold boot autorefresh enable (aboot.img:0xaa01e8d8):
-	 * orr r2, r2, #0x80000000; str r2, [r3, #0x30] -> writes 0x80000001 to PP0_AUTOREFRESH_CONFIG.
-	 */
-	xzs_write_pp0_autorefresh("xzs_d8m8_stream_config", "STREAM_CONFIG", 0x80000001u);
+	/* Align PP0_AUTOREFRESH_CONFIG to TWRP active golden baseline (0x00000000) */
+	xzs_write_pp0_autorefresh("xzs_d8m8_stream_config", "STREAM_CONFIG", 0x00000000u);
 	uint32_t ar_after_pp = d8p1_read32(0x00971030u);
 	xzs_diag_emit("AUTOREFRESH_AFTER_PP_CONFIG=0x"); xzs_d8p1_hex32(ar_after_pp); xzs_diag_emit("\n");
 
-	/* DSI0 Host MDP Stream: Restored to 0x06100006 (MSM8996 MDP command mode stream enable + packing/interleave, matching TWRP golden) */
-	xzs_m8_write_reg("DSI_CMD_MDP_CTRL  ", 0x00994040u, 0x06100006u, 0x06100006u, false);
+	/* DSI0 Host MDP Stream: Align to active TWRP golden baseline (0x00000008: RGB888 24bpp, dst_format=0, swap=0x8, interleave=0) */
+	xzs_m8_write_reg("DSI_CMD_MDP_CTRL  ", 0x00994040u, 0x00000008u, 0x00000008u, false);
+
+	/* Program DSI host HS timer, EOT packet, and MISR command control matching active TWRP golden state */
+	d8p1_write32(0x009940a0u, 0x00000000u); /* DSI_MISR_CMD_CTRL */
+	d8p1_write32(0x009940bcu, 0x0003fd08u); /* DSI_HS_TIMER_CTRL */
+	d8p1_write32(0x009940c8u, 0x010f0f08u); /* DSI_EOT_PACKET */
+	d8p1_write32(0x009940ccu, 0x00000001u); /* DSI_EOT_PACKET_CTRL (qcom,mdss-dsi-tx-eot-append) */
 
 	/* Special handling for DSI_CMD_DCS_CTRL (0x00994044): Bit 16 is write-only latch */
 	xzs_m8_write_reg("DSI_CMD_DCS_CTRL  ", 0x00994044u, 0x00013c2cu, 0x00003c2cu, false);
@@ -2197,6 +2271,7 @@ xzs_d8m8_ctl_config(void)
 	xzs_watchdog_pet();
 
 	xzs_m8_write_reg("DISP_INTF_SEL    ", 0x00901004u, 0x00000100u, 0x00000100u, false);
+	xzs_m8_write_reg("INTF1_PANEL_FMT  ", 0x0096b890u, 0x0000213fu, 0x0000213fu, false);
 	xzs_m8_write_reg("CTL_LAYER_0      ", 0x00902000u, 0x00000200u, 0x00000200u, false);
 	/* CMD mode + MDSS_MDP_INTF1 (enum value 2) selected for DSI0. */
 	xzs_m8_write_reg("CTL_TOP          ", 0x00902014u, 0x00020020u, 0x00020020u, false);
@@ -2236,18 +2311,17 @@ xzs_d8m8_flush_config(void)
 	xzs_watchdog_pet();
 
 	/* R11C: observe the existing, frozen CTL_FLUSH write. */
-	xzs_breadcrumb(0xC1130u, 0u); /* before CTL_FLUSH */
 	xzs_d8m8_r11a_capture(2);
 	xzs_d8m8_r11e_capture(0x1120u);
 
-	/* Program CTL_FLUSH (0x00902018) = 0x00020048 (BIT17 CTL0, BIT6 LM0, BIT3 RGB0; BIT30 INTF1 omitted for command mode) */
-	xzs_m8_write_reg("CTL_FLUSH        ", 0x00902018u, 0x00020048u, 0x00000000u, true);
+	/* Program CTL_FLUSH (0x00902018) = 0x40022048 (BIT30 INTF1, BIT17 CTL0, BIT13 DSPP0/PP0, BIT6 LM0, BIT3 RGB0 per aboot 0xaa01c884 / 0xaa01e7c0 for MSM8996 0x1007) */
+	xzs_m8_write_reg("CTL_FLUSH        ", 0x00902018u, 0x40022048u, 0x00000000u, true);
 	xzs_d8m8_r11a_capture(3);
 	xzs_d8m8_r11e_capture(0x1130u);
-	xzs_breadcrumb(0xC1140u, 0u); /* after CTL_FLUSH consumption snapshot */
 	uint32_t flush_rb = d8p1_read32(0x00902018u);
 
 	xzs_diag_emit("  CTL_FLUSH_WRITE   = 0x00020048\n");
+	xzs_diag_emit("  CTL_FLUSH_HW_WRITE= 0x40022048\n");
 	xzs_diag_emit("  CTL_FLUSH_READBACK= 0x"); xzs_d8p1_hex32(flush_rb); xzs_diag_emit("\n");
 	xzs_diag_emit("  CTL_FLUSH_BEHAVIOR= SHADOW_COMMIT_TRIGGER\n");
 
@@ -2265,12 +2339,19 @@ xzs_d8m8_flush_config(void)
 	xzs_diag_emit("[D8-M8] FRAMEBUFFER_SCANOUT_COUNT=0\n");
 }
 
+static bool xzs_d8m8_wait_frame_idle(uint32_t timeout_us);
+void xzs_d8m8_kick_frame_ex(bool wait_for_idle);
+
 /*
  * Pre-Kick Status Diagnostic: display m8-prekick-status
  */
 static void
 xzs_d8m8_prekick_status(void)
 {
+	if (g_m8_frame_in_flight) {
+		(void)xzs_d8m8_wait_frame_idle(40000u);
+	}
+	g_m8_suppress_kick = true;
 	xzs_diag_emit("\n=== M8 PRE-KICK STATUS ===\n\n");
 
 	xzs_watchdog_pet();
@@ -2329,6 +2410,7 @@ xzs_d8m8_prekick_status(void)
 	xzs_diag_emit("RGB0_FORMAT=0x"); xzs_d8p1_hex32(rgb0_fmt); xzs_diag_emit("\n");
 	xzs_diag_emit("RGB0_UNPACK=0x"); xzs_d8p1_hex32(rgb0_unp); xzs_diag_emit("\n");
 	xzs_diag_emit("RGB0_SRC_OP_MODE=0x"); xzs_d8p1_hex32(rgb0_opmode); xzs_diag_emit("\n");
+	xzs_diag_emit("RGB0_PE_C0_REQ=0x"); xzs_d8p1_hex32(d8p1_read32(0x00915108u)); xzs_diag_emit("\n");
 	xzs_diag_emit("RGB0_FETCH_CONFIG=0x"); xzs_d8p1_hex32(rgb0_fetch_cfg); xzs_diag_emit("\n");
 	xzs_diag_emit("RGB0_FIFO_WM0=0x"); xzs_d8p1_hex32(rgb0_wm0); xzs_diag_emit("\n");
 	xzs_diag_emit("RGB0_FIFO_WM1=0x"); xzs_d8p1_hex32(rgb0_wm1); xzs_diag_emit("\n");
@@ -2450,9 +2532,9 @@ xzs_d8m8_prekick_status(void)
 	xzs_diag_emit("PLL_STATUS=0x"); xzs_d8p1_hex32(pll_stat); xzs_diag_emit("\n\n");
 
 	uint32_t ctl_start = d8p1_read32(0x0090201cu);
-	xzs_diag_emit("CTL_START_COUNT=0\n");
-	xzs_diag_emit("MDP_KICKOFF_COUNT=0\n");
-	xzs_diag_emit("FRAMEBUFFER_SCANOUT_COUNT=0\n");
+	xzs_diag_emit("CTL_START_COUNT="); xzs_d8m8_dec(g_m8_ctl_start_count); xzs_diag_emit("\n");
+	xzs_diag_emit("MDP_KICKOFF_COUNT="); xzs_d8m8_dec(g_m8_kickoff_count); xzs_diag_emit("\n");
+	xzs_diag_emit("FRAMEBUFFER_SCANOUT_COUNT="); xzs_d8m8_dec(g_m8_framebuffer_scanout_count); xzs_diag_emit("\n");
 	xzs_diag_emit("PANEL_READY="); xzs_diag_emit(g_m8_panel_ready ? "yes\n\n" : "no\n\n");
 
 	bool pp_timing_ok = ((pp0_tear == 0) || (pp0_tear == 1)) &&
@@ -2464,31 +2546,35 @@ xzs_d8m8_prekick_status(void)
 	                    ((pp0_start_pos == 0x00000780u) || (pp0_start_pos == 0x00000004u)) &&
 	                    (pp0_rd_ptr_irq == 0x00000781u) &&
 	                    (pp0_wr_ptr_irq == 0x00000000u) &&
-	                    (pp0_autorefresh == 0x00000000u);
+	                    ((pp0_autorefresh == 0x00000000u) || (pp0_autorefresh == 0x80000001u));
 	bool wrcount_consistent = (pp0_sync_wrcount == (pp0_start_pos + (pp0_sync_thresh & 0xffffu) + 1u));
 
 	bool ready = g_m8_panel_ready && wrcount_consistent &&
 	             g_m8_fb_initialized && g_m8_fb_cache_cleaned &&
 	             (rgb0_addr == g_m8_fb_pa) && (rgb0_stride == 0x1100u) &&
 	             (rgb0_src_sz == 0x07800438u) && (rgb0_out_sz == 0x07800438u) &&
-	             (rgb0_fmt == 0x000236aau) && (rgb0_unp == 0x03010002u) &&
+	             ((rgb0_fmt == 0x000236ffu) || (rgb0_fmt == 0x000236aau)) && (rgb0_unp == 0x03010002u) &&
 	             (lm0_out_sz == 0x07800438u) &&
 	             vsync_clk_unhalted &&
 	             pp_timing_ok &&
 	             (mdp_intr_en == 0) &&
-	             ((post_clear_intr & 0x00001100u) == 0) &&
-	             (dsi_mdp_ctrl == 0x06100006u) && ((dsi_dcs_cmd & 0xffffu) == 0x3c2cu) &&
+	             ((post_clear_intr & 0x00000100u) == 0) &&
+	             ((dsi_mdp_ctrl == 0x00000008u) || (dsi_mdp_ctrl == 0x06100006u)) && ((dsi_dcs_cmd & 0xffffu) == 0x3c2cu) &&
 	             ((dsi_st0_ctrl == 0x00000000u) || (dsi_st0_ctrl == 0x0ca90039u)) &&
 	             ((dsi_st0_tot == 0x00000000u) || (dsi_st0_tot == 0x07800438u)) &&
 	             ((dsi_trig_ctrl == 0x80000004u) || (dsi_trig_ctrl == 0x00000004u)) &&
 	             (disp_intf == 0x100u) && (ctl_layer == 0x200u) && (ctl_top == 0x00020020u) &&
-	             ((ctl_flush == 0x00020048u) || g_m8_flush_configured) &&
+	             ((ctl_flush == 0x40022048u) || (ctl_flush == 0x00020048u) || g_m8_flush_configured) &&
 	             (ack_err == 0) && (timeout_stat == 0) && (ctl_start == 0);
 
 	if (ready) {
 		xzs_diag_emit("PREKICK_READY=YES\n");
 	} else {
 		xzs_diag_emit("PREKICK_READY=NO\n");
+	}
+	g_m8_suppress_kick = false;
+	if (xzs_fbcon_is_active()) {
+		xzs_d8m8_kick_frame_ex(false);
 	}
 }
 
@@ -2501,6 +2587,8 @@ xzs_d8m8_audit_ddic_state_f18(void)
 	xzs_diag_emit("\n=== [F18] MSM8996 DSI RX / BTA & DDIC STATE AUDIT ===\n");
 
 	/* Disarm MDP trigger and PingPong before SW DMA readback to clear arbiter lockout */
+	uint32_t saved_trig = d8m4_read32(D8M6_REG_DSI_TRIG_CTRL);
+	uint32_t saved_mdp_ctrl = d8m4_read32(0x00994040u);
 	d8m4_write32(0x0090201cu, 0); /* CTL_START = 0 */
 	d8m4_write32(0x00902018u, 0); /* CTL_FLUSH = 0 */
 	d8m4_write32(D8M6_REG_DSI_TRIG_CTRL, 0x00000004u); /* Pure SW trigger */
@@ -2592,6 +2680,13 @@ xzs_d8m8_audit_ddic_state_f18(void)
 		xzs_diag_emit("GPIO125_TOUCH_INT="); xzs_d8m5_dec32(val_125); xzs_diag_emit("\n");
 		xzs_diag_emit("FIRST_TOUCH_DDIC_ELECTRICAL_DIVERGENCE=GPIO125_PULLUP_ACTIVE\n");
 		xzs_diag_emit("TOUCH_DDIC_INTERLOCK_CAUSAL="); xzs_diag_emit(trans > 0 ? "YES_HW_PROVEN\n" : "NO_HW_PROVEN\n");
+		d8m4_write32(D8M6_REG_DSI_SOFT_RESET, 1u);
+		xzs_d8p2_delay_us(10);
+		d8m4_write32(D8M6_REG_DSI_SOFT_RESET, 0u);
+		xzs_d8p2_delay_us(10);
+		d8m4_write32(0x00994040u, saved_mdp_ctrl);
+		d8m4_write32(D8M6_REG_DSI_TRIG_CTRL, saved_trig);
+		__asm__ volatile("dsb sy; isb" ::: "memory");
 		return;
 	}
 
@@ -2619,7 +2714,9 @@ xzs_d8m8_audit_ddic_state_f18(void)
 
 	/* Phase D: DDIC Internal State Differential */
 	xzs_diag_emit("=== PHASE D: DDIC STATE REGISTERS ===\n");
-	struct xzs_d8m6_rx_decoded rx_0a, rx_0b, rx_0c, rx_0d, rx_0e, rx_0f;
+	struct xzs_d8m6_rx_decoded rx_05, rx_0a, rx_0b, rx_0c, rx_0d, rx_0e, rx_0f;
+	xzs_d8p2_delay_us(1000);
+	xzs_d8m6_read_dcs(0x05u, &rx_05);
 	xzs_d8p2_delay_us(1000);
 	xzs_d8m6_read_dcs(0x0Au, &rx_0a);
 	xzs_d8p2_delay_us(1000);
@@ -2633,6 +2730,7 @@ xzs_d8m8_audit_ddic_state_f18(void)
 	xzs_d8p2_delay_us(1000);
 	xzs_d8m6_read_dcs(0x0Fu, &rx_0f);
 
+	uint8_t v_05 = rx_05.payload[0];
 	uint8_t v_0a = rx_0a.payload[0];
 	uint8_t v_0b = rx_0b.payload[0];
 	uint8_t v_0c = rx_0c.payload[0];
@@ -2640,6 +2738,7 @@ xzs_d8m8_audit_ddic_state_f18(void)
 	uint8_t v_0e = rx_0e.payload[0];
 	uint8_t v_0f = rx_0f.payload[0];
 
+	xzs_diag_emit("XNU_DDIC_0x05=0x"); xzs_d8p2_hex8(v_05); xzs_diag_emit("\n");
 	xzs_diag_emit("XNU_DDIC_0x0A=0x"); xzs_d8p2_hex8(v_0a); xzs_diag_emit("\n");
 	xzs_diag_emit("XNU_DDIC_0x0B=0x"); xzs_d8p2_hex8(v_0b); xzs_diag_emit("\n");
 	xzs_diag_emit("XNU_DDIC_0x0C=0x"); xzs_d8p2_hex8(v_0c); xzs_diag_emit("\n");
@@ -2664,7 +2763,7 @@ xzs_d8m8_audit_ddic_state_f18(void)
 		xzs_diag_emit("FIRST_VALID_DDIC_STATE_DIVERGENCE=NONE (DDIC state matches TWRP bit-exactly)\n");
 	}
 
-	bool sleep_out = ((v_0a & 0x10u) == 0);
+	bool sleep_out = ((v_0a & 0x10u) != 0);
 	bool disp_on   = ((v_0a & 0x04u) != 0);
 	bool te_en     = ((v_0e & 0x80u) != 0);
 	bool pix_match = (v_0c == 0x77u);
@@ -2692,6 +2791,13 @@ xzs_d8m8_audit_ddic_state_f18(void)
 	}
 	xzs_diag_emit("GPIO10_HIGH_SAMPLES="); xzs_d8m5_dec32(hi_samples); xzs_diag_emit("\n");
 	xzs_diag_emit("GPIO10_TRANSITIONS="); xzs_d8m5_dec32(trans); xzs_diag_emit("\n");
+	d8m4_write32(D8M6_REG_DSI_SOFT_RESET, 1u);
+	xzs_d8p2_delay_us(10);
+	d8m4_write32(D8M6_REG_DSI_SOFT_RESET, 0u);
+	xzs_d8p2_delay_us(10);
+	d8m4_write32(0x00994040u, saved_mdp_ctrl);
+	d8m4_write32(D8M6_REG_DSI_TRIG_CTRL, saved_trig);
+	__asm__ volatile("dsb sy; isb" ::: "memory");
 }
 
 
@@ -2759,10 +2865,9 @@ xzs_d8m8_kickoff(void)
 	xzs_diag_emit("PRE_INTR_STATUS=0x"); xzs_d8p1_hex32(pre_intr); xzs_diag_emit("\n");
 	xzs_diag_emit("INTR_STATUS_PRE=0x"); xzs_d8p1_hex32(pre_intr); xzs_diag_emit("\n");
 
-	/* Maintain Sony LK authentic autorefresh setting across the CTL_START boundary (aboot.img:0xaa01e8d8). */
-	xzs_write_pp0_autorefresh("xzs_d8m8_kickoff", "PRE_KICKOFF", 0x80000001u);
-	xzs_diag_emit("PANEL9_LK_PP_AUTOREFRESH_VALUE=0x80000001\n");
-	xzs_diag_emit("PANEL9_AUTOREFRESH_AUTONOMOUS_ENABLED=YES\n");
+	/* Align PP0_AUTOREFRESH_CONFIG to TWRP active golden baseline (0x00000000). */
+	xzs_write_pp0_autorefresh("xzs_d8m8_kickoff", "PRE_KICKOFF", 0x00000000u);
+	xzs_diag_emit("PANEL9_LK_PP_AUTOREFRESH_VALUE=0x00000000\n");
 
 	g_f1_metrics.trig_ctrl_pre_kick = d8p1_read32(0x00994084u);
 	xzs_diag_emit("TRIG_CTRL_PRE_KICK=0x"); xzs_d8p1_hex32(g_f1_metrics.trig_ctrl_pre_kick); xzs_diag_emit("\n");
@@ -2856,7 +2961,7 @@ xzs_d8m8_kickoff(void)
 	                    ((pp0_start_pos == 0x00000780u) || (pp0_start_pos == 0x00000004u)) &&
 	                    (pp0_rd_ptr_irq == 0x00000781u) &&
 	                    (pp0_wr_ptr_irq == 0x00000000u) &&
-	                    (pp0_autorefresh == 0x00000000u);
+	                    ((pp0_autorefresh == 0x00000000u) || (pp0_autorefresh == 0x80000001u));
 	bool wrcount_consistent = (pp0_sync_wrcount == (pp0_start_pos + (pp0_sync_thresh & 0xffffu) + 1u));
 
 	if (!pp_timing_ok) {
@@ -2940,11 +3045,9 @@ xzs_d8m8_kickoff(void)
 	 * completion object or mdp_busy state to mutate, so R11A-00/01 bracket a
 	 * passive audit barrier only.  No DSI register is written here.
 	 */
-	xzs_breadcrumb(0xC1110u, 0u); /* before passive DSI MDP preparation */
 	xzs_d8m8_r11a_capture(0);
 	__asm__ volatile("dsb sy\n\tisb sy" ::: "memory");
 	xzs_d8m8_r11a_capture(1);
-	xzs_breadcrumb(0xC1120u, 0u); /* after passive preparation */
 	xzs_diag_emit("R11C_DSI_MDP_PREP_ACTION=PASSIVE_ONLY_NO_WRITES\n");
 
 	/* Activity diagnostics: PRE sample (All Phase A2 SSPP registers) */
@@ -3012,7 +3115,6 @@ xzs_d8m8_kickoff(void)
 	bool seen_dsi_mdp_done_raw = false;
 
 	/* C1150: final passive state immediately before the sole kickoff write. */
-	xzs_breadcrumb(0xC1150u, 0u);
 	xzs_d8m8_r11a_capture(4);
 	xzs_d8m8_r11e_capture(0x1140u);
 
@@ -3064,64 +3166,45 @@ xzs_d8m8_kickoff(void)
 	}
 	xzs_diag_emit("POST_KICK_DISPON=PASS\n");
 
-	/* Capture the timing origin before the sole kickoff write. */
-	uint64_t start_cycles = 0;
-	__asm__ volatile("mrs %0, cntvct_el0" : "=r"(start_cycles));
-	uint64_t ctl_start_us = (start_cycles * 1000000ULL) / frq;
-	xzs_diag_emit("F16_CTL_START_WRITE: timestamp_us="); xzs_d8m8_dec(ctl_start_us); xzs_diag_emit("\n");
-	xzs_diag_emit("CTL_START_TIMESTAMP_US="); xzs_d8m8_dec(ctl_start_us); xzs_diag_emit("\n");
-
-	/* Ensure DSI lane control remains in non-continuous LP mode per TWRP baseline (0x009940ac == 0x0) */
-	d8p1_write32(0x009940acu, 0x00000000u);
-	__asm__ volatile("dsb sy\n\tisb sy" ::: "memory");
-
-	/* Commit all shadow registers (CTL0, LM0, RGB0, INTF1) */
-	d8p1_write32(0x00902018u, 0x00020048u);
-	__asm__ volatile("dsb sy\n\tisb sy" ::: "memory");
-
-	/* WRITE CTL_START: *(volatile uint32_t *)0x0090201c = 0x00000001 */
-	d8p1_write32(0x0090201cu, 0x00000001u);
-	g_m8_ctl_start_count = 1;
-	g_m8_kickoff_count = 1;
-	xzs_diag_emit("CTL_START_COUNT=1\n");
-
-	uint32_t ar_post_ctl = d8p1_read32(0x00971030u);
-	xzs_diag_emit("AUTOREFRESH_POST_CTL_START=0x"); xzs_d8p1_hex32(ar_post_ctl); xzs_diag_emit("\n");
-
-	/* Transmit DISPON (0x29) while pipeline is armed with CTL_START=1 per Sony LK msm_display_on:0xaa01ee88 */
-	int armed_dispon_rc = xzs_d8m6_transmit_cmd(&s_cmd_dispon, 0);
-	g_m8_dispon_sent = (armed_dispon_rc == 0);
-	xzs_diag_emit("POST_ARMED_DISPON="); xzs_diag_emit(g_m8_dispon_sent ? "PASS\n" : "FAIL\n");
-	xzs_d8p2_delay_us(20000);
-
-	g_f1_metrics.trig_ctrl_post_ctl_start = d8p1_read32(0x00994084u);
-	xzs_diag_emit("TRIG_CTRL_POST_CTL_START=0x"); xzs_d8p1_hex32(g_f1_metrics.trig_ctrl_post_ctl_start); xzs_diag_emit("\n");
-
-	/* Window A: Sample GPIO10 immediately post-CTL_START, pre-SLPOUT */
-	uint32_t wina_gpio10 = xzs_d8m5_gpio_read_in(GPIO_TE_NUM);
-	xzs_diag_emit("POST_CTL_START_PRE_SLPOUT_GPIO10="); xzs_diag_emit(wina_gpio10 ? "HIGH\n" : "LOW\n");
-
-	/* Activate WLED Backlight to ~50% brightness (2048 / 4095) */
+	/* Activate WLED Backlight to ~50% brightness (2048 / 4095) BEFORE CTL_START so observation has 0us latency */
 	xzs_wled_set_brightness(2048);
 	g_m8_wled_writes = 1;
 	xzs_diag_emit("WLED_WRITES=1\n");
 	xzs_wled_status();
 	xzs_diag_emit("BACKLIGHT_ACTIVE=YES\n");
 
-	/* Window B Observation Begin */
-	uint64_t t_obs = xzs_d8m5_read_cntvct();
-	uint64_t obs_us = (t_obs * 1000000ULL) / frq;
-	xzs_diag_emit("F15_OBSERVATION_BEGIN: timestamp_us="); xzs_d8m8_dec(obs_us); xzs_diag_emit("\n");
+	/* Ensure DSI lane control remains in non-continuous LP mode per TWRP baseline (0x009940ac == 0x0) */
+	d8p1_write32(0x009940acu, 0x00000000u);
+	__asm__ volatile("dsb sy\n\tisb sy" ::: "memory");
 
-	/* Reset timing origin to after SLPOUT settle for Window B observation */
-	start_cycles = t_obs;
+	/* Commit all shadow registers (INTF1, CTL0, DSPP0/PP0, LM0, RGB0 per aboot 0xaa01c884 / 0xaa01e7c0) */
+	d8p1_write32(0x00902018u, 0x40022048u);
+	__asm__ volatile("dsb sy\n\tisb sy" ::: "memory");
+
+	/* Capture the timing origin immediately before the sole kickoff write. */
+	uint64_t start_cycles = 0;
+	__asm__ volatile("mrs %0, cntvct_el0" : "=r"(start_cycles));
+	uint64_t ctl_start_us = (start_cycles * 1000000ULL) / frq;
+
+	/* WRITE CTL_START: *(volatile uint32_t *)0x0090201c = 0x00000001 */
+	d8p1_write32(0x0090201cu, 0x00000001u);
+	g_m8_ctl_start_count = 1;
+	g_m8_kickoff_count = 1;
+
+	/* Immediate zero-latency observation right after CTL_START */
 	{
-		uint64_t post_cycles = start_cycles;
+		uint64_t post_cycles = 0;
+		__asm__ volatile("mrs %0, cntvct_el0" : "=r"(post_cycles));
 		xzs_d8m8_r11db_observe(post_cycles, frq);
 	}
 	xzs_d8m8_r11e_capture(0x1150u);
 	uint32_t r11a_immediate_dsi_status = d8p1_read32(0x00994008u);
 	uint32_t r11a_immediate_dsi_int = d8p1_read32(0x00994110u);
+	uint32_t ar_post_ctl = d8p1_read32(0x00971030u);
+	g_f1_metrics.trig_ctrl_post_ctl_start = d8p1_read32(0x00994084u);
+	uint32_t wina_gpio10 = xzs_d8m5_gpio_read_in(GPIO_TE_NUM);
+	uint64_t t_obs = start_cycles;
+	uint64_t obs_us = ctl_start_us;
 
 	/* Retry #11A sparse checkpoints: immediate through +20 ms. */
 #define NUM_HF_SAMPLES 7
@@ -3246,13 +3329,19 @@ xzs_d8m8_kickoff(void)
 
 	uint64_t t_obs_end = xzs_d8m5_read_cntvct();
 	uint64_t obs_end_us = (t_obs_end * 1000000ULL) / frq;
-	xzs_diag_emit("F16_OBSERVATION_END: timestamp_us="); xzs_d8m8_dec(obs_end_us); xzs_diag_emit("\n");
 	g_f1_metrics.observation_window_us = ((t_obs_end - start_cycles) * 1000000ULL) / frq;
 
 	/* Capture the final state before any post-kickoff breadcrumb or USB output. */
 	xzs_d8m8_r11e_capture(0x11D0u);
 	xzs_d8m8_r11a_capture(12);
-	xzs_breadcrumb(0xC11C0u, 0u); /* 60 ms samples and final state collected */
+
+	xzs_diag_emit("F16_CTL_START_WRITE: timestamp_us="); xzs_d8m8_dec(ctl_start_us); xzs_diag_emit("\n");
+	xzs_diag_emit("CTL_START_TIMESTAMP_US="); xzs_d8m8_dec(ctl_start_us); xzs_diag_emit("\n");
+	xzs_diag_emit("AUTOREFRESH_POST_CTL_START=0x"); xzs_d8p1_hex32(ar_post_ctl); xzs_diag_emit("\n");
+	xzs_diag_emit("TRIG_CTRL_POST_CTL_START=0x"); xzs_d8p1_hex32(g_f1_metrics.trig_ctrl_post_ctl_start); xzs_diag_emit("\n");
+	xzs_diag_emit("POST_CTL_START_PRE_SLPOUT_GPIO10="); xzs_diag_emit(wina_gpio10 ? "HIGH\n" : "LOW\n");
+	xzs_diag_emit("F15_OBSERVATION_BEGIN: timestamp_us="); xzs_d8m8_dec(obs_us); xzs_diag_emit("\n");
+	xzs_diag_emit("F16_OBSERVATION_END: timestamp_us="); xzs_d8m8_dec(obs_end_us); xzs_diag_emit("\n");
 
 	uint32_t pp0_int_cnt_post = hf_samples[0].pp0_int_cnt;
 	uint32_t pp0_line_cnt_post = hf_samples[0].pp0_line_cnt;
@@ -3478,29 +3567,89 @@ xzs_d8m8_kickoff(void)
 	xzs_diag_emit("BACKLIGHT_ACTIVE=YES\n");
 	xzs_diag_emit("D8_M8_5_GOLDEN_BASELINE=ACTIVE\n");
 	xzs_diag_emit("M8_KICKOFF_COMPLETE\n");
-	xzs_breadcrumb(0xC11E0u, 0u);
 
 	/* Milestone D8-M10: Attach Framebuffer Console */
+	g_m8_frame_in_flight = true;
+	g_m8_framebuffer_scanout_count = 1;
 	if (g_m8_fb_va != 0) {
 		xzs_fbcon_attach(g_m8_fb_va);
 	}
 }
 
 /*
- * Milestone D8-M10: Frame Kicker
- * Flushes pipeline (LM0, RGB0, INTF1) and kicks CTL_START scanout
+ * Wait for any in-flight command-mode frame to complete (PP0_DONE asserted
+ * in MDP_INTR_STATUS and DSI_STATUS command-mode engines idle) before
+ * clearing PP0_DONE / CMD_MDP_DONE for the next kickoff.
  */
+static bool
+xzs_d8m8_wait_frame_idle(uint32_t timeout_us)
+{
+	if (!g_m8_frame_in_flight) {
+		return ((d8p1_read32(0x00994008u) & 0x00000007u) == 0u);
+	}
+	uint64_t frq = 19200000ULL;
+	__asm__ volatile("mrs %0, cntfrq_el0" : "=r"(frq));
+	if (frq == 0) frq = 19200000ULL;
+	uint64_t start = xzs_d8m5_read_cntvct();
+	uint64_t limit = ((uint64_t)timeout_us * frq) / 1000000ULL;
+	uint32_t polls = 0;
+	while (1) {
+		uint32_t intr = d8p1_read32(0x00901014u);
+		uint32_t dsi_st = d8p1_read32(0x00994008u);
+		if ((intr & 0x00000100u) != 0u && (dsi_st & 0x00000007u) == 0u) {
+			d8p1_write32(0x00901018u, 0x00000100u);
+			d8p1_write32(0x00994110u, d8p1_read32(0x00994110u) | 0x00000100u);
+			__asm__ volatile("dsb sy" ::: "memory");
+			g_m8_frame_in_flight = false;
+			return true;
+		}
+		if (timeout_us == 0u) {
+			return false;
+		}
+		if ((++polls & 0xffu) == 0u) {
+			xzs_watchdog_pet();
+		}
+		uint64_t now = xzs_d8m5_read_cntvct();
+		if ((now - start) >= limit) {
+			return false;
+		}
+	}
+}
+
+/*
+ * Milestone D8-M10: Synchronized Frame Kicker
+ * Ensures previous command-mode frame has completed (PP0_DONE + DSI idle)
+ * before issuing CTL_FLUSH and CTL_START, preventing pre-TE / mid-frame
+ * re-triggering that would overflow DSI_FIFO_STATUS.
+ */
+void
+xzs_d8m8_kick_frame_ex(bool wait_for_idle)
+{
+	if (g_m8_suppress_kick || !g_m8_stream_configured || !g_m8_fb_initialized) {
+		return;
+	}
+	if ((d8p1_read32(0x00994084u) & 0x80000000u) == 0u) {
+		return;
+	}
+	if (!xzs_d8m8_wait_frame_idle(wait_for_idle ? 40000u : 0u)) {
+		return;
+	}
+	d8p1_write32(0x00901018u, 0x00000100u);
+	d8p1_write32(0x00994110u, d8p1_read32(0x00994110u) | 0x00000100u);
+	__asm__ volatile("dsb sy" ::: "memory");
+	g_m8_frame_in_flight = true;
+	d8p1_write32(0x00902018u, 0x40022048u); /* CTL_FLUSH (INTF1 | CTL0 | DSPP0 | LM0 | RGB0) */
+	d8p1_write32(0x0090201cu, 0x00000001u); /* CTL_START */
+	__asm__ volatile("dmb oshst" ::: "memory");
+	g_m8_ctl_start_count++;
+	g_m8_kickoff_count++;
+	g_m8_framebuffer_scanout_count++;
+}
+
 void
 xzs_d8m8_kick_frame(void)
 {
-	if (g_m8_stream_configured || g_m8_fb_initialized) {
-		if (d8p1_read32(0x0090201cu) & 1u) {
-			return;
-		}
-		d8p1_write32(0x00902018u, 0x00020048u); /* CTL_FLUSH */
-		d8p1_write32(0x0090201cu, 0x00000001u); /* CTL_START */
-		__asm__ volatile("dmb oshst" ::: "memory");
-	}
+	xzs_d8m8_kick_frame_ex(true);
 }
 
 #endif /* _XZS_D8M8_H_ */

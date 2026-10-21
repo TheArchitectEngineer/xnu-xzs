@@ -213,13 +213,15 @@ static const uint8_t s_p9_payload_d7[33] = { 0xd7, 0x04, 0xff, 0x23, 0x55, 0x47,
 static const uint8_t s_p9_payload_c1[32] = { 0xc1, 0x84, 0x00, 0x00, 0x00, 0x88, 0x01, 0x00, 0x40, 0xc0, 0x35, 0xe6, 0x1a, 0x63, 0xcd, 0xb1, 0xe6, 0xc0, 0x7a, 0x00, 0xc8, 0x08, 0x00, 0x00, 0xaa, 0x40, 0x02, 0x82, 0x01, 0x08, 0x00, 0x01 };
 static const uint8_t s_p9_payload_c7[31] = { 0xc7, 0x06, 0x10, 0x1a, 0x23, 0x35, 0x44, 0x4e, 0x5d, 0x42, 0x4b, 0x57, 0x64, 0x6b, 0x71, 0x79, 0x04, 0x0e, 0x19, 0x22, 0x35, 0x43, 0x4e, 0x5d, 0x42, 0x4a, 0x55, 0x63, 0x6b, 0x70, 0x79 };
 static const uint8_t s_p9_payload_c8[20] = { 0xc8, 0x01, 0x00, 0xfd, 0x01, 0xff, 0xfc, 0x00, 0x00, 0xfd, 0x01, 0xff, 0xfc, 0x00, 0x00, 0xfd, 0x01, 0xff, 0xfc, 0x00 };
+static const uint8_t s_p9_payload_c6_59[2] = { 0xc6, 0x59 };
 
 static const struct xzs_d8m6_cmd s_p9_cmd_51 = { .name = "P9_CMD1 (51 FF Brightness)", .dtype = DSI_DCS_LONG_WRITE, .dlen = 2, .payload = s_p9_payload_51, .post_wait_us = 0 };
 static const struct xzs_d8m6_cmd s_p9_cmd_53 = { .name = "P9_CMD2 (53 0C Ctrl Disp)",  .dtype = DSI_DCS_LONG_WRITE, .dlen = 2, .payload = s_p9_payload_53, .post_wait_us = 0 };
 static const struct xzs_d8m6_cmd s_p9_cmd_55 = { .name = "P9_CMD3 (55 00 CABC)",       .dtype = DSI_DCS_LONG_WRITE, .dlen = 2, .payload = s_p9_payload_55, .post_wait_us = 0 };
 static const struct xzs_d8m6_cmd s_p9_cmd_35 = { .name = "P9_CMD4 (35 00 TEON)",       .dtype = DSI_DCS_LONG_WRITE, .dlen = 2, .payload = s_p9_payload_35, .post_wait_us = 0 };
-static const struct xzs_d8m6_cmd s_p9_cmd_b0 = { .name = "P9_CMD5 (B0 04 Unlock)",     .dtype = DSI_GENERIC_SHORT_WRITE_2_PARAM, .dlen = 2, .payload = s_p9_payload_b0, .post_wait_us = 0 };
-static const struct xzs_d8m6_cmd s_p9_cmd_d6 = { .name = "P9_CMD6 (D6 01 TE Output)",  .dtype = DSI_GENERIC_SHORT_WRITE_2_PARAM, .dlen = 2, .payload = s_p9_payload_d6, .post_wait_us = 0 };
+static const struct xzs_d8m6_cmd s_p9_cmd_b0 = { .name = "P9_CMD5 (B0 04 Unlock)",     .dtype = DSI_GENERIC_LONG_WRITE, .dlen = 2, .payload = s_p9_payload_b0, .post_wait_us = 0 };
+static const struct xzs_d8m6_cmd s_p9_cmd_d6 = { .name = "P9_CMD6 (D6 01 TE Output)",  .dtype = DSI_GENERIC_LONG_WRITE, .dlen = 2, .payload = s_p9_payload_d6, .post_wait_us = 0 };
+static const struct xzs_d8m6_cmd s_p9_cmd_c6_59 = { .name = "P9_CMD_FPS (C6 59 60Hz)", .dtype = DSI_GENERIC_LONG_WRITE, .dlen = 2, .payload = s_p9_payload_c6_59, .post_wait_us = 0 };
 static const struct xzs_d8m6_cmd s_p9_cmd_c9 = { .name = "P9_CMD7 (C9 Oscillator)",     .dtype = DSI_GENERIC_LONG_WRITE, .dlen = 9, .payload = s_p9_payload_c9, .post_wait_us = 0 };
 static const struct xzs_d8m6_cmd s_p9_cmd_d5 = { .name = "P9_CMD8 (D5 Timing)",         .dtype = DSI_GENERIC_LONG_WRITE, .dlen = 12, .payload = s_p9_payload_d5, .post_wait_us = 0 };
 static const struct xzs_d8m6_cmd s_p9_cmd_d0 = { .name = "P9_CMD9 (D0 Timing)",         .dtype = DSI_GENERIC_LONG_WRITE, .dlen = 17, .payload = s_p9_payload_d0, .post_wait_us = 0 };
@@ -901,7 +903,7 @@ xzs_d8m6_panel_power_up_to_idle(void)
 	xzs_diag_emit("ENTRY_DSI_HOST_ON="); xzs_diag_emit((ctrl & 1u) ? "YES\n" : "NO\n");
 	xzs_diag_emit("ENTRY_DSI_PHY_ON="); xzs_diag_emit(((pll & 0x21u) == 0x21u) ? "YES\n" : "NO\n");
 	xzs_diag_emit("FASTBOOT_HANDOFF_PANEL_STATE=");
-	if ((entry_lab_st & LAB_STATUS1_VREG_OK) || (entry_ibb_st & IBB_STATUS1_VREG_OK) || entry_gpio51) {
+	if ((entry_lab_st & LAB_STATUS1_VREG_OK) || (entry_ibb_st & IBB_STATUS1_VREG_OK) || (entry_gpio51 == 0) || (entry_gpio50 == 0)) {
 		xzs_diag_emit("PARTIALLY_POWERED\n");
 	} else {
 		xzs_diag_emit("FULLY_OFF\n");
@@ -913,7 +915,7 @@ xzs_d8m6_panel_power_up_to_idle(void)
 	 * Phase C / F12 Correction: Verify True-Cold Discharge Before Reinitialization
 	 */
 	xzs_diag_emit("[F12-TRUE-COLD] Verifying source-proven panel discharge:\n");
-	if ((entry_lab_st & LAB_STATUS1_VREG_OK) || (entry_ibb_st & IBB_STATUS1_VREG_OK) || entry_gpio51) {
+	if ((entry_lab_st & LAB_STATUS1_VREG_OK) || (entry_ibb_st & IBB_STATUS1_VREG_OK) || (entry_gpio51 == 0) || (entry_gpio50 == 0)) {
 		/* Disable DSI before cutting VDDIO to protect PHY pads */
 		d8m4_write32(D8M6_REG_DSI_CTRL, 0u);
 		d8m4_write32(D8M6_REG_DSI_CLK_CTRL, 0u);
@@ -940,13 +942,18 @@ xzs_d8m6_panel_power_up_to_idle(void)
 		return -3;
 	}
 
-	/* 2. VDDIO ON -> wait 10 ms */
-	xzs_diag_emit("  2. Enable VDDIO (GPIO51=1, GPIO50=1)...\n");
+	/*
+	 * 2. Enable VDDIO (Active-LOW: GPIO 51 = 0 LOW -> wait 10 ms -> GPIO 50 = 0 LOW)
+	 * Proven by aboot.img (panel_power_on @ 0xaa03eea4..0xaa03eed0) and
+	 * twrp-kernel.bin (mdss_dsi_panel_driver_power_on @ 0x4d6308..0x4d6344).
+	 */
+	xzs_diag_emit("  2. Enable VDDIO (Active-LOW: GPIO51=0 -> 10ms -> GPIO50=0)...\n");
 	xzs_d8m5_set_vddio_high();
-	xzs_d8m5_set_touch_vddio_high();
 	xzs_d8p2_delay_us(10000);
-	if (xzs_d8m5_gpio_read_in(GPIO_VDDIO_NUM) == 0 || xzs_d8m5_gpio_read_in(GPIO_TOUCH_VDDIO_NUM) == 0) {
-		xzs_diag_emit("!!! FAIL: VDDIO enable failed!\n");
+	xzs_d8m5_set_touch_vddio_high();
+	xzs_d8p2_delay_us(1000);
+	if (xzs_d8m5_gpio_read_in(GPIO_VDDIO_NUM) != 0 || xzs_d8m5_gpio_read_in(GPIO_TOUCH_VDDIO_NUM) != 0) {
+		xzs_diag_emit("!!! FAIL: VDDIO enable failed (expected Active-LOW 0)!\n");
 		xzs_d8m5_power_down();
 		return -4;
 	}
@@ -1037,7 +1044,7 @@ xzs_d8m6_panel_power_up_to_idle(void)
 	xzs_d8p2_delay_us(10);
 	d8m4_write32(D8M6_REG_DSI_SOFT_RESET, 0u);
 	xzs_d8p2_delay_us(10);
-	d8m4_write32(D8M6_REG_DSI_CLK_CTRL, 0x0000003fu);
+	d8m4_write32(D8M6_REG_DSI_CLK_CTRL, 0x0000023fu);
 	d8m4_write32(D8M6_REG_DSI_TRIG_CTRL, 0x00000004u);
 	d8m4_write32(D8M6_REG_DSI_CTRL, 0x000001f5u);
 	/* Ensure DSI_LANE_CTRL is 0x00000000 (matching TWRP golden state; no forced HS clk) */

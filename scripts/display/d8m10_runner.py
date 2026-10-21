@@ -73,7 +73,7 @@ def scanout_status(kickoff: str):
     dsi_busy = "DSI_MDP_BUSY_SEEN=YES" in kickoff or "DSI_MDP_BUSY_SEEN=yes" in kickoff
     dsi_done = "CMD_MDP_DONE_SEEN=YES" in kickoff or "DSI_MDP_DONE_RAW_SEEN=yes" in kickoff
 
-    if pp_line > 0 and pp_out > 0 and pp_done and (dsi_busy or dsi_done):
+    if pp_line >= 0x780 and pp_done and dsi_busy and dsi_done:
         return True, pp_line, pp_out, "DSI_COMMAND_MODE_FRAME_COMPLETE"
     if pp_line > 0:
         return False, pp_line, pp_out, "PINGPONG_STARTED_DSI_COMPLETION_MISSING"
@@ -83,11 +83,15 @@ def scanout_status(kickoff: str):
 def main():
     parser = argparse.ArgumentParser(description="D8-M10 Hardware Test Runner")
     parser.add_argument("--run-id", default="run_test", help="Identifier for run directory")
+    parser.add_argument("--out-dir", default=None, help="Custom output directory")
     parser.add_argument("--stability", action="store_true", help="Run 10-minute long-run stability test")
     parser.add_argument("--no-reboot", action="store_true", help="Do not reboot back to fastboot at end")
     args = parser.parse_args()
 
-    log_dir = ROOT / "artifacts" / "hw" / "d8m10" / args.run_id
+    if args.out_dir:
+        log_dir = Path(args.out_dir)
+    else:
+        log_dir = ROOT / "artifacts" / "hw" / "d8m10" / args.run_id
     log_dir.mkdir(parents=True, exist_ok=True)
 
     transcript = []
@@ -362,6 +366,12 @@ def main():
             send_cmd(dev, f"echo scroll_line_{i:03d}", wait_sec=10.0, required_substr=f"scroll_line_{i:03d}")
             time.sleep(0.02)
         note("[PASS] Scrolling test complete! Prompt is alive and responsive.\n")
+
+        note("\n--- STEP 8B: Post-Scroll Multi-Frame Hardware Health Verification ---\n")
+        post_scroll_status = send_cmd(dev, "display m8-prekick-status", wait_sec=20.0, required_substr="PREKICK_READY=YES")
+        if "DSI_STATUS_PRE=0x00000000" not in post_scroll_status or "DSI_FIFO_STATUS_PRE=0x11111000" not in post_scroll_status:
+            raise RuntimeError(f"Post-scroll DSI status/FIFO not clean idle:\n{post_scroll_status}")
+        note("[PASS] Multi-frame scanout health verified (DSI_STATUS=0x00000000, DSI_FIFO_STATUS=0x11111000, 0 errors)!\n")
 
         # --- STEP 9: Stability Run (10 Minutes) if requested ---
         if args.stability:

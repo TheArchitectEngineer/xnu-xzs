@@ -14,9 +14,9 @@
 | **Working Branch** | `codex/fix-display-regression-bisect` |
 | **PAC Audit** | `0` executable PAC instructions (100% ARMv8.0-A compliant) |
 | **Flash Guardrail** | 100% PASS (Zero persistent partition writes; strictly `fastboot boot`) |
-| **Reproduction Verdict** | **INVALIDATED AS KNOWN-GOOD SCANOUT BASELINE** |
-| **Physical LCD Outcome** | WLED backlight active; panel renders black screen (no visible pixels or test patterns) |
-| **Telemetry Verdict** | `PP_LINE=0`, `PP_OUT=0`, `DSI_MDP_BUSY=0`, `PP0_DONE=0`, `CMD_MDP_DONE=0` |
+| **Reproduction Verdict** | **INVALIDATED AS KNOWN-GOOD SCANOUT BASELINE (`c84623b`); subsequently RESOLVED & SEALED at HEAD (`p9-glyph-fix-run1/2`)** |
+| **Physical LCD Outcome** | **RESOLVED**: Upright console log (top) + 8 color bars & checkerboard badge (bottom) visibly rendered on physical LCD across consecutive RAM boots |
+| **Telemetry Verdict** | **RESOLVED**: `PP_LINE_MAX=0x00000780`, `DSI_MDP_BUSY=YES`, `PP0_DONE=YES`, `CMD_MDP_DONE=YES`, `DDIC_0x0A=0x1c`, `DDIC_0x05=0x00`, `280+` frames/boot |
 | **Device State After Run** | Cleanly returned to fastboot (`BH905SX976 fastboot`) |
 
 ---

@@ -898,8 +898,10 @@ sleh_synchronous(arm_context_t *context, uint64_t esr, vm_offset_t far, __unused
 				ss64->cpsr &= ~0x20000000ULL;
 				return;
 			} else if (ss64->x[16] == 55) {
+				extern void xzs_display_quiesce_for_reboot(void);
 				extern void xzs_usb_t1z_report(void);
 				extern void xzs_spin_halt(void);
+				xzs_display_quiesce_for_reboot();
 				xzs_usb_t1z_report();
 				xzs_spin_halt();
 			}

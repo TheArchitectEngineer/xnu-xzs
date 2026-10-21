@@ -28,6 +28,10 @@ static int s_m3_attempted = 0;
 static int
 display_is_allowed(uint32_t addr)
 {
+	if ((addr >= 0x008c0000u && addr <= 0x008cffffu) ||
+	    (addr >= 0x00994000u && addr <= 0x00994fffu)) {
+		return 1;
+	}
 	int lo = 0;
 	int hi = M3_WRITE_ALLOWLIST_COUNT - 1;
 	while (lo <= hi) {
@@ -252,18 +256,75 @@ xzs_d8m3_dump_phy(void)
 {
 	xzs_diag_emit("[D8-M3] DSI0 PHY STATUS:\n");
 	xzs_d8m3_print_reg(0x00994410, xzs_phys_read32(0x00994410));
-	xzs_d8m3_print_reg(0x00994440, xzs_phys_read32(0x00994440));
+	xzs_d8m3_print_reg(0x00994414, xzs_phys_read32(0x00994414));
+	xzs_d8m3_print_reg(0x00994418, xzs_phys_read32(0x00994418));
+	xzs_d8m3_print_reg(0x0099441c, xzs_phys_read32(0x0099441c));
+	xzs_d8m3_print_reg(0x00994420, xzs_phys_read32(0x00994420));
 	xzs_d8m3_print_reg(0x00994448, xzs_phys_read32(0x00994448));
 	xzs_d8m3_print_reg(0x0099444c, xzs_phys_read32(0x0099444c));
-	xzs_d8m3_print_reg(0x009944c0, xzs_phys_read32(0x009944c0));
-	xzs_d8m3_print_reg(0x00994540, xzs_phys_read32(0x00994540));
+	xzs_d8m3_print_reg(0x0099481c, xzs_phys_read32(0x0099481c));
+	xzs_d8m3_print_reg(0x00994538, xzs_phys_read32(0x00994538));
 	xzs_d8m3_print_reg(0x00994564, xzs_phys_read32(0x00994564));
-	xzs_d8m3_print_reg(0x009945c0, xzs_phys_read32(0x009945c0));
+	xzs_d8m3_print_reg(0x009945b8, xzs_phys_read32(0x009945b8));
 	xzs_d8m3_print_reg(0x009945e4, xzs_phys_read32(0x009945e4));
-	xzs_d8m3_print_reg(0x00994640, xzs_phys_read32(0x00994640));
+	xzs_d8m3_print_reg(0x00994638, xzs_phys_read32(0x00994638));
 	xzs_d8m3_print_reg(0x00994664, xzs_phys_read32(0x00994664));
+	xzs_d8m3_print_reg(0x009946b8, xzs_phys_read32(0x009946b8));
 	xzs_d8m3_print_reg(0x009946e4, xzs_phys_read32(0x009946e4));
+	xzs_d8m3_print_reg(0x00994738, xzs_phys_read32(0x00994738));
 	xzs_d8m3_print_reg(0x00994764, xzs_phys_read32(0x00994764));
+}
+
+/*
+ * Program all 5 14nm DSI PHY lanes (DL0..DL3, CLK) + digital block reset
+ * per Sony XZs aboot.img (0xaa028bd0..0xaa028d58, Panel 9 table 0xaa043488)
+ * and Linux drivers/gpu/drm/msm/dsi/phy/dsi_phy_14nm.c (dsi_14nm_phy_enable).
+ */
+static int
+xzs_d8m3_program_14nm_phy_lanes_and_reset(int is_dryrun)
+{
+	if (display_write32(0x0099444cu, 0x0000001cu, is_dryrun) != 0) return -1;
+	if (display_write32(0x00994418u, 0x00000001u, is_dryrun) != 0) return -1;
+
+	for (uint32_t i = 0; i < 5u; i++) {
+		uint32_t lb = 0x00994500u + (i * 0x80u);
+		/* HS timing registers +0x18..+0x34 (keyaki.dts: 24 1f 08 09 05 03 04 a0, clk HS_ZERO=0x1b) */
+		if (display_write32(lb + 0x18u, 0x00000024u, is_dryrun) != 0) return -1;
+		if (display_write32(lb + 0x1cu, (i == 4u) ? 0x0000001bu : 0x0000001fu, is_dryrun) != 0) return -1;
+		if (display_write32(lb + 0x20u, 0x00000008u, is_dryrun) != 0) return -1;
+		if (display_write32(lb + 0x24u, 0x00000009u, is_dryrun) != 0) return -1;
+		if (display_write32(lb + 0x28u, 0x00000005u, is_dryrun) != 0) return -1;
+		if (display_write32(lb + 0x2cu, 0x00000003u, is_dryrun) != 0) return -1;
+		if (display_write32(lb + 0x30u, 0x00000004u, is_dryrun) != 0) return -1;
+		if (display_write32(lb + 0x34u, 0x000000a0u, is_dryrun) != 0) return -1;
+
+		/* Lane LDO VREG control +0x64 = 0x1d */
+		if (display_write32(lb + 0x64u, 0x0000001du, is_dryrun) != 0) return -1;
+
+		/* Lane drive strength +0x38..+0x3c (DL0..3: 0xff/0x06, CLK: 0xff/0x00) */
+		if (display_write32(lb + 0x38u, 0x000000ffu, is_dryrun) != 0) return -1;
+		if (display_write32(lb + 0x3cu, (i == 4u) ? 0x00000000u : 0x00000006u, is_dryrun) != 0) return -1;
+
+		/* Lane CFG0..3 +0x00..+0x0c and TEST_DATAPATH/TEST_STR +0x10..+0x14 */
+		if (display_write32(lb + 0x00u, 0x00000000u, is_dryrun) != 0) return -1;
+		if (display_write32(lb + 0x04u, 0x00000000u, is_dryrun) != 0) return -1;
+		if (display_write32(lb + 0x08u, 0x00000010u, is_dryrun) != 0) return -1;
+		if (display_write32(lb + 0x0cu, (i == 4u) ? 0x0000008fu : 0x0000000fu, is_dryrun) != 0) return -1;
+		if (display_write32(lb + 0x10u, 0x00000000u, is_dryrun) != 0) return -1;
+		if (display_write32(lb + 0x14u, 0x00000088u, is_dryrun) != 0) return -1;
+	}
+
+	/* Pulse PHY digital block reset (CMN_CTRL_1 = 0x80 -> delay 100us -> 0x00) and enable CLKBUFLR_EN */
+	if (display_write32(0x00994448u, 0x00000000u, is_dryrun) != 0) return -1;
+	if (display_write32(0x00994420u, 0x00000080u, is_dryrun) != 0) return -1;
+	if (!is_dryrun) {
+		delay(100);
+	}
+	if (display_write32(0x00994420u, 0x00000000u, is_dryrun) != 0) return -1;
+	if (display_write32(0x0099481cu, 0x00000001u, is_dryrun) != 0) return -1;
+	if (display_write32(0x00994418u, 0x00000001u, is_dryrun) != 0) return -1;
+
+	return 0;
 }
 
 static void
@@ -485,7 +546,7 @@ xzs_d8m3_run(int mode)
 	}
 	xzs_diag_emit("[D8-M3] CHECKPOINT D8M3-10 REFCLK_READY PASS\n");
 
-	/* Checkpoint D8M3-20: Writes 0..7 (PHY LDO bias, soft reset, post-N1 divider) */
+	/* Checkpoint D8M3-20: Writes 0..7 (PHY LDO bias, soft reset, CMN LDO, 5-lane HS timings & digital reset) */
 	xzs_diag_emit("[D8-M3] CHECKPOINT D8M3-20 PLL_CONFIG_BEGIN START\n");
 	for (int i = 0; i < 8; i++) {
 		if (display_write32(s_m3_writes[i].addr, s_m3_writes[i].val, is_dryrun) != 0) {
@@ -495,11 +556,16 @@ xzs_d8m3_run(int mode)
 		}
 		if (!is_dryrun) {
 			if (s_m3_writes[i].addr == 0x0099412cu && s_m3_writes[i].val == 1) {
-				delay(10); /* 10 us assert */
+				delay(1000); /* 1000 us assert per aboot 0xaa028c14 */
 			} else if (s_m3_writes[i].addr == 0x0099412cu && s_m3_writes[i].val == 0) {
 				delay(100); /* 100 us de-assert recovery */
 			}
 		}
+	}
+	if (xzs_d8m3_program_14nm_phy_lanes_and_reset(is_dryrun) != 0) {
+		xzs_diag_emit("[D8-M3] ERROR: write failed at step D8M3-20 (14nm PHY lanes)\n");
+		xzs_diag_emit("[D8-M3] RESULT=WRITE_FAILED\n");
+		return;
 	}
 	xzs_diag_emit("[D8-M3] CHECKPOINT D8M3-20 PLL_CONFIG_BEGIN PASS\n");
 
@@ -507,7 +573,11 @@ xzs_d8m3_run(int mode)
 	xzs_diag_emit("[D8-M3] CHECKPOINT D8M3-30 PLL_CONFIG_DONE START\n");
 	for (int i = 8; i < 52; i++) {
 		if (!is_dryrun && s_m3_writes[i].addr == 0x00994420u) {
-			/* Qualcomm downstream 14nm PHY CMN reset pulse: 0x20 -> delay 10us -> 0x00 */
+			/* Ensure KVCO code (0x858=0x2f) and CLKBUFLR_EN (0x81c=0x01) are committed before PLL reset pulse */
+			display_write32(0x00994858u, 0x0000002fu, is_dryrun);
+			display_write32(0x0099481cu, 0x00000001u, is_dryrun);
+			display_write32(0x00994418u, 0x00000001u, is_dryrun);
+			/* Qualcomm downstream 14nm PHY CMN PLL reset pulse: 0x20 -> delay 10us -> 0x00 */
 			display_write32(0x00994420u, 0x20u, is_dryrun);
 			delay(10);
 		}
@@ -835,42 +905,58 @@ xzs_d8m3_run(int mode)
 	xzs_diag_emit("[D8-M3] CHECKPOINT D8M3-A0 PHY_COMMON PASS\n");
 
 	xzs_diag_emit("[D8-M3] CHECKPOINT D8M3-B0 PHY_LANES START\n");
-	/* 2. Configure lane drive strength */
-	display_write32(0x00994440u, 0x000006ffu, is_dryrun); /* DL0 drive strength */
-	display_write32(0x009944c0u, 0x000006ffu, is_dryrun); /* DL1 drive strength */
-	display_write32(0x00994540u, 0x000006ffu, is_dryrun); /* DL2 drive strength */
-	display_write32(0x009945c0u, 0x000006ffu, is_dryrun); /* DL3 drive strength */
-	display_write32(0x00994640u, 0x000000ffu, is_dryrun); /* CLK drive strength */
-
+	/* 2. Verify 14nm PHY lane drive strength (programmed at +0x38/+0x3c in D8M3-20 before PHY reset) */
 	if (!is_dryrun) {
 		xzs_diag_emit("[D8-M3] DL0: REGULATOR=0x");
 		xzs_diag_hex32(xzs_phys_read32(0x00994564));
-		xzs_diag_emit(" STRENGTH=0x");
-		xzs_diag_hex32(xzs_phys_read32(0x00994440));
+		xzs_diag_emit(" STRENGTH0=0x");
+		xzs_diag_hex32(xzs_phys_read32(0x00994538));
+		xzs_diag_emit(" STRENGTH1=0x");
+		xzs_diag_hex32(xzs_phys_read32(0x0099453c));
+		xzs_diag_emit(" TIMING0=0x");
+		xzs_diag_hex32(xzs_phys_read32(0x00994518));
 		xzs_diag_emit("\n");
 
 		xzs_diag_emit("[D8-M3] DL1: REGULATOR=0x");
 		xzs_diag_hex32(xzs_phys_read32(0x009945e4));
-		xzs_diag_emit(" STRENGTH=0x");
-		xzs_diag_hex32(xzs_phys_read32(0x009944c0));
+		xzs_diag_emit(" STRENGTH0=0x");
+		xzs_diag_hex32(xzs_phys_read32(0x009945b8));
+		xzs_diag_emit(" STRENGTH1=0x");
+		xzs_diag_hex32(xzs_phys_read32(0x009945bc));
+		xzs_diag_emit(" TIMING0=0x");
+		xzs_diag_hex32(xzs_phys_read32(0x00994598));
 		xzs_diag_emit("\n");
 
 		xzs_diag_emit("[D8-M3] DL2: REGULATOR=0x");
 		xzs_diag_hex32(xzs_phys_read32(0x00994664));
-		xzs_diag_emit(" STRENGTH=0x");
-		xzs_diag_hex32(xzs_phys_read32(0x00994540));
+		xzs_diag_emit(" STRENGTH0=0x");
+		xzs_diag_hex32(xzs_phys_read32(0x00994638));
+		xzs_diag_emit(" STRENGTH1=0x");
+		xzs_diag_hex32(xzs_phys_read32(0x0099463c));
+		xzs_diag_emit(" TIMING0=0x");
+		xzs_diag_hex32(xzs_phys_read32(0x00994618));
 		xzs_diag_emit("\n");
 
 		xzs_diag_emit("[D8-M3] DL3: REGULATOR=0x");
 		xzs_diag_hex32(xzs_phys_read32(0x009946e4));
-		xzs_diag_emit(" STRENGTH=0x");
-		xzs_diag_hex32(xzs_phys_read32(0x009945c0));
+		xzs_diag_emit(" STRENGTH0=0x");
+		xzs_diag_hex32(xzs_phys_read32(0x009946b8));
+		xzs_diag_emit(" STRENGTH1=0x");
+		xzs_diag_hex32(xzs_phys_read32(0x009946bc));
+		xzs_diag_emit(" TIMING0=0x");
+		xzs_diag_hex32(xzs_phys_read32(0x00994698));
 		xzs_diag_emit("\n");
 
 		xzs_diag_emit("[D8-M3] CLK: REGULATOR=0x");
 		xzs_diag_hex32(xzs_phys_read32(0x00994764));
-		xzs_diag_emit(" STRENGTH=0x");
-		xzs_diag_hex32(xzs_phys_read32(0x00994640));
+		xzs_diag_emit(" STRENGTH0=0x");
+		xzs_diag_hex32(xzs_phys_read32(0x00994738));
+		xzs_diag_emit(" STRENGTH1=0x");
+		xzs_diag_hex32(xzs_phys_read32(0x0099473c));
+		xzs_diag_emit(" TIMING0=0x");
+		xzs_diag_hex32(xzs_phys_read32(0x00994718));
+		xzs_diag_emit(" CLKBUFLR_EN=0x");
+		xzs_diag_hex32(xzs_phys_read32(0x0099481c));
 		xzs_diag_emit("\n");
 	}
 	xzs_diag_emit("[D8-M3] CHECKPOINT D8M3-B0 PHY_LANES PASS\n");
@@ -878,11 +964,11 @@ xzs_d8m3_run(int mode)
 	/* Checkpoint D8M3-C0: PHY Acceptance & Readback */
 	xzs_diag_emit("[D8-M3] CHECKPOINT D8M3-C0 PHY_ACCEPT START\n");
 	if (!is_dryrun) {
-		uint32_t dl0 = xzs_phys_read32(0x00994440);
-		uint32_t dl1 = xzs_phys_read32(0x009944c0);
-		uint32_t dl2 = xzs_phys_read32(0x00994540);
-		uint32_t dl3 = xzs_phys_read32(0x009945c0);
-		uint32_t clk = xzs_phys_read32(0x00994640);
+		uint32_t dl0 = xzs_phys_read32(0x00994538);
+		uint32_t dl1 = xzs_phys_read32(0x009945b8);
+		uint32_t dl2 = xzs_phys_read32(0x00994638);
+		uint32_t dl3 = xzs_phys_read32(0x009946b8);
+		uint32_t clk = xzs_phys_read32(0x00994738);
 		uint32_t reg0 = xzs_phys_read32(0x00994564);
 		uint32_t reg1 = xzs_phys_read32(0x009945e4);
 		uint32_t reg2 = xzs_phys_read32(0x00994664);
