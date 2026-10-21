@@ -120,40 +120,39 @@ def main():
         adb("echo nop > /sys/kernel/debug/tracing/current_tracer")
         adb("echo 0 > /sys/kernel/debug/tracing/tracing_on")
         adb("echo > /sys/kernel/debug/tracing/trace")
-        adb("echo 1 > /sys/kernel/debug/tracing/events/mdss/mdp_cmd_kickoff/enable")
-        adb("echo 1 > /sys/kernel/debug/tracing/events/mdss/mdp_cmd_pingpong_done/enable")
-        adb("echo 1 > /sys/kernel/debug/tracing/events/mdss/mdp_cmd_wait_pingpong/enable")
-        adb("echo 1 > /sys/kernel/debug/tracing/events/mdss/mdp_commit/enable")
-        adb("echo 1 > /sys/kernel/debug/tracing/events/mdss/mdp_mixer_update/enable")
-        adb("echo 1 > /sys/kernel/debug/tracing/events/mdss/mdp_perf_update_bus/enable")
+        adb("echo 1 > /sys/kernel/debug/tracing/events/mdss/enable")
         adb("echo 1 > /sys/kernel/debug/tracing/tracing_on")
-        print("Ftrace armed.", flush=True)
+        print("Ftrace armed (all mdss events enabled).", flush=True)
 
         # 5. Active Frame-Synchronous Sampling Script
         # We write a standalone shell script that runs on target, samples PP0 and DSI registers
-        # tightly in a loop while triggering redraws via touch input swipe.
+        # tightly in a loop while triggering redraws via touch input swipe and recovery restart.
         print("\n--- 3. ACTIVE FRAME SAMPLING DURING SCREEN REDRAWS ---", flush=True)
         target_script = """#!/sbin/sh
 OUT=/tmp/active_samples.txt
 rm -f $OUT
-for i in $(seq 1 40); do
-    # Sample MDP PP0 (0x71000..0x71030)
+for i in $(seq 1 60); do
+    # Sample MDP PP0 (0x71000..0x71040)
     echo "71000 40" > /sys/kernel/debug/mdp/off
     PP_RAW=$(cat /sys/kernel/debug/mdp/reg)
 
     # Sample MDP Top & CTL0 (0x1000..0x1030, 0x2000..0x2030)
     echo "1010 10" > /sys/kernel/debug/mdp/off
     INTR_RAW=$(cat /sys/kernel/debug/mdp/reg)
-    echo "2000 20" > /sys/kernel/debug/mdp/off
+    echo "2000 30" > /sys/kernel/debug/mdp/off
     CTL_RAW=$(cat /sys/kernel/debug/mdp/reg)
 
     # Sample RGB0 Current Src
-    echo "5000 30" > /sys/kernel/debug/mdp/off
+    echo "5000 40" > /sys/kernel/debug/mdp/off
     RGB_RAW=$(cat /sys/kernel/debug/mdp/reg)
 
-    # Sample DSI0 CTRL (0x0..0x60)
-    echo "0 60" > /sys/kernel/debug/mdp/dsi0_ctrl_off
+    # Sample DSI0 CTRL (0x0..0x100)
+    echo "0 100" > /sys/kernel/debug/mdp/dsi0_ctrl_off
     DSI_RAW=$(cat /sys/kernel/debug/mdp/dsi0_ctrl_reg)
+
+    # Sample DSI0 CTRL2 (0x180..0x200)
+    echo "180 80" > /sys/kernel/debug/mdp/dsi0_ctrl_off
+    DSI2_RAW=$(cat /sys/kernel/debug/mdp/dsi0_ctrl_reg)
 
     echo "=== SAMPLE $i ===" >> $OUT
     echo "PP:" >> $OUT
@@ -166,6 +165,8 @@ for i in $(seq 1 40); do
     echo "$RGB_RAW" >> $OUT
     echo "DSI:" >> $OUT
     echo "$DSI_RAW" >> $OUT
+    echo "DSI2:" >> $OUT
+    echo "$DSI2_RAW" >> $OUT
 
     usleep 5000 2>/dev/null || sleep 0.01 2>/dev/null
 done
@@ -178,11 +179,12 @@ done
         sample_proc = subprocess.Popen(["adb", "-s", SERIAL, "shell", "/sbin/sh /tmp/sample_active.sh"])
         time.sleep(0.05)
 
-        # Trigger rapid screen redraws using input swipes
-        print("Triggering UI redraws on touch screen...", flush=True)
-        for sw in range(10):
-            adb("input swipe 400 1400 400 600 80")
-            time.sleep(0.03)
+        # Trigger rapid screen redraws using twrp print and recovery restart
+        print("Triggering UI redraws on screen...", flush=True)
+        adb("pkill -9 recovery")
+        for sw in range(5):
+            adb(f"twrp print 'ACTIVE_FRAME_COMMIT_{sw}'")
+            time.sleep(0.05)
 
         sample_proc.wait(timeout=20)
         print("Active sampling complete. Pulling data...", flush=True)
@@ -204,11 +206,12 @@ done
         print("\n--- 5. FULL SUBSYSTEM AUDIT SNAPSHOT ---", flush=True)
         mdp_top, mdp_top_raw = read_mdp_regs("0", "20")
         mdp_intr, mdp_intr_raw = read_mdp_regs("1010", "10")
-        ctl0, ctl0_raw = read_mdp_regs("2000", "20")
+        ctl0, ctl0_raw = read_mdp_regs("2000", "30")
         pp0, pp0_raw = read_mdp_regs("71000", "40")
         rgb0, rgb0_raw = read_mdp_regs("5000", "40")
         lm0, lm0_raw = read_mdp_regs("45000", "20")
-        dsi0, dsi0_raw = read_dsi0_regs("0", "70")
+        dsi0, dsi0_raw = read_dsi0_regs("0", "100")
+        dsi0_ctrl2, dsi0_ctrl2_raw = read_dsi0_regs("180", "80")
 
         full_dump = {
             "MDP_TOP": mdp_top,
@@ -218,6 +221,7 @@ done
             "RGB0": rgb0,
             "LM0": lm0,
             "DSI0": dsi0,
+            "DSI0_CTRL2": dsi0_ctrl2,
         }
         (OUT_DIR / "twrp_active_registers.json").write_text(json.dumps(full_dump, indent=2))
         (OUT_DIR / "twrp_active_registers_raw.txt").write_text(
@@ -227,7 +231,8 @@ done
             f"=== PP0 ===\n{pp0_raw}\n\n"
             f"=== RGB0 ===\n{rgb0_raw}\n\n"
             f"=== LM0 ===\n{lm0_raw}\n\n"
-            f"=== DSI0 ===\n{dsi0_raw}\n"
+            f"=== DSI0 ===\n{dsi0_raw}\n\n"
+            f"=== DSI0 CTRL2 ===\n{dsi0_ctrl2_raw}\n"
         )
 
         print(f"\nSuccessfully captured frame-synchronous TWRP baseline to: {OUT_DIR}", flush=True)

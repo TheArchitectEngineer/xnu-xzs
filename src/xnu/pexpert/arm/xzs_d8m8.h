@@ -2139,23 +2139,24 @@ xzs_d8m8_stream_config(void)
 		return;
 	}
 
-	/* Program DSI_COMMAND_MODE_MDP_CTRL2 (0x009941b8): Set BIT(16) per Qualcomm dsi_ctrl_hw_cmn_cmd_engine_setup */
+	/* Align DSI_COMMAND_MODE_MDP_CTRL2 (0x009941b8) to TWRP active golden baseline (0x00000006) */
 	uint32_t mdp_ctrl2_old = d8p1_read32(0x009941b8u);
-	uint32_t mdp_ctrl2_new = mdp_ctrl2_old | (1u << 16);
+	uint32_t mdp_ctrl2_new = 0x00000006u;
 	xzs_m8_write_reg("DSI_CMD_MDP_CTRL2 ", 0x009941b8u, mdp_ctrl2_new, mdp_ctrl2_new, false);
 	xzs_diag_emit("  DSI_CMD_MDP_CTRL2_PRE = 0x"); xzs_d8p1_hex32(mdp_ctrl2_old); xzs_diag_emit("\n");
 	xzs_diag_emit("  DSI_CMD_MDP_CTRL2_POST= 0x"); xzs_d8p1_hex32(mdp_ctrl2_new); xzs_diag_emit("\n");
 
-	xzs_m8_write_reg("DSI_STREAM0_CTRL  ", 0x00994058u, 0x0ca90039u, 0x0ca90039u, false);
-	xzs_m8_write_reg("DSI_STREAM0_TOTAL ", 0x0099405cu, 0x07800438u, 0x07800438u, false);
-	/* Configure Stream 1 per downstream mdss_dsi_host.c:1158-1163 */
-	d8p1_write32(0x00994060u, 0x0ca90039u);
-	d8p1_write32(0x00994064u, 0x07800438u);
+	/* Align DSI STREAM registers to TWRP active golden baseline (0x0 for full-frame command mode, mdss_mdp_intf_cmd.c:802) */
+	xzs_m8_write_reg("DSI_STREAM0_CTRL  ", 0x00994058u, 0x00000000u, 0x00000000u, false);
+	xzs_m8_write_reg("DSI_STREAM0_TOTAL ", 0x0099405cu, 0x00000000u, 0x00000000u, false);
+	/* Configure Stream 1 per TWRP active golden baseline */
+	d8p1_write32(0x00994060u, 0x00000000u);
+	d8p1_write32(0x00994064u, 0x00000000u);
 	xzs_m8_write_reg("DSI_TRIG_CTRL     ", 0x00994084u, 0x80000004u, 0x80000004u, false);
 
-	/* Force DSI clock lane to HS mode for MDP stream (Qualcomm mdss_dsi_start_hs_clk_lane) */
-	d8p1_write32(0x009940acu, (1u << 28));
-	xzs_diag_emit("  DSI_LANE_CTRL_HS_FORCED=yes (0x009940ac = 0x10000000)\n");
+	/* Command-mode panel clock lane operates in non-continuous LP mode (TWRP golden 0x009940ac == 0x0) */
+	d8p1_write32(0x009940acu, 0x00000000u);
+	xzs_diag_emit("  DSI_LANE_CTRL = 0x00000000 (matches TWRP golden)\n");
 
 	/* Safety check on DSI host */
 	uint32_t ack_err = d8p1_read32(0x00994068u);
@@ -3071,8 +3072,8 @@ xzs_d8m8_kickoff(void)
 	xzs_diag_emit("F16_CTL_START_WRITE: timestamp_us="); xzs_d8m8_dec(ctl_start_us); xzs_diag_emit("\n");
 	xzs_diag_emit("CTL_START_TIMESTAMP_US="); xzs_d8m8_dec(ctl_start_us); xzs_diag_emit("\n");
 
-	/* Force DSI clock lane into HS mode for MDP streaming (Qualcomm mdss_dsi_start_hs_clk_lane) */
-	d8p1_write32(0x009940acu, (1u << 28));
+	/* Ensure DSI lane control remains in non-continuous LP mode per TWRP baseline (0x009940ac == 0x0) */
+	d8p1_write32(0x009940acu, 0x00000000u);
 	__asm__ volatile("dsb sy\n\tisb sy" ::: "memory");
 
 	/* Commit all shadow registers (CTL0, LM0, RGB0, INTF1) */
