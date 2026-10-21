@@ -278,11 +278,11 @@ xzs_d8p1_run(int mode)
 	xzs_diag_emit("[D8-P1] CHECKPOINT D8P1-30 GPIO8_CONFIG_PLAN PASS\n");
 
 	/* D8P1-40: GPIO 10 (TE mdp_vsync) Plan & Config
-	 * Target: Input (OE=0), Func=1 (mdp_vsync), Pull=0 (No-pull/bias-disable per TWRP DTS), Drive=2mA (0) -> CFG=0x00000004
+	 * Target: Input (OE=0), Func=1 (mdp_vsync), Pull=1 (Pull-down per keyaki.dts:13728), Drive=2mA (0) -> CFG=0x00000005
 	 */
 	xzs_diag_emit("\n[D8-P1] CHECKPOINT D8P1-40 GPIO10_CONFIG_PLAN START\n");
-	xzs_diag_emit("  PLAN: GPIO10 Input mdp_vsync with No-Pull (TWRP DTS Match)\n");
-	if (d8p1_audit_write("GPIO10_CFG", TLMM_GPIO_CFG(GPIO_TE_NUM), 0x00000004u, 0x000003ffu, dryrun) != 0) {
+	xzs_diag_emit("  PLAN: GPIO10 Input mdp_vsync with Pull-Down (DTS Match)\n");
+	if (d8p1_audit_write("GPIO10_CFG", TLMM_GPIO_CFG(GPIO_TE_NUM), 0x00000005u, 0x000003ffu, dryrun) != 0) {
 		return -1;
 	}
 	xzs_diag_emit("[D8-P1] CHECKPOINT D8P1-40 GPIO10_CONFIG_PLAN PASS\n");

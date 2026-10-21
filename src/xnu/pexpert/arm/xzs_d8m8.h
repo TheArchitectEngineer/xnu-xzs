@@ -306,8 +306,8 @@ xzs_d8m8_panel_prepare(void)
 	xzs_diag_emit("PREPARE_GPIO10_TRANSITIONS="); xzs_d8m5_dec32(prep_trans); xzs_diag_emit("\n");
 	xzs_diag_emit("PREPARE_GPIO10_HIGH_SAMPLES="); xzs_d8m5_dec32(prep_hi); xzs_diag_emit("\n");
 
-	/* Configure DSI trigger control to MDP Command Mode trigger with pure SW trigger (0x00000004) */
-	d8m4_write32(D8M6_REG_DSI_TRIG_CTRL, 0x00000004u);
+	/* Configure DSI trigger control to MDP Command Mode trigger with external TE (0x80000004, te_sel=BIT(31)) */
+	d8m4_write32(D8M6_REG_DSI_TRIG_CTRL, 0x80000004u);
 
 	xzs_diag_emit("PANEL_PREPARE_SEQUENCE=SONY_PANEL9_ON_COMMAND_ONLY\n");
 	xzs_diag_emit("F15_PANEL_PREPARE_STABLE=YES\n");
@@ -481,8 +481,8 @@ xzs_d8m8_dryrun(void)
 	xzs_diag_emit("  STEP 15: BLOCK=DSI0 REG=DSI_CMD_MDP_CTRL ADDR=0x00994040 MASK=0x0000000f VALUE=0x00000008 EVIDENCE=SOURCE_PROVEN DEPENDENCY=DSI_HOST\n");
 	xzs_diag_emit("  STEP 16: BLOCK=DSI0 REG=DSI_CMD_DCS_CTRL ADDR=0x00994044 MASK=0x0001ffff VALUE=0x00013C2C EVIDENCE=SOURCE_PROVEN DEPENDENCY=DSI_HOST\n");
 	xzs_diag_emit("  STEP 16b: BLOCK=DSI0 REG=DSI_COMMAND_MODE_MDP_CTRL2 ADDR=0x009941b8 MASK=0x00010000 VALUE=0x00010000 EVIDENCE=SOURCE_PROVEN DEPENDENCY=DSI_HOST\n");
-	xzs_diag_emit("  STEP 17: BLOCK=DSI0 REG=DSI_STREAM0_CTRL ADDR=0x00994058 MASK=0xffffffff VALUE=0x00000000 EVIDENCE=GOLDEN_HW_PROVEN DEPENDENCY=DSI_HOST\n");
-	xzs_diag_emit("  STEP 18: BLOCK=DSI0 REG=DSI_STREAM0_TOTAL ADDR=0x0099405c MASK=0xffffffff VALUE=0x00000000 EVIDENCE=GOLDEN_HW_PROVEN DEPENDENCY=DSI_HOST\n");
+	xzs_diag_emit("  STEP 17: BLOCK=DSI0 REG=DSI_STREAM0_CTRL ADDR=0x00994058 MASK=0xffffffff VALUE=0x0CA90039 EVIDENCE=SOURCE_PROVEN DEPENDENCY=DSI_HOST\n");
+	xzs_diag_emit("  STEP 18: BLOCK=DSI0 REG=DSI_STREAM0_TOTAL ADDR=0x0099405c MASK=0xffffffff VALUE=0x07800438 EVIDENCE=SOURCE_PROVEN DEPENDENCY=DSI_HOST\n");
 
 	xzs_diag_emit("\n[M8-DRY-80] CTL0 ROUTING (0x00902000)\n");
 	xzs_diag_emit("  STEP 19: BLOCK=CTL0 REG=CTL_LAYER_0 ADDR=0x00902000 MASK=0x000003ff VALUE=0x00000200 EVIDENCE=SOURCE_PROVEN DEPENDENCY=SSPP_RGB0\n");
@@ -514,8 +514,8 @@ xzs_d8m8_dryrun(void)
 	xzs_diag_emit("  CTL_FLUSH_MASK=0x00020048\n");
 	xzs_diag_emit("  DSI_MDP_CTRL=0x00000008\n");
 	xzs_diag_emit("  DSI_MDP_DCS_CMD_CTRL=0x00013c2c\n");
-	xzs_diag_emit("  DSI_STREAM0_CTRL=0x00000000\n");
-	xzs_diag_emit("  DSI_STREAM0_TOTAL=0x00000000\n");
+	xzs_diag_emit("  DSI_STREAM0_CTRL=0x0ca90039\n");
+	xzs_diag_emit("  DSI_STREAM0_TOTAL=0x07800438\n");
 	xzs_diag_emit("  SMMU_STATE=BYPASS\n");
 	xzs_diag_emit("  DIRECT_PHYSICAL_FB_SAFE=yes\n");
 
@@ -2086,15 +2086,15 @@ xzs_d8m8_stream_config(void)
 	/* Step 1: Ensure tear check disabled before reprogramming */
 	xzs_m8_write_reg("PP0_TEAR_CHECK_EN ", 0x00971000u, 0x00000000u, 0x00000000u, false);
 
-	/* Step 2: Program configuration with internal autonomous 60Hz VSYNC trigger (BIT19=1, BIT20=0, vclks=0x93 per Qualcomm mdss_mdp_intf_cmd.c:204) */
-	xzs_m8_write_reg("PP0_SYNC_CFG_VSYNC", 0x00971004u, 0x00080093u, 0x00080093u, false);
+	/* Step 2: Program golden configuration with external HW TE trigger (BIT19=1, BIT20=1, vclks=0x93 per Qualcomm mdss_mdp_intf_cmd.c:204 & TWRP baseline) */
+	xzs_m8_write_reg("PP0_SYNC_CFG_VSYNC", 0x00971004u, 0x00180093u, 0x00180093u, false);
 	uint32_t vsync_rb = d8p1_read32(0x00971004u);
-	xzs_diag_emit("  PP_SYNC_CONFIG_VSYNC_WRITE=0x00080093\n");
+	xzs_diag_emit("  PP_SYNC_CONFIG_VSYNC_WRITE=0x00180093\n");
 	xzs_diag_emit("  PP_SYNC_CONFIG_VSYNC_READBACK=0x"); xzs_d8p1_hex32(vsync_rb); xzs_diag_emit("\n");
-	bool vsync_rb_ok = ((vsync_rb & (1u << 19)) != 0) && ((vsync_rb & 0xffffu) == 0x0093u);
+	bool vsync_rb_ok = ((vsync_rb & (1u << 20)) != 0) && ((vsync_rb & (1u << 19)) != 0) && ((vsync_rb & 0xffffu) == 0x0093u);
 	xzs_diag_emit("  PP_SYNC_CONFIG_VSYNC_ACCEPTANCE=");
-	xzs_diag_emit(vsync_rb_ok ? "PASS (BIT19=1, BIT20=0, vclks=0x93)\n" : "FAIL\n");
-	xzs_diag_emit("  INTERNAL_AUTONOMOUS_VSYNC_MODE=yes\n");
+	xzs_diag_emit(vsync_rb_ok ? "PASS (BIT19=1, BIT20=1, vclks=0x93)\n" : "FAIL\n");
+	xzs_diag_emit("  EXTERNAL_HW_TE_VSYNC_MODE=yes\n");
 
 	xzs_m8_write_reg("PP0_SYNC_CFG_HGHT ", 0x00971008u, 0x0000FFF0u, 0x0000FFF0u, false);
 	xzs_m8_write_reg("PP0_VSYNC_INIT_VAL", 0x00971010u, 0x00000780u, 0x00000780u, false);
@@ -2140,8 +2140,11 @@ xzs_d8m8_stream_config(void)
 	xzs_diag_emit("  DSI_CMD_MDP_CTRL2_PRE = 0x"); xzs_d8p1_hex32(mdp_ctrl2_old); xzs_diag_emit("\n");
 	xzs_diag_emit("  DSI_CMD_MDP_CTRL2_POST= 0x"); xzs_d8p1_hex32(mdp_ctrl2_new); xzs_diag_emit("\n");
 
-	xzs_m8_write_reg("DSI_STREAM0_CTRL  ", 0x00994058u, 0x00000000u, 0x00000000u, false);
-	xzs_m8_write_reg("DSI_STREAM0_TOTAL ", 0x0099405cu, 0x00000000u, 0x00000000u, false);
+	xzs_m8_write_reg("DSI_STREAM0_CTRL  ", 0x00994058u, 0x0ca90039u, 0x0ca90039u, false);
+	xzs_m8_write_reg("DSI_STREAM0_TOTAL ", 0x0099405cu, 0x07800438u, 0x07800438u, false);
+	/* Configure Stream 1 per downstream mdss_dsi_host.c:1158-1163 */
+	d8p1_write32(0x00994060u, 0x0ca90039u);
+	d8p1_write32(0x00994064u, 0x07800438u);
 	xzs_m8_write_reg("DSI_TRIG_CTRL     ", 0x00994084u, 0x80000004u, 0x80000004u, false);
 
 	/* Force DSI clock lane to HS mode for MDP stream (Qualcomm mdss_dsi_start_hs_clk_lane) */
@@ -2153,6 +2156,8 @@ xzs_d8m8_stream_config(void)
 	uint32_t timeout_stat = d8p1_read32(0x009940c0u);
 	xzs_diag_emit("  DSI_ACK_ERR      = 0x"); xzs_d8p1_hex32(ack_err); xzs_diag_emit("\n");
 	xzs_diag_emit("  DSI_TIMEOUT      = 0x"); xzs_d8p1_hex32(timeout_stat); xzs_diag_emit("\n");
+	xzs_diag_emit("  DSI_STREAM0_CTRL = 0x"); xzs_d8p1_hex32(d8p1_read32(0x00994058u)); xzs_diag_emit("\n");
+	xzs_diag_emit("  DSI_STREAM0_TOTAL= 0x"); xzs_d8p1_hex32(d8p1_read32(0x0099405cu)); xzs_diag_emit("\n");
 	xzs_diag_emit("  DSI_LANE_STATUS  = 0x"); xzs_d8p1_hex32(d8p1_read32(0x009940a8u)); xzs_diag_emit("\n");
 	xzs_diag_emit("  PLL_STATUS       = 0x"); xzs_d8p1_hex32(d8p1_read32(0x009948ccu)); xzs_diag_emit("\n");
 
@@ -2369,7 +2374,7 @@ xzs_d8m8_prekick_status(void)
 
 	xzs_diag_emit("PP0_TEAR_CHECK_EN=0x"); xzs_d8p1_hex32(pp0_tear); xzs_diag_emit("\n");
 	xzs_diag_emit("PP_TEAR_CHECK_EN=0x"); xzs_d8p1_hex32(pp0_tear); xzs_diag_emit("\n");
-	xzs_diag_emit("PP_SYNC_CONFIG_VSYNC_WRITE=0x00080093\n");
+	xzs_diag_emit("PP_SYNC_CONFIG_VSYNC_WRITE=0x00180093\n");
 	xzs_diag_emit("PP_SYNC_CONFIG_VSYNC_READBACK=0x"); xzs_d8p1_hex32(pp0_sync_cfg_vsync); xzs_diag_emit("\n");
 	xzs_diag_emit("PP_SYNC_CONFIG_VSYNC=0x"); xzs_d8p1_hex32(pp0_sync_cfg_vsync); xzs_diag_emit("\n");
 	xzs_diag_emit("PP_SYNC_CONFIG_HEIGHT=0x"); xzs_d8p1_hex32(pp0_sync_cfg_hght); xzs_diag_emit("\n");
