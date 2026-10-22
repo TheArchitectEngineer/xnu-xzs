@@ -72,6 +72,7 @@ void xzs_fbcon_putc(char c);
 void xzs_fbcon_early_record(const char *buf, int len);
 bool xzs_fbcon_is_active(void);
 void xzs_fbcon_clear(uint32_t bg);
+void xzs_draw_du_ma_may_banner(uintptr_t fb_va, uint32_t width, uint32_t stride, uint32_t top_y, bool clear_full_screen);
 void xzs_print_boot_timing(void);
 void xzs_record_boot_t7_and_print(void);
 void xzs_d8m10_auto_display_init(bool show_diagnostic_bars);
@@ -294,7 +295,78 @@ xzs_fbcon_draw_test_bars(uintptr_t fb_va)
 	__asm__ volatile("dmb oshst" ::: "memory");
 }
 
+/* Render centered bold "ĐU MA MAY" banner (8x scaled 8x16 font = 64x128 per glyph) */
+void
+xzs_draw_du_ma_may_banner(uintptr_t fb_va, uint32_t width, uint32_t stride, uint32_t top_y, bool clear_full_screen)
+{
+	if (fb_va == 0 || width == 0 || stride < width * 4u) {
+		return;
+	}
+	if (clear_full_screen) {
+		for (uint32_t y = 0; y < XZS_FB_HEIGHT; y++) {
+			if ((y & 63u) == 0u) {
+				xzs_watchdog_pet();
+			}
+			uint32_t *row = (uint32_t *)(fb_va + (uint64_t)y * stride);
+			for (uint32_t x = 0; x < stride / 4u; x++) {
+				row[x] = XZS_COLOR_BG;
+			}
+		}
+	}
+
+	static const char s_banner_text[9] = { 'D', 'U', ' ', 'M', 'A', ' ', 'M', 'A', 'Y' };
+	const uint32_t scale = 8u;
+	const uint32_t char_w = 8u * scale;  /* 64 px */
+	const uint32_t char_h = 16u * scale; /* 128 px */
+	const uint32_t total_w = 9u * char_w; /* 576 px */
+	const uint32_t x0 = (width > total_w) ? (width - total_w) / 2u : 0u;
+
+	for (uint32_t ci = 0; ci < 9u; ci++) {
+		unsigned char ch = (unsigned char)s_banner_text[ci];
+		if (ch == ' ') {
+			continue;
+		}
+		const unsigned char *glyph = &iso_font[ch * 16u];
+		uint32_t cx0 = x0 + ci * char_w;
+		for (uint32_t gy = 0; gy < 16u; gy++) {
+			uint8_t bits = glyph[gy];
+			/* Add the Vietnamese horizontal crossbar on 'D' -> 'Đ' at rows 7..8 */
+			if (ci == 0u && (gy == 7u || gy == 8u)) {
+				bits |= 0x1fu;
+			}
+			for (uint32_t sy = 0; sy < scale; sy++) {
+				uint32_t py = top_y + gy * scale + sy;
+				if (py >= XZS_FB_HEIGHT) {
+					continue;
+				}
+				uint32_t *row = (uint32_t *)(fb_va + (uint64_t)py * stride);
+				for (uint32_t gx = 0; gx < 8u; gx++) {
+					bool on = ((bits >> gx) & 1u) != 0u;
+					if (!on) {
+						continue;
+					}
+					for (uint32_t sx = 0; sx < scale; sx++) {
+						uint32_t px = cx0 + gx * scale + sx;
+						if (px < width) {
+							row[px] = 0x00ffffffu; /* Bright White */
+						}
+						if (px + 3u < width && py + 3u < XZS_FB_HEIGHT) {
+							uint32_t *srow = (uint32_t *)(fb_va + (uint64_t)(py + 3u) * stride);
+							if (srow[px + 3u] == XZS_COLOR_BG) {
+								srow[px + 3u] = XZS_COLOR_CYAN;
+							}
+						}
+					}
+				}
+			}
+		}
+	}
+	__asm__ volatile("dmb oshst" ::: "memory");
+	xzs_watchdog_pet();
+}
+
 /* Fast Hardware Framebuffer Line Scroll with Zero Uncached Reads & Cell Diffing (Section 25) */
+#define XZS_FBCON_TOP_ROW     11u
 #define XZS_FBCON_SCROLL_STEP 16u
 
 static void
@@ -302,15 +374,16 @@ xzs_fbcon_scroll_up(void)
 {
 	if (g_fbcon_va == 0) return;
 
-	const uint32_t step = XZS_FBCON_SCROLL_STEP < XZS_FBCON_ROWS ? XZS_FBCON_SCROLL_STEP : 1u;
+	const uint32_t top = XZS_FBCON_TOP_ROW;
+	const uint32_t step = (XZS_FBCON_SCROLL_STEP < (XZS_FBCON_ROWS - top)) ? XZS_FBCON_SCROLL_STEP : 1u;
 	const uint32_t keep = XZS_FBCON_ROWS - step;
 
 	/* Hide cursor before scroll */
 	xzs_fbcon_draw_cursor_raw(g_fbcon_col, g_fbcon_row, false);
 	xzs_watchdog_pet();
 
-	/* Redraw only cells (c, r) whose glyph or color actually changes */
-	for (uint32_t r = 0; r < keep; r++) {
+	/* Redraw only cells (c, r) in the scrollable region [top..keep-1] whose glyph or color changes */
+	for (uint32_t r = top; r < keep; r++) {
 		if ((r & 7u) == 0) {
 			xzs_watchdog_pet();
 		}
@@ -344,25 +417,25 @@ xzs_fbcon_scroll_up(void)
 		}
 	}
 
-	/* Shift screen text and row lengths up by 'step' rows in cacheable RAM */
-	char *dst_s = (char *)g_fbcon_screen;
-	const char *src_s = (const char *)g_fbcon_screen + step * XZS_FBCON_COLS;
-	uint32_t len_s = keep * XZS_FBCON_COLS;
+	/* Shift screen text and row lengths up by 'step' rows in cacheable RAM (preserving rows 0..top-1) */
+	char *dst_s = (char *)&g_fbcon_screen[top][0];
+	const char *src_s = (const char *)&g_fbcon_screen[top + step][0];
+	uint32_t len_s = (keep - top) * XZS_FBCON_COLS;
 	for (uint32_t i = 0; i < len_s; i++) {
 		dst_s[i] = src_s[i];
 	}
 
-	uint32_t *dst_fg = (uint32_t *)g_fbcon_screen_fg;
-	const uint32_t *src_fg = (const uint32_t *)g_fbcon_screen_fg + step * XZS_FBCON_COLS;
+	uint32_t *dst_fg = (uint32_t *)&g_fbcon_screen_fg[top][0];
+	const uint32_t *src_fg = (const uint32_t *)&g_fbcon_screen_fg[top + step][0];
 	for (uint32_t i = 0; i < len_s; i++) {
 		dst_fg[i] = src_fg[i];
 	}
 
-	for (uint32_t i = 0; i < keep; i++) {
+	for (uint32_t i = top; i < keep; i++) {
 		g_fbcon_row_len[i] = g_fbcon_row_len[i + step];
 	}
 
-	char *tail_rows = (char *)g_fbcon_screen + keep * XZS_FBCON_COLS;
+	char *tail_rows = (char *)&g_fbcon_screen[keep][0];
 	for (uint32_t i = 0; i < step * XZS_FBCON_COLS; i++) {
 		tail_rows[i] = ' ';
 	}
@@ -473,7 +546,9 @@ xzs_fbcon_putc(char c)
 	                 g_fbcon_screen[g_fbcon_row][3] == '#');
 	__asm__ volatile("dmb oshst" ::: "memory");
 	xzs_fbcon_unlock_irq(daif);
-	xzs_d8m8_kick_frame_ex(sync_now);
+	if (c == '\n' || sync_now) {
+		xzs_d8m8_kick_frame_ex(sync_now);
+	}
 }
 
 void
@@ -602,7 +677,7 @@ xzs_fbcon_replay_optimized(const char *log_data, uint32_t log_len)
 	s_replay_lines[last_slot][cur_col] = '\0';
 
 	/* Number of valid lines available in ring buffer */
-	uint32_t available_rows = 80; /* Fits into full-screen console viewport (rows 3..82) */
+	uint32_t available_rows = 72; /* Fits into console viewport below pinned banner (rows 11..82) */
 	uint32_t num_lines_to_draw = total_lines_seen + 1;
 	if (num_lines_to_draw > available_rows) {
 		num_lines_to_draw = available_rows;
@@ -611,7 +686,7 @@ xzs_fbcon_replay_optimized(const char *log_data, uint32_t log_len)
 		num_lines_to_draw = XZS_REPLAY_RING_LINES;
 	}
 
-	uint32_t target_row = 3;
+	uint32_t target_row = XZS_FBCON_TOP_ROW;
 	for (uint32_t idx = 0; idx < num_lines_to_draw && target_row < XZS_FBCON_ROWS - 2; idx++, target_row++) {
 		if ((idx % 8) == 0) {
 			xzs_watchdog_pet();
@@ -654,11 +729,11 @@ xzs_fbcon_attach(uintptr_t fb_va)
 	xzs_fbcon_clear(XZS_COLOR_BG);
 	xzs_diag_emit("[XZS-ATTACH] 2: clear done\n");
 
-	/* Render Title Banner */
-	g_fbcon_row = 0;
+	/* Render Pinned "ĐU MA MAY" Header Banner (rows 0..8) + Status Divider (rows 9..10) */
+	xzs_draw_du_ma_may_banner(fb_va, XZS_FB_WIDTH, XZS_FB_STRIDE, 12u, false);
+	g_fbcon_row = 9;
 	g_fbcon_col = 0;
-	xzs_fbcon_puts_raw("=======================================================================================================================================\n", XZS_COLOR_CYAN, XZS_COLOR_BG);
-	xzs_fbcon_puts_raw("  Sony Xperia XZs (G8231 / MSM8996) - Native XNU Full-Screen Console [1080x1920, 135x120 text, XRGB8888, 60Hz Autonomous Refresh]  \n", XZS_COLOR_GREEN, XZS_COLOR_BG);
+	xzs_fbcon_puts_raw("  Sony Xperia XZs (G8231 / MSM8996) - Native XNU Verbose Boot Console [1080x1920, XRGB8888, Live iOS 16.7.12 RootFS Bringup]  \n", XZS_COLOR_GREEN, XZS_COLOR_BG);
 	xzs_fbcon_puts_raw("=======================================================================================================================================\n", XZS_COLOR_CYAN, XZS_COLOR_BG);
 	xzs_diag_emit("[XZS-ATTACH] 3: banner done\n");
 

@@ -43,6 +43,7 @@ uint32_t xzs_fb_kick_count(void);
 void xzs_fb_present_kick(void);
 void xzs_fbcon_detach(void);
 bool xzs_fbcon_is_active(void);
+void xzs_draw_du_ma_may_banner(uintptr_t fb_va, uint32_t width, uint32_t stride, uint32_t top_y, bool clear_full_screen);
 void xzs_watchdog_pet(void);
 bool g_xzs_springboard_surface_ready = false;
 bool g_xzs_gui_presented = false;
@@ -57,6 +58,7 @@ bool g_xzs_gui_presented = false;
 #include <IOKit/system.h>
 #include <pexpert/pexpert.h>
 #include <kern/clock.h>
+#include <kern/sched_prim.h>
 #include <sys/proc.h>
 
 enum {
@@ -98,6 +100,25 @@ OSDefineMetaClassAndStructors(IOMobileFramebuffer, IOService);
 
 class IOMobileFramebufferUserClient;
 
+#define XZS_FB_WORKER_THREADS           3
+
+struct XZSFBSliceJob {
+	uintptr_t src_base;
+	uint32_t  src_bpr;
+	uint32_t  src_w;
+	uint32_t  src_h;
+	uintptr_t dst_base;
+	uint32_t  dst_bpr;
+	int32_t   px0, px1;
+	int32_t   py0, py1;
+	int32_t   sx, sy;
+	uint32_t  step_x, step_y;
+	bool      use_1to1_map;
+	bool      use_wallpaper;
+	volatile uint32_t gen;
+	volatile uint32_t done_count;
+};
+
 class AppleCLCD : public IOMobileFramebuffer {
 	OSDeclareDefaultStructors(AppleCLCD);
 
@@ -106,6 +127,8 @@ class AppleCLCD : public IOMobileFramebuffer {
 	uint64_t            fVsyncCount;
 
 	static void vsyncFired(OSObject *owner, IOTimerEventSource *sender);
+	static void presenterMain(void *arg, wait_result_t wr);
+	static void helperMain(void *arg, wait_result_t wr);
 
 public:
 	uint64_t      fPhys;
@@ -121,15 +144,19 @@ public:
 	bool          fConsolePaused;
 	uint8_t       fPending[SWEET_FB_SWAP_REC_SIZE];     /* latest swap, not yet shown */
 	bool          fDirty;
+	bool          fPresentReady;
 	uint32_t      fFlushTicks;    /* vsync ticks between panel copies */
 	bool          fPowerOff;      /* RequestPowerChange(0) */
 	uint32_t      fFadeStep;      /* fade-out steps done while off */
+	volatile uint32_t fNextWorkerID;
+	XZSFBSliceJob fJob;
 
 	bool start(IOService *provider) APPLE_KEXT_OVERRIDE;
 	void addClient(IOMobileFramebufferUserClient *client);
 	void removeClient(IOMobileFramebufferUserClient *client);
 	void swap(const uint8_t *rec);
 	void present(const uint8_t *rec);
+	void renderSlice(uint32_t worker_id, uint32_t total_workers);
 };
 
 OSDefineMetaClassAndStructors(AppleCLCD, IOMobileFramebuffer);
@@ -163,62 +190,7 @@ sweet_draw_apple_logo(uintptr_t base, uint32_t width, uint32_t height, uint32_t 
 	if (base == 0 || width == 0 || height == 0 || rowBytes < width * 4) {
 		return;
 	}
-	int32_t cx = (int32_t)(width / 2);
-	int32_t cy = (int32_t)(height / 2);
-	const int32_t radius = 90; /* ~180x220 Apple boot logo at 1080x1920 */
-
-	for (uint32_t y = 0; y < height; y++) {
-		if ((y & 63u) == 0u) {
-			xzs_watchdog_pet();
-		}
-		uint32_t *row = (uint32_t *)(base + (uint64_t)y * rowBytes);
-		int32_t dy = (int32_t)y - cy;
-		int32_t v = (dy * 1000) / radius;
-		bool in_v_band = (v >= -1450 && v <= 950);
-
-		for (uint32_t x = 0; x < width; x++) {
-			uint32_t pixel = 0xff000000u;
-			if (in_v_band) {
-				int32_t dx = (int32_t)x - cx;
-				int32_t u = (dx * 1000) / radius;
-				if (u >= -1000 && u <= 1000) {
-					bool on = false;
-					/* Tilted lens leaf at top: center (160, -960), angle -42 deg */
-					int32_t du = u - 160;
-					int32_t dv = v + 960;
-					int32_t lu = (du * 743 - dv * 669) / 1000;
-					int32_t lv = (du * 669 + dv * 743) / 1000;
-					int32_t d1 = lu * lu + (lv - 290) * (lv - 290);
-					int32_t d2 = lu * lu + (lv + 290) * (lv + 290);
-					if (d1 <= 420 * 420 && d2 <= 420 * 420) {
-						on = true;
-					}
-					/* Apple body: two tapered lobes minus circular right-side bite */
-					int32_t bdx = u - 940;
-					int32_t bdy = v + 60;
-					if (!on && (bdx * bdx + bdy * bdy > 430 * 430) && v >= -820 && v <= 900) {
-						int32_t au = u < 0 ? -u : u;
-						int32_t uc = 330 - (v * 95) / 1000;
-						int32_t rx = 530 - (v * 145) / 1000;
-						int32_t ry = 800;
-						int32_t vc = 50;
-						if (rx > 100) {
-							int32_t nx = ((au - uc) * 1000) / rx;
-							int32_t ny = ((v - vc) * 1000) / ry;
-							if (nx * nx + ny * ny <= 1000 * 1000) {
-								on = true;
-							}
-						}
-					}
-					if (on) {
-						pixel = 0xffffffffu;
-					}
-				}
-			}
-			row[x] = pixel;
-		}
-	}
-	__asm__ volatile("dmb oshst" ::: "memory");
+	xzs_draw_du_ma_may_banner(base, width, rowBytes, (height > 128u) ? (height - 128u) / 2u : 0u, true);
 }
 
 #define XZS_WP_W 270u
@@ -327,6 +299,29 @@ xzs_fb_py_to_ly(uint32_t py)
 	return ly;
 }
 
+static uint16_t s_py_to_ly_lut[1920];
+static uint16_t s_px_to_lx_lut[1080];
+static bool s_luts_ready = false;
+
+static void
+xzs_init_scale_luts(void)
+{
+	if (s_luts_ready) {
+		return;
+	}
+	for (uint32_t py = 0; py < 1920u; py++) {
+		s_py_to_ly_lut[py] = (uint16_t)xzs_fb_py_to_ly(py);
+	}
+	for (uint32_t px = 0; px < 1080u; px++) {
+		uint32_t lx = (px * SWEET_FB_LOGICAL_W) / 1080u;
+		if (lx >= SWEET_FB_LOGICAL_W) {
+			lx = SWEET_FB_LOGICAL_W - 1u;
+		}
+		s_px_to_lx_lut[px] = (uint16_t)lx;
+	}
+	s_luts_ready = true;
+}
+
 bool
 AppleCLCD::start(IOService *provider)
 {
@@ -363,12 +358,10 @@ AppleCLCD::start(IOService *provider)
 	fOffX = (int32_t)(fLogicalW - fWidth) / 2;
 	fOffY = (int32_t)(fLogicalH - fHeight) / 2;
 	xzs_init_ios16_wallpaper();
+	xzs_init_scale_luts();
 	fLock = IOLockAlloc();
 	fClients = OSArray::withCapacity(4);
 	fSurface = sweet_surface_create_physical(fPhys, fWidth, fHeight, fRowBytes, SWEET_FB_FORMAT_BGRA);
-	if (fSurface != NULL && fSurface->kernelAddress() != 0) {
-		sweet_draw_apple_logo(fSurface->kernelAddress(), fWidth, fHeight, fRowBytes);
-	}
 	fPixels = xzs_fb_kernel_va();
 	if (fPixels == 0 && fSurface != NULL) {
 		fPixels = fSurface->kernelAddress();
@@ -385,32 +378,46 @@ AppleCLCD::start(IOService *provider)
 		IOLog("SWEET FB: no vsync timer\n");
 		return false;
 	}
-	uint32_t hz = 10;
+	uint32_t hz = 30;
 	PE_parse_boot_argn("sweetfb_hz", &hz, sizeof(hz));
 	fFlushTicks = (hz == 0 || hz >= 60) ? 1 : 60 / hz;
+
+	/* Start parallel row-slice helper threads + dedicated presenter thread (hackios MiniIOMobileFramebuffer architecture) */
+	fNextWorkerID = 1;
+	for (uint32_t w = 1; w < XZS_FB_WORKER_THREADS; w++) {
+		thread_t hth = THREAD_NULL;
+		if (kernel_thread_start(&AppleCLCD::helperMain, this, &hth) == KERN_SUCCESS) {
+			thread_deallocate(hth);
+		}
+	}
+	thread_t pth = THREAD_NULL;
+	if (kernel_thread_start(&AppleCLCD::presenterMain, this, &pth) == KERN_SUCCESS) {
+		thread_deallocate(pth);
+	}
+
 	fVsync->setTimeoutUS(SWEET_FB_VSYNC_US);
 
-	/* For iOS RootFS boot (non-md0), detach boot console and present centered white Apple boot logo on physical LCD */
-	char rd_arg[32] = "";
-	int keep_console = 0;
-	(void)PE_parse_boot_argn("sweetfb_console", &keep_console, sizeof(keep_console));
-	bool is_md0 = !PE_parse_boot_argn("rd", rd_arg, sizeof(rd_arg)) ||
-	    strncmp(rd_arg, "md", 2) == 0;
-	if (!is_md0 && keep_console == 0) {
+	/* Keep verbose boot console + "ĐU MA MAY" banner active on LCD until SpringBoard presents its first GUI frame */
+	int no_console = 0;
+	(void)PE_parse_boot_argn("sweetfb_noconsole", &no_console, sizeof(no_console));
+	if (no_console != 0) {
 		fConsolePaused = true;
 		xzs_fbcon_detach();
 		sweet_draw_apple_logo(fPixels, fWidth, fHeight, fRowBytes);
 		xzs_fb_present_kick();
-		IOLog("SWEET FB: detached boot console and presented Apple boot logo at 0x%llx (va=0x%lx kicks=%u)\n",
+		IOLog("SWEET FB: presented DU MA MAY banner at 0x%llx (va=0x%lx kicks=%u)\n",
 		    fPhys, (unsigned long)fPixels, xzs_fb_kick_count());
+	} else {
+		fConsolePaused = false;
+		IOLog("SWEET FB: keeping verbose boot console + DU MA MAY banner active on LCD until SpringBoard GUI is ready\n");
 	}
 
 	setProperty(kIOUserClientClassKey, "IOMobileFramebufferUserClient");
 	setProperty("external", false);
 	setProperty("DisplayPipePlaneBaseAlignment", 64ULL, 32);
 	registerService();
-	IOLog("SWEET FB: AppleCLCD %ux%u stride %u at 0x%llx (va=0x%lx), default surface %u, presented as %ux%u\n",
-	    fWidth, fHeight, fRowBytes, fPhys, (unsigned long)fPixels, fSurface->id, fLogicalW, fLogicalH);
+	IOLog("SWEET FB: AppleCLCD %ux%u stride %u at 0x%llx (va=0x%lx), default surface %u, presented as %ux%u (%u Hz, %u threads)\n",
+	    fWidth, fHeight, fRowBytes, fPhys, (unsigned long)fPixels, fSurface->id, fLogicalW, fLogicalH, hz, XZS_FB_WORKER_THREADS);
 	return true;
 }
 
@@ -432,40 +439,138 @@ AppleCLCD::vsyncFired(OSObject *owner, IOTimerEventSource *sender)
 		    (IOMobileFramebufferUserClient *)fb->fClients->getObject(i);
 		client->notify(SWEET_FB_NOTIFY_VSYNC, values, 6);
 	}
-	if (fb->fPowerOff) {
-		/* Fade out: halve every channel each vsync, then black, then idle. */
-		uint32_t step = fb->fFadeStep;
-		if (step <= 6) {
-			fb->fFadeStep = step + 1;
-		}
-		IOLockUnlock(fb->fLock);
-		if (step <= 6) {
-			for (uint32_t y = 0; y < fb->fHeight; y++) {
-				volatile uint32_t *row = (volatile uint32_t *)(fb->fPixels + (uint64_t)y * fb->fRowBytes);
-				for (uint32_t x = 0; x < fb->fWidth; x++) {
-					row[x] = step < 6 ? (row[x] >> 1) & 0x7f7f7f7f : 0;
-				}
-			}
-			xzs_fb_present_kick();
-		}
-		sender->setTimeoutUS(SWEET_FB_VSYNC_US);
-		return;
-	}
-	bool flush = fb->fDirty && (count % fb->fFlushTicks) == 0;
-	uint8_t *rec = NULL;
-	if (flush) {
-		rec = (uint8_t *)IOMallocData(SWEET_FB_SWAP_REC_SIZE);
-		if (rec != NULL) {
-			memcpy(rec, fb->fPending, SWEET_FB_SWAP_REC_SIZE);
-			fb->fDirty = false;
-		}
+	if (!fb->fPowerOff && fb->fDirty && (count % fb->fFlushTicks) == 0) {
+		fb->fPresentReady = true;
+		IOLockWakeup(fb->fLock, &fb->fPresentReady, true);
 	}
 	IOLockUnlock(fb->fLock);
-	if (rec != NULL) {
-		fb->present(rec);
-		IOFreeData(rec, SWEET_FB_SWAP_REC_SIZE);
-	}
 	sender->setTimeoutUS(SWEET_FB_VSYNC_US);
+}
+
+void
+AppleCLCD::presenterMain(void *arg, __unused wait_result_t wr)
+{
+	AppleCLCD *fb = (AppleCLCD *)arg;
+	uint8_t rec[SWEET_FB_SWAP_REC_SIZE];
+
+	for (;;) {
+		IOLockLock(fb->fLock);
+		while (!fb->fPresentReady) {
+			IOLockSleep(fb->fLock, &fb->fPresentReady, THREAD_UNINT);
+		}
+		memcpy(rec, fb->fPending, SWEET_FB_SWAP_REC_SIZE);
+		fb->fPresentReady = false;
+		fb->fDirty = false;
+		IOLockUnlock(fb->fLock);
+
+		fb->present(rec);
+	}
+}
+
+void
+AppleCLCD::helperMain(void *arg, __unused wait_result_t wr)
+{
+	AppleCLCD *fb = (AppleCLCD *)arg;
+	uint32_t wid = __atomic_fetch_add(&fb->fNextWorkerID, 1u, __ATOMIC_RELAXED);
+	uint32_t seen_gen = 0;
+
+	for (;;) {
+		assert_wait((event_t)&fb->fJob.gen, THREAD_UNINT);
+		uint32_t cur_gen = __atomic_load_n(&fb->fJob.gen, __ATOMIC_ACQUIRE);
+		if (cur_gen == seen_gen) {
+			thread_block(THREAD_CONTINUE_NULL);
+			continue;
+		}
+		clear_wait(current_thread(), THREAD_AWAKENED);
+		seen_gen = cur_gen;
+
+		fb->renderSlice(wid, XZS_FB_WORKER_THREADS);
+		__atomic_add_fetch(&fb->fJob.done_count, 1u, __ATOMIC_RELEASE);
+		thread_wakeup((event_t)&fb->fJob.done_count);
+	}
+}
+
+void
+AppleCLCD::renderSlice(uint32_t worker_id, uint32_t total_workers)
+{
+	const XZSFBSliceJob &job = fJob;
+	int32_t total_h = job.py1 - job.py0;
+	int32_t slice_y0 = job.py0 + (total_h * (int32_t)worker_id) / (int32_t)total_workers;
+	int32_t slice_y1 = (worker_id + 1u == total_workers) ?
+	    job.py1 : (job.py0 + (total_h * (int32_t)(worker_id + 1u)) / (int32_t)total_workers);
+	if (slice_y0 >= slice_y1) {
+		return;
+	}
+
+	uint32_t s_w_max = job.src_w > 0 ? job.src_w - 1u : 0u;
+	uint32_t acc_y = ((uint32_t)job.sy << 16) + (uint32_t)(slice_y0 - job.py0) * job.step_y;
+	bool full_row_lut = job.use_1to1_map && job.px0 == 0 && job.px1 == 1080;
+
+	for (int32_t py = slice_y0; py < slice_y1; py++) {
+		uint32_t src_y;
+		if (job.use_1to1_map) {
+			src_y = s_py_to_ly_lut[(uint32_t)py < 1920u ? (uint32_t)py : 1919u];
+		} else {
+			src_y = acc_y >> 16;
+			acc_y += job.step_y;
+		}
+		if (src_y >= job.src_h) {
+			src_y = job.src_h - 1u;
+		}
+		const uint32_t *src_row = (const uint32_t *)(job.src_base + (uint64_t)src_y * job.src_bpr);
+		uint32_t *dst_row = (uint32_t *)(job.dst_base + (uint64_t)py * job.dst_bpr);
+		const uint32_t *wp_row = job.use_wallpaper ?
+		    &s_ios16_wallpaper[((uint32_t)py >> 2) * XZS_WP_W] : NULL;
+		uint32_t acc_x = (uint32_t)job.sx << 16;
+
+		for (int32_t px = job.px0; px < job.px1; px++) {
+			uint32_t lx;
+			if (full_row_lut) {
+				lx = s_px_to_lx_lut[(uint32_t)px];
+			} else {
+				lx = acc_x >> 16;
+				acc_x += job.step_x;
+			}
+			uint32_t p = src_row[lx];
+			if (wp_row != NULL) {
+				uint32_t rgb = p & 0x00ffffffu;
+				if (__builtin_expect(rgb == 0u, 1)) {
+					/* Fast path for pure-black wallpaper background pixels */
+					uint32_t nl = src_row[lx > 14u ? lx - 14u : 0u];
+					uint32_t nr = src_row[lx + 14u <= s_w_max ? lx + 14u : s_w_max];
+					if (((nl & nr) & 0x00c0c0c0u) != 0x00c0c0c0u) {
+						dst_row[px] = wp_row[(uint32_t)px >> 2];
+						continue;
+					}
+				} else if (__builtin_expect((rgb & 0x00e0e0e0u) == 0u, 0)) {
+					/* Smooth edge anti-aliasing blend for dark pixels (max_c < 32) */
+					uint32_t nl = src_row[lx > 14u ? lx - 14u : 0u];
+					uint32_t nr = src_row[lx + 14u <= s_w_max ? lx + 14u : s_w_max];
+					if (((nl & nr) & 0x00c0c0c0u) != 0x00c0c0c0u) {
+						uint32_t b = rgb & 0xffu;
+						uint32_t g = (rgb >> 8) & 0xffu;
+						uint32_t r = (rgb >> 16) & 0xffu;
+						uint32_t max_c = r > g ? (r > b ? r : b) : (g > b ? g : b);
+						if (max_c < 28u) {
+							uint32_t wp = wp_row[(uint32_t)px >> 2];
+							uint32_t wf = max_c * 9u;
+							uint32_t ww = 256u - wf;
+							uint32_t wr = wp & 0xffu;
+							uint32_t wg = (wp >> 8) & 0xffu;
+							uint32_t wb = (wp >> 16) & 0xffu;
+							uint32_t or_c = (wr * ww + r * wf) >> 8;
+							uint32_t og_c = (wg * ww + g * wf) >> 8;
+							uint32_t ob_c = (wb * ww + b * wf) >> 8;
+							dst_row[px] = 0xff000000u | (ob_c << 16) | (og_c << 8) | or_c;
+							continue;
+						}
+					}
+				}
+			}
+			/* Convert iOS BGRA (B0=B, B1=G, B2=R, B3=A) to XZS MDP5 unpack (B0=R, B1=G, B2=B, B3=A) */
+			dst_row[px] = (p & 0xff00ff00u) | ((p & 0x00ff0000u) >> 16) | ((p & 0x000000ffu) << 16);
+		}
+	}
 }
 
 void
@@ -498,13 +603,15 @@ get32(const uint8_t *p, uint32_t off)
 static uint32_t sweet_fb_swaps_logged;
 static uint64_t sweet_fb_swap_count;
 
-/* Copy each enabled layer's surface into the panel memory (no scaling). */
+/* Queue the swap and wake the async presenter thread immediately. */
 void
 AppleCLCD::swap(const uint8_t *rec)
 {
 	IOLockLock(fLock);
 	memcpy(fPending, rec, SWEET_FB_SWAP_REC_SIZE);
 	fDirty = true;
+	fPresentReady = true;
+	IOLockWakeup(fLock, &fPresentReady, true);
 	IOLockUnlock(fLock);
 	if ((++sweet_fb_swap_count % 1000) == 0) {
 		IOLog("XZS FB: %llu swaps\n", sweet_fb_swap_count);
@@ -663,72 +770,45 @@ AppleCLCD::present(const uint8_t *rec)
 				}
 			}
 
-			bool use_1to1_map = (fWidth == 1080u && fHeight == 1920u &&
+			fJob.src_base = src + s->offset;
+			fJob.src_bpr  = s->bytesPerRow;
+			fJob.src_w    = s->width;
+			fJob.src_h    = s->height;
+			fJob.dst_base = fPixels;
+			fJob.dst_bpr  = fRowBytes;
+			fJob.px0      = px0;
+			fJob.px1      = px1;
+			fJob.py0      = py0;
+			fJob.py1      = py1;
+			fJob.sx       = sx;
+			fJob.sy       = sy;
+			fJob.step_x   = ((uint32_t)sw << 16) / (uint32_t)pw;
+			fJob.step_y   = ((uint32_t)sh << 16) / (uint32_t)ph;
+			fJob.use_1to1_map = (fWidth == 1080u && fHeight == 1920u &&
 			    fLogicalW == SWEET_FB_LOGICAL_W && fLogicalH == SWEET_FB_LOGICAL_H &&
 			    sy == 0 && sh == (int32_t)SWEET_FB_LOGICAL_H &&
 			    py0 == 0 && py1 == 1920);
-			bool use_wallpaper = s_ios16_wallpaper_ready &&
+			fJob.use_wallpaper = s_ios16_wallpaper_ready &&
 			    g_xzs_springboard_surface_ready &&
 			    total_samples > 0 && (black_samples * 3u > total_samples);
 
-			uint32_t step_x = ((uint32_t)sw << 16) / (uint32_t)pw;
-			uint32_t step_y = ((uint32_t)sh << 16) / (uint32_t)ph;
-			uint32_t acc_y = (uint32_t)sy << 16;
-			uint32_t s_w_max = s->width > 0 ? s->width - 1u : 0u;
-			for (int32_t py = py0; py < py1; py++) {
-				uint32_t src_y;
-				if (use_1to1_map) {
-					src_y = xzs_fb_py_to_ly((uint32_t)py);
-				} else {
-					src_y = acc_y >> 16;
-					acc_y += step_y;
-				}
-				if (src_y >= s->height) {
-					src_y = s->height - 1;
-				}
-				const uint32_t *src_row = (const uint32_t *)(src + s->offset + (uint64_t)src_y * s->bytesPerRow);
-				uint32_t *dst_row = (uint32_t *)(fPixels + (uint64_t)py * fRowBytes);
-				const uint32_t *wp_row = use_wallpaper ?
-				    &s_ios16_wallpaper[((uint32_t)py >> 2) * XZS_WP_W] : NULL;
-				uint32_t acc_x = (uint32_t)sx << 16;
-				for (int32_t px = px0; px < px1; px++) {
-					uint32_t lx = acc_x >> 16;
-					uint32_t p = src_row[lx];
-					acc_x += step_x;
-					if (wp_row != NULL) {
-						uint32_t b = p & 0xffu;
-						uint32_t g = (p >> 8) & 0xffu;
-						uint32_t r = (p >> 16) & 0xffu;
-						uint32_t max_c = r > g ? (r > b ? r : b) : (g > b ? g : b);
-						if (max_c < 28u) {
-							/* Preserve dark text inside bright white icons (e.g. Calendar) */
-							uint32_t nl = src_row[lx > 14u ? lx - 14u : 0u];
-							uint32_t nr = src_row[lx + 14u <= s_w_max ? lx + 14u : s_w_max];
-							bool inside_white_icon =
-							    ((nl & 0x00c0c0c0u) == 0x00c0c0c0u) &&
-							    ((nr & 0x00c0c0c0u) == 0x00c0c0c0u);
-							if (!inside_white_icon) {
-								uint32_t wp = wp_row[(uint32_t)px >> 2];
-								if (max_c == 0u) {
-									dst_row[px] = wp;
-									continue;
-								}
-								uint32_t wf = max_c * 9u; /* 9..243 */
-								uint32_t ww = 256u - wf;
-								uint32_t wr = wp & 0xffu;
-								uint32_t wg = (wp >> 8) & 0xffu;
-								uint32_t wb = (wp >> 16) & 0xffu;
-								uint32_t or_c = (wr * ww + r * wf) >> 8;
-								uint32_t og_c = (wg * ww + g * wf) >> 8;
-								uint32_t ob_c = (wb * ww + b * wf) >> 8;
-								dst_row[px] = 0xff000000u | (ob_c << 16) | (og_c << 8) | or_c;
-								continue;
-							}
-						}
+			if (ph >= 192 && XZS_FB_WORKER_THREADS > 1) {
+				__atomic_store_n(&fJob.done_count, 0u, __ATOMIC_RELAXED);
+				__atomic_add_fetch(&fJob.gen, 1u, __ATOMIC_RELEASE);
+				thread_wakeup((event_t)&fJob.gen);
+
+				renderSlice(0u, XZS_FB_WORKER_THREADS);
+
+				while (__atomic_load_n(&fJob.done_count, __ATOMIC_ACQUIRE) < (XZS_FB_WORKER_THREADS - 1u)) {
+					assert_wait((event_t)&fJob.done_count, THREAD_UNINT);
+					if (__atomic_load_n(&fJob.done_count, __ATOMIC_ACQUIRE) >= (XZS_FB_WORKER_THREADS - 1u)) {
+						clear_wait(current_thread(), THREAD_AWAKENED);
+						break;
 					}
-					/* Convert iOS BGRA (B0=B, B1=G, B2=R, B3=A) to XZS MDP5 unpack (B0=R, B1=G, B2=B, B3=A) */
-					dst_row[px] = (p & 0xff00ff00u) | ((p & 0x00ff0000u) >> 16) | ((p & 0x000000ffu) << 16);
+					thread_block(THREAD_CONTINUE_NULL);
 				}
+			} else {
+				renderSlice(0u, 1u);
 			}
 			any_drawn = true;
 		}

@@ -1551,19 +1551,20 @@ sweet_sample_thread(__unused void *arg, __unused wait_result_t wr)
 	extern void xzs_usb_pump_sync(void);
 	uint32_t sample_idx = 0;
 	uint32_t sec = 0;
-	if (!PE_parse_boot_argn("sweetsample", sweet_sample_names, sizeof(sweet_sample_names))) {
+	bool periodic = PE_parse_boot_argn("sweetsample", sweet_sample_names, sizeof(sweet_sample_names));
+	if (!periodic) {
 		strlcpy(sweet_sample_names, "launchd,SpringBoard,backboardd,logd,keybagd,seld,dasd", sizeof(sweet_sample_names));
 	}
 	if (sweet_sample_names[0] == '-') {
 		return;
 	}
-	printf("SMP: sampler thread active for [%s]\n", sweet_sample_names);
+	printf("SMP: sampler thread active for [%s] (periodic=%d)\n", sweet_sample_names, periodic ? 1 : 0);
 	while (sample_idx < 120) {
 		delay_for_interval(1, NSEC_PER_SEC);
 		sec++;
 		xzs_watchdog_pet();
 		xzs_usb_pump_sync();
-		if (g_xzs_sample_requested || (sec >= 5 && ((sec % 15) == 0))) {
+		if (g_xzs_sample_requested || (periodic && sec >= 5 && ((sec % 15) == 0))) {
 			g_xzs_sample_requested = 0;
 			printf("SMP --- sample %u (t=%us)\n", sample_idx++, sec);
 			proc_iterate(PROC_ALLPROCLIST, sweet_sample_proc, NULL, NULL, NULL);

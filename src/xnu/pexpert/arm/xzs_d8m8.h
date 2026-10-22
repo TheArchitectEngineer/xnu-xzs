@@ -1836,67 +1836,15 @@ xzs_d8m8_fb_init(void)
 	xzs_d8p1_hex32(*(volatile uint32_t *)g_m8_fb_va);
 	xzs_diag_emit("\n");
 
-	/* Render centered white Apple boot logo on pure black background (1080x1920) */
-	int32_t cx = (int32_t)XZS_FB_WIDTH / 2;
-	int32_t cy = (int32_t)XZS_FB_HEIGHT / 2 + 12;
-	for (int32_t y = 0; y < (int32_t)XZS_FB_HEIGHT; y++) {
-		if ((y & 63) == 0) {
-			xzs_watchdog_pet();
-		}
-		uint32_t *line_ptr = (uint32_t *)(g_m8_fb_va + (uint32_t)y * XZS_FB_STRIDE);
-		for (int32_t x = 0; x < (int32_t)(XZS_FB_STRIDE / 4); x++) {
-			uint32_t px = 0xff000000u;
-			if (x < (int32_t)XZS_FB_WIDTH && y >= cy - 130 && y <= cy + 90 &&
-			    x >= cx - 95 && x <= cx + 95) {
-				int32_t dx = x - cx;
-				int32_t dy = y - cy;
-				int32_t lx = dx + 26;
-				int32_t rx = dx - 26;
-				int32_t by = (dy * 10) / 11;
-				if (dy > 0) {
-					int32_t taper = dy / 5;
-					if (lx < 0) lx -= taper; else lx += taper;
-					if (rx < 0) rx -= taper; else rx += taper;
-				}
-				bool in_left  = (lx * lx + by * by <= 52 * 52);
-				bool in_right = (rx * rx + by * by <= 52 * 52);
-				bool in_bridge = (dx >= -26 && dx <= 26 && dy >= -42 && dy <= 44);
-				bool in_body = in_left || in_right || in_bridge;
-				int32_t td = dy + 48;
-				if (dx >= -18 && dx <= 18 && td >= -12 && td <= 8) {
-					if (dx * dx + td * td * 3 <= 18 * 18) {
-						in_body = false;
-					}
-				}
-				int32_t bd = dy - 52;
-				if (dx >= -16 && dx <= 16 && bd >= -8 && bd <= 12) {
-					if (dx * dx + bd * bd * 3 <= 16 * 16) {
-						in_body = false;
-					}
-				}
-				int32_t bx = dx - 72;
-				int32_t bty = dy + 8;
-				if (bx * bx + bty * bty <= 34 * 34) {
-					in_body = false;
-				}
-				int32_t fx = dx - 12;
-				int32_t fy = dy + 82;
-				int32_t u = fx - fy;
-				int32_t v = fx + fy;
-				bool in_leaf = (u * u * 3 + v * v <= 38 * 38 * 2);
-				if (in_body || in_leaf) {
-					px = 0xffffffffu;
-				}
-			}
-			line_ptr[x] = px;
-		}
-	}
+	/* Render centered "ĐU MA MAY" boot banner on pure black background (1080x1920) */
+	extern void xzs_draw_du_ma_may_banner(uintptr_t fb_va, uint32_t width, uint32_t stride, uint32_t top_y, bool clear_full_screen);
+	xzs_draw_du_ma_may_banner(g_m8_fb_va, XZS_FB_WIDTH, XZS_FB_STRIDE, (XZS_FB_HEIGHT - 128u) / 2u, true);
 
 	uint32_t sample_first  = *(uint32_t *)g_m8_fb_va;
 	uint32_t sample_middle = *(uint32_t *)(g_m8_fb_va + 960u * XZS_FB_STRIDE + 540u * 4u);
 	uint32_t sample_last   = *(uint32_t *)(g_m8_fb_va + 1919u * XZS_FB_STRIDE + 1079u * 4u);
 
-	xzs_diag_emit("  FB_PATTERN       = APPLE_BOOT_LOGO_WHITE_ON_BLACK\n");
+	xzs_diag_emit("  FB_PATTERN       = DU_MA_MAY_BANNER_WHITE_ON_BLACK\n");
 	xzs_diag_emit("  FB_SAMPLE_FIRST  = 0x"); xzs_d8p1_hex32(sample_first); xzs_diag_emit("\n");
 	xzs_diag_emit("  FB_SAMPLE_MIDDLE = 0x"); xzs_d8p1_hex32(sample_middle); xzs_diag_emit("\n");
 	xzs_diag_emit("  FB_SAMPLE_LAST   = 0x"); xzs_d8p1_hex32(sample_last); xzs_diag_emit("\n");
@@ -3570,20 +3518,17 @@ xzs_d8m8_kickoff(void)
 	xzs_diag_emit("D8_M8_5_GOLDEN_BASELINE=ACTIVE\n");
 	xzs_diag_emit("M8_KICKOFF_COMPLETE\n");
 
-	/* Milestone D8-M10: Attach Framebuffer Console only for RAMDisk (md0) or if sweetfb_console=1 */
+	/* Milestone D8-M10: Attach Framebuffer Console during boot (until SpringBoard presents its first GUI frame) */
 	g_m8_frame_in_flight = true;
 	g_m8_framebuffer_scanout_count = 1;
-	char rd_arg[32] = "";
-	int keep_console = 0;
-	(void)PE_parse_boot_argn("sweetfb_console", &keep_console, sizeof(keep_console));
-	bool is_md0 = !PE_parse_boot_argn("rd", rd_arg, sizeof(rd_arg)) ||
-	    strncmp(rd_arg, "md", 2) == 0;
-	if (g_m8_fb_va != 0 && (is_md0 || keep_console != 0)) {
+	int no_console = 0;
+	(void)PE_parse_boot_argn("sweetfb_noconsole", &no_console, sizeof(no_console));
+	if (g_m8_fb_va != 0 && no_console == 0) {
 		xzs_fbcon_attach(g_m8_fb_va);
 	} else {
 		xzs_fbcon_detach();
 		xzs_d8m8_kick_frame_ex(true);
-		xzs_diag_emit("[XZS-DISP] Apple boot logo presented on physical LCD (console detached for iOS GUI)\n");
+		xzs_diag_emit("[XZS-DISP] DU MA MAY boot banner presented on physical LCD (console detached)\n");
 	}
 }
 

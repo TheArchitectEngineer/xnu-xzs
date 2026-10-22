@@ -373,6 +373,7 @@ extern "C" {
 extern bool g_xzs_gui_presented;
 extern uint32_t xzs_fb_py_to_ly(uint32_t py);
 extern int xzs_spmi_read8(uint8_t sid, uint16_t addr, uint8_t *val);
+extern int xzs_spmi_write8(uint8_t sid, uint16_t addr, uint8_t val);
 extern vm_offset_t ml_io_map(vm_offset_t phys_addr, vm_size_t size);
 void sweet_hid_key(int key, int down);
 void sweet_hid_touch(int finger, int down, int x, int y);
@@ -598,31 +599,53 @@ static bool s_xzs_keys_started = false;
 static bool s_xzs_touch_started = false;
 
 static void
+xzs_pm8994_gpio_enable_input(uint16_t base)
+{
+	/* QPNP PIN: MODE_CTL=0x00 (Digital In), DIG_VIN_CTL=0x02 (VIN2 1.8V),
+	 * DIG_PULL_CTL=0x00 (30uA pull-up), EN_CTL=0x80 (Master Enable) */
+	(void)xzs_spmi_write8(0, (uint16_t)(base + 0x40u), 0x00u);
+	(void)xzs_spmi_write8(0, (uint16_t)(base + 0x41u), 0x02u);
+	(void)xzs_spmi_write8(0, (uint16_t)(base + 0x42u), 0x00u);
+	(void)xzs_spmi_write8(0, (uint16_t)(base + 0x46u), 0x80u);
+}
+
+static void
 xzs_keys_thread(void *arg __unused, wait_result_t wr __unused)
 {
-	while (!g_xzs_gui_presented) {
-		IOSleep(500);
-	}
-	IOSleep(500);
+	IOSleep(2000);
 
-	/* Capture resting baseline of each PM8994 button register */
-	static const uint16_t k_regs[4] = { 0x0810u, 0xc210u, 0xc110u, 0xc310u };
-	uint8_t base_bit[4] = { 0, 1, 1, 1 };
-	bool valid[4] = { false, false, false, false };
-	int state[4] = { 0, 0, 0, 0 };
+	/* Ensure PM8994 GPIO2 (Vol Dn), GPIO3 (Vol Up), GPIO4 (Cam Snap), GPIO5 (Cam Focus) are enabled with 30uA pull-ups */
+	xzs_pm8994_gpio_enable_input(0xc100u);
+	xzs_pm8994_gpio_enable_input(0xc200u);
+	xzs_pm8994_gpio_enable_input(0xc300u);
+	xzs_pm8994_gpio_enable_input(0xc400u);
+	IODelay(200);
 
-	for (int k = 0; k < 4; k++) {
+	/* Capture resting baseline of each PM8994 button register:
+	 * 0: PON_RT_STS (0x0810, Power)
+	 * 1: GPIO3_RT_STS (0xc210, Vol Up)
+	 * 2: GPIO2_RT_STS (0xc110, Vol Down)
+	 * 3: GPIO4_RT_STS (0xc310, Camera Snapshot full-press -> Home)
+	 * 4: GPIO5_RT_STS (0xc410, Camera Focus half-press -> Home) */
+	static const uint16_t k_regs[5] = { 0x0810u, 0xc210u, 0xc110u, 0xc310u, 0xc410u };
+	uint8_t base_bit[5] = { 0, 1, 1, 1, 1 };
+	bool valid[5] = { false, false, false, false, false };
+	int state[5] = { 0, 0, 0, 0, 0 };
+	int home_down = 0;
+
+	for (int k = 0; k < 5; k++) {
 		uint8_t v = 0;
 		if (xzs_spmi_read8(0, k_regs[k], &v) == 0) {
 			base_bit[k] = v & 1u;
 			valid[k] = true;
 		}
 	}
-	IOLog("XZS KEYS: PM8994 baseline pon=%u/%d vol_up=%u/%d vol_dn=%u/%d cam_home=%u/%d\n",
-	    base_bit[0], valid[0], base_bit[1], valid[1], base_bit[2], valid[2], base_bit[3], valid[3]);
+	IOLog("XZS KEYS: PM8994 baseline pon=%u/%d vol_up=%u/%d vol_dn=%u/%d cam_snap=%u/%d cam_focus=%u/%d\n",
+	    base_bit[0], valid[0], base_bit[1], valid[1], base_bit[2], valid[2],
+	    base_bit[3], valid[3], base_bit[4], valid[4]);
 
 	for (;;) {
-		for (int k = 0; k < 4; k++) {
+		for (int k = 0; k < 5; k++) {
 			if (!valid[k]) {
 				continue;
 			}
@@ -631,13 +654,21 @@ xzs_keys_thread(void *arg __unused, wait_result_t wr __unused)
 				int down = ((v & 1u) != base_bit[k]) ? 1 : 0;
 				if (down != state[k]) {
 					state[k] = down;
-					IOLog("XZS KEYS: key %d %s (reg 0x%04x=0x%02x)\n",
+					IOLog("XZS KEYS: hw_key %d %s (reg 0x%04x=0x%02x)\n",
 					    k, down ? "down" : "up", k_regs[k], v);
-					sweet_hid_key(k, down);
+					if (k < 3) {
+						sweet_hid_key(k, down);
+					} else {
+						int next_home = (state[3] || state[4]) ? 1 : 0;
+						if (next_home != home_down) {
+							home_down = next_home;
+							sweet_hid_key(3, home_down);
+						}
+					}
 				}
 			}
 		}
-		IOSleep(25);
+		IOSleep(20);
 	}
 }
 
@@ -847,10 +878,7 @@ xzs_rmi4_read(uint8_t slave, uint8_t reg, uint8_t *buf, uint32_t len)
 static void
 xzs_touch_thread(void *arg __unused, wait_result_t wr __unused)
 {
-	while (!g_xzs_gui_presented) {
-		IOSleep(500);
-	}
-	IOSleep(500);
+	IOSleep(2000);
 
 	s_tlmm_base = ml_io_map(XZS_TLMM_PA, XZS_TLMM_SIZE);
 	if (s_tlmm_base == 0) {
@@ -888,7 +916,7 @@ xzs_touch_thread(void *arg __unused, wait_result_t wr __unused)
 	}
 
 	uint8_t f01_ctrl = 0, f01_data = 0;
-	uint8_t f11_data = 0, f12_data = 0, f12_query = 0;
+	uint8_t f11_data = 0, f12_data = 0, f12_ctrl = 0, f12_query = 0;
 	uint8_t f12_page = 0, f11_page = 0;
 
 	for (uint8_t page = 0; page < 2; page++) {
@@ -911,6 +939,7 @@ xzs_touch_thread(void *arg __unused, wait_result_t wr __unused)
 				f01_data = pdt[3];
 			} else if (fn == 0x12u && f12_data == 0) {
 				f12_query = pdt[0];
+				f12_ctrl = pdt[2];
 				f12_data = pdt[3];
 				f12_page = page;
 			} else if (fn == 0x11u && f11_data == 0) {
@@ -939,18 +968,79 @@ xzs_touch_thread(void *arg __unused, wait_result_t wr __unused)
 		    st[0], st[1], xzs_tlmm_rd(XZS_GPIO_IN_OUT(XZS_TOUCH_IRQ_PIN)) & 1u);
 	}
 
-	/* Determine F12 Data1 finger array offset (0 or 1..2 if Data0 exists) */
-	uint8_t f12_data1_off = 0;
+	/* Inspect F12 Query 5 (ctrl presence), Query 8 (data presence), Ctrl 8 (max X/Y), Ctrl 23 (obj enable) */
+	uint8_t f12_data1_off = 1u;
+	int sensor_max_x = 1079;
+	int sensor_max_y = 1919;
 	if (f12_data != 0 && f12_query != 0) {
 		(void)xzs_rmi4_write(slave, 0xffu, &f12_page, 1);
 		uint8_t q5[5] = { 0 };
-		if (xzs_rmi4_read(slave, (uint8_t)(f12_query + 5u), q5, 5)) {
-			IOLog("XZS TOUCH: F12 query5=%02x %02x %02x %02x %02x\n",
-			    q5[0], q5[1], q5[2], q5[3], q5[4]);
-			if ((q5[1] & 0x01u) != 0u) {
-				f12_data1_off = 1u;
+		uint8_t q8[4] = { 0 };
+		(void)xzs_rmi4_read(slave, (uint8_t)(f12_query + 5u), q5, sizeof(q5));
+		if (xzs_rmi4_read(slave, (uint8_t)(f12_query + 8u), q8, sizeof(q8))) {
+			f12_data1_off = (q8[1] & 0x01u) ? 1u : 0u;
+		}
+		IOLog("XZS TOUCH: F12 q5=%02x %02x %02x %02x %02x q8=%02x %02x %02x %02x -> data1_off=%u (reg 0x%02x)\n",
+		    q5[0], q5[1], q5[2], q5[3], q5[4], q8[0], q8[1], q8[2], q8[3],
+		    f12_data1_off, (uint8_t)(f12_data + f12_data1_off));
+
+		if (f12_ctrl != 0) {
+			/* Compute ctrl_8, ctrl_20, ctrl_23 register offsets from q5 presence bitmap */
+			uint8_t ctrl_off = 0;
+			uint8_t ctrl8_reg = 0, ctrl20_reg = 0, ctrl23_reg = 0;
+			for (uint8_t c = 0; c < 24; c++) {
+				uint8_t byte_idx = (uint8_t)(1u + (c / 8u));
+				uint8_t bit_mask = (uint8_t)(1u << (c % 8u));
+				if (q5[byte_idx] & bit_mask) {
+					if (c == 8)  ctrl8_reg  = (uint8_t)(f12_ctrl + ctrl_off);
+					if (c == 20) ctrl20_reg = (uint8_t)(f12_ctrl + ctrl_off);
+					if (c == 23) ctrl23_reg = (uint8_t)(f12_ctrl + ctrl_off);
+					ctrl_off++;
+				}
+			}
+			if (ctrl8_reg != 0) {
+				uint8_t c8[4] = { 0 };
+				if (xzs_rmi4_read(slave, ctrl8_reg, c8, 4)) {
+					int mx = (int)(c8[0] | ((uint16_t)c8[1] << 8));
+					int my = (int)(c8[2] | ((uint16_t)c8[3] << 8));
+					if (mx > 100 && mx <= 4096 && my > 100 && my <= 4096) {
+						sensor_max_x = mx;
+						sensor_max_y = my;
+					}
+					IOLog("XZS TOUCH: F12 ctrl8(0x%02x)=%02x %02x %02x %02x max=%dx%d\n",
+					    ctrl8_reg, c8[0], c8[1], c8[2], c8[3], sensor_max_x, sensor_max_y);
+				}
+			}
+			if (ctrl20_reg != 0) {
+				uint8_t c20[2] = { 0 };
+				if (xzs_rmi4_read(slave, ctrl20_reg, c20, 2)) {
+					IOLog("XZS TOUCH: F12 ctrl20(0x%02x)=%02x %02x\n", ctrl20_reg, c20[0], c20[1]);
+					/* Set byte 0 to 0x00 (Continuous reporting mode instead of 0x01 Reduced mode) */
+					if (c20[0] != 0x00u) {
+						c20[0] = 0x00u;
+						(void)xzs_rmi4_write(slave, ctrl20_reg, c20, 2);
+					}
+				}
+			}
+			if (ctrl23_reg != 0) {
+				uint8_t c23[2] = { 0 };
+				if (xzs_rmi4_read(slave, ctrl23_reg, c23, 2)) {
+					IOLog("XZS TOUCH: F12 ctrl23(0x%02x)=%02x %02x\n", ctrl23_reg, c23[0], c23[1]);
+					if ((c23[0] & 0x03u) == 0u) {
+						c23[0] |= 0x03u;
+						(void)xzs_rmi4_write(slave, ctrl23_reg, c23, 2);
+					}
+				}
 			}
 		}
+
+		uint8_t d0[8] = { 0 }, d1[8] = { 0 };
+		(void)xzs_rmi4_read(slave, f12_data, d0, sizeof(d0));
+		(void)xzs_rmi4_read(slave, (uint8_t)(f12_data + 1u), d1, sizeof(d1));
+		IOLog("XZS TOUCH: F12 init d[0x%02x]=%02x %02x %02x %02x %02x d[0x%02x]=%02x %02x %02x %02x %02x\n",
+		    f12_data, d0[0], d0[1], d0[2], d0[3], d0[4],
+		    (uint8_t)(f12_data + 1u), d1[0], d1[1], d1[2], d1[3], d1[4]);
+
 		(void)xzs_rmi4_write(slave, 0xffu, &page0, 1);
 	}
 
@@ -963,28 +1053,48 @@ xzs_touch_thread(void *arg __unused, wait_result_t wr __unused)
 	int last_x[SWEET_TOUCH_FINGERS] = { 0 };
 	int last_y[SWEET_TOUCH_FINGERS] = { 0 };
 	uint32_t poll_tick = 0;
+	uint32_t irq_events_logged = 0;
 
 	for (;;) {
 		uint32_t irq_pin = xzs_tlmm_rd(XZS_GPIO_IN_OUT(XZS_TOUCH_IRQ_PIN)) & 1u;
 		poll_tick++;
+		uint8_t st[2] = { 0 };
 		if (irq_pin == 0u || active_mask != 0u || (poll_tick & 3u) == 0u) {
 			if (f01_data != 0) {
-				uint8_t st[2] = { 0 };
 				(void)xzs_rmi4_read(slave, f01_data, st, 2);
+				/* If device reset/unconfigured bit 7 set, re-assert F01 Configured */
+				if ((st[0] & 0x80u) != 0u && f01_ctrl != 0) {
+					uint8_t ctrl[2] = { 0x80u, 0xffu };
+					(void)xzs_rmi4_write(slave, f01_ctrl, ctrl, 2);
+				}
 			}
+		}
+		if (irq_pin == 0u || st[1] != 0u || active_mask != 0u || (poll_tick & 7u) == 0u) {
 			uint32_t next_mask = 0;
 			if (f12_data != 0) {
 				if (f12_page != 0) {
 					(void)xzs_rmi4_write(slave, 0xffu, &f12_page, 1);
 				}
-				uint8_t raw[40] = { 0 }; /* 5 fingers * 8 bytes */
-				if (xzs_rmi4_read(slave, (uint8_t)(f12_data + f12_data1_off), raw, sizeof(raw))) {
-					for (int i = 0; i < 5; i++) {
+				uint8_t raw[24] = { 0 }; /* 3 fingers * 8 bytes */
+				bool ok = xzs_rmi4_read(slave, (uint8_t)(f12_data + f12_data1_off), raw, sizeof(raw));
+				if ((irq_pin == 0u || st[1] != 0u) && irq_events_logged < 32) {
+					irq_events_logged++;
+					IOLog("XZS TOUCH IRQ: gpio125=%u st=%02x/%02x reg=0x%02x raw=%02x %02x %02x %02x %02x %02x %02x %02x\n",
+					    irq_pin, st[0], st[1], (uint8_t)(f12_data + f12_data1_off),
+					    raw[0], raw[1], raw[2], raw[3], raw[4], raw[5], raw[6], raw[7]);
+				}
+				if (ok) {
+					for (int i = 0; i < 3; i++) {
 						const uint8_t *fo = &raw[i * 8];
 						uint8_t type = fo[0] & 0x0fu;
-						bool down = (type == 1u || type == 2u || type == 6u);
-						int x = (int)(fo[1] | ((uint16_t)fo[2] << 8));
-						int y = (int)(fo[3] | ((uint16_t)fo[4] << 8));
+						bool down = (type == 1u || type == 2u || type == 6u) ||
+						    (fo[5] >= 4u && (fo[6] > 0u || fo[7] > 0u));
+						int rx = (int)(fo[1] | ((uint16_t)fo[2] << 8));
+						int ry = (int)(fo[3] | ((uint16_t)fo[4] << 8));
+						int x = (sensor_max_x > 0 && sensor_max_x != 1079) ?
+						    (rx * 1079) / sensor_max_x : rx;
+						int y = (sensor_max_y > 0 && sensor_max_y != 1919) ?
+						    (ry * 1919) / sensor_max_y : ry;
 						if (down && x >= 0 && x <= 1200 && y >= 0 && y <= 2000) {
 							next_mask |= (1u << i);
 							last_x[i] = x;
@@ -1026,7 +1136,7 @@ xzs_touch_thread(void *arg __unused, wait_result_t wr __unused)
 				}
 			}
 		}
-		IOSleep(16);
+		IOSleep(12);
 	}
 }
 
