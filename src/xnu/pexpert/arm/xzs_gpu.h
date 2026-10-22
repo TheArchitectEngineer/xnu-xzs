@@ -59,6 +59,8 @@
 #define XZS_MMCC_GPU_GDSC_HW_CTRL       0x4038u
 #define XZS_MMCC_GPU_AHB_CBCR           0x403cu
 #define XZS_MMCC_GPU_AON_ISENSE_CBCR    0x4044u
+#define XZS_MMCC_RBBMTIMER_CMD_RCGR     0x4090u
+#define XZS_MMCC_RBBMTIMER_CFG_RCGR     0x4094u
 #define XZS_MMCC_GPU_GX_RBBMTIMER_CBCR  0x40b0u
 #define XZS_MMCC_GPU_GX_DOMAIN_ADDR     0x4300u
 #define XZS_MMCC_MMSS_MISC_AHB_CBCR     0x5018u
@@ -426,25 +428,55 @@ xzs_gpu_power_up(void)
 	d8p1_write32(XZS_MMCC_BASE + XZS_MMCC_GPU_GDSC_HW_CTRL, 0x0u);
 	g_xzs_gpu_state.cx_gdsc_ready = xzs_gpu_enable_gdsc(XZS_MMCC_BASE + XZS_MMCC_GPU_GDSC, 2000u);
 
-	/* 6. Force-enable GFX3D_CMD_RCGR root clock (19.2 MHz CXO safe boot source, CFG=0) */
+	/* 6. Force-enable GFX3D_CMD_RCGR & RBBMTIMER_CMD_RCGR root clocks (19.2 MHz CXO safe boot source) */
+	d8p1_write32(XZS_MMCC_BASE + XZS_MMCC_GFX3D_CFG_RCGR, 0x00000001u); /* SRC=CXO, DIV=1 */
 	uint32_t rcgr_cmd = d8p1_read32(XZS_MMCC_BASE + XZS_MMCC_GFX3D_CMD_RCGR);
-	if ((rcgr_cmd & 0x2u) == 0u) {
-		d8p1_write32(XZS_MMCC_BASE + XZS_MMCC_GFX3D_CFG_RCGR, 0x00000001u); /* SRC=CXO, DIV=1 */
-		d8p1_write32(XZS_MMCC_BASE + XZS_MMCC_GFX3D_CMD_RCGR, rcgr_cmd | 0x3u); /* ROOT_EN | UPDATE */
-		for (uint32_t w = 0; w < 500u; w += 10u) {
-			if ((d8p1_read32(XZS_MMCC_BASE + XZS_MMCC_GFX3D_CMD_RCGR) & 1u) == 0u) {
-				break;
-			}
-			xzs_d8p2_delay_us(10u);
+	d8p1_write32(XZS_MMCC_BASE + XZS_MMCC_GFX3D_CMD_RCGR, rcgr_cmd | 0x3u); /* ROOT_EN | UPDATE */
+	for (uint32_t w = 0; w < 500u; w += 10u) {
+		if ((d8p1_read32(XZS_MMCC_BASE + XZS_MMCC_GFX3D_CMD_RCGR) & 1u) == 0u) {
+			break;
 		}
+		xzs_d8p2_delay_us(10u);
 	}
 
-	/* 7. Uncollapse GPU GX GDSC (0x008c4024) */
+	d8p1_write32(XZS_MMCC_BASE + XZS_MMCC_RBBMTIMER_CFG_RCGR, 0x00000001u); /* SRC=CXO, DIV=1 */
+	uint32_t rbbm_rcgr = d8p1_read32(XZS_MMCC_BASE + XZS_MMCC_RBBMTIMER_CMD_RCGR);
+	d8p1_write32(XZS_MMCC_BASE + XZS_MMCC_RBBMTIMER_CMD_RCGR, rbbm_rcgr | 0x3u); /* ROOT_EN | UPDATE */
+	for (uint32_t w = 0; w < 500u; w += 10u) {
+		if ((d8p1_read32(XZS_MMCC_BASE + XZS_MMCC_RBBMTIMER_CMD_RCGR) & 1u) == 0u) {
+			break;
+		}
+		xzs_d8p2_delay_us(10u);
+	}
+
+	/*
+	 * 7. Uncollapse GPU GX GDSC (0x008c4024) & Enable RBBM / GFX3D Clocks
+	 * CRITICAL (from twrp-kernel.bin gdsc_enable @ 0xa9d488 & twrp-extracted.dts):
+	 * - gdsc_gpu_gx has domain_addr = 0x008c4300 (MMCC + 0x4300). Bit 0 of domain_addr
+	 *   MUST be cleared before clearing SW_COLLAPSE on 0x008c4024.
+	 * - On MSM8996, PWR_ON (bit 31) of 0x008c4024 latches after the GFX3D / RBBMTIMER
+	 *   branch clocks are enabled alongside the GDSC uncollapse.
+	 */
+	uint32_t gx_dom = d8p1_read32(XZS_MMCC_BASE + XZS_MMCC_GPU_GX_DOMAIN_ADDR);
+	if ((gx_dom & 1u) != 0u) {
+		d8p1_write32(XZS_MMCC_BASE + XZS_MMCC_GPU_GX_DOMAIN_ADDR, gx_dom & ~1u);
+		xzs_d8p2_delay_us(20u);
+	}
+	/* Assert CLK_ENABLE (bit 0) on RBBMTIMER and GFX3D branches so the GX GDSC state machine ticks */
+	d8p1_write32(XZS_MMCC_BASE + XZS_MMCC_GPU_GX_RBBMTIMER_CBCR,
+	    d8p1_read32(XZS_MMCC_BASE + XZS_MMCC_GPU_GX_RBBMTIMER_CBCR) | 1u);
+	d8p1_write32(XZS_MMCC_BASE + XZS_MMCC_GPU_GX_GFX3D_CBCR,
+	    d8p1_read32(XZS_MMCC_BASE + XZS_MMCC_GPU_GX_GFX3D_CBCR) | 1u);
+
 	g_xzs_gpu_state.gx_gdsc_ready = xzs_gpu_enable_gdsc(XZS_MMCC_BASE + XZS_MMCC_GPU_GX_GDSC, 3000u);
 
-	/* 8. Enable GPU RBBM timer & GFX3D core clocks */
+	/* 8. Poll GPU RBBM timer & GFX3D core clocks for CLK_OFF == 0, then re-verify GX GDSC PWR_ON */
 	bool rbbm_ok = xzs_gpu_enable_cbcr(XZS_MMCC_BASE + XZS_MMCC_GPU_GX_RBBMTIMER_CBCR, 1000u);
 	bool gfx3d_ok = xzs_gpu_enable_cbcr(XZS_MMCC_BASE + XZS_MMCC_GPU_GX_GFX3D_CBCR, 1000u);
+	if (!g_xzs_gpu_state.gx_gdsc_ready) {
+		g_xzs_gpu_state.gx_gdsc_ready =
+		    ((d8p1_read32(XZS_MMCC_BASE + XZS_MMCC_GPU_GX_GDSC) & XZS_GDSC_PWR_ON) != 0u);
+	}
 
 	g_xzs_gpu_state.clocks_ready = ahb_ok && rbbm_ok && gfx3d_ok;
 	g_xzs_gpu_state.mmio_accessible = g_xzs_gpu_state.gx_gdsc_ready && ahb_ok && gfx3d_ok;
@@ -573,6 +605,7 @@ xzs_gpu_dump_status(void)
 	xzs_diag_emit("=======================================================\n");
 
 	uint32_t gpu_gdsc    = d8p1_read32(XZS_MMCC_BASE + XZS_MMCC_GPU_GDSC);
+	uint32_t gx_dom      = d8p1_read32(XZS_MMCC_BASE + XZS_MMCC_GPU_GX_DOMAIN_ADDR);
 	uint32_t gx_gdsc     = d8p1_read32(XZS_MMCC_BASE + XZS_MMCC_GPU_GX_GDSC);
 	uint32_t ahb_cbcr    = d8p1_read32(XZS_MMCC_BASE + XZS_MMCC_GPU_AHB_CBCR);
 	uint32_t gfx3d_cbcr  = d8p1_read32(XZS_MMCC_BASE + XZS_MMCC_GPU_GX_GFX3D_CBCR);
@@ -585,6 +618,7 @@ xzs_gpu_dump_status(void)
 	xzs_diag_emit(" mV (st1=0x"); xzs_d8p2_hex8(g_xzs_gpu_state.vdd_gfx_status1);
 	xzs_diag_emit(" en=0x"); xzs_d8p2_hex8(g_xzs_gpu_state.vdd_gfx_en_ctl); xzs_diag_emit(")\n");
 	xzs_diag_emit("  MMCC_GPU_GDSC         = 0x"); xzs_d8p1_hex32(gpu_gdsc); xzs_diag_emit("\n");
+	xzs_diag_emit("  MMCC_GPU_GX_DOMAIN    = 0x"); xzs_d8p1_hex32(gx_dom); xzs_diag_emit("\n");
 	xzs_diag_emit("  MMCC_GPU_GX_GDSC      = 0x"); xzs_d8p1_hex32(gx_gdsc); xzs_diag_emit("\n");
 	xzs_diag_emit("  MMCC_GPU_AHB_CBCR     = 0x"); xzs_d8p1_hex32(ahb_cbcr); xzs_diag_emit("\n");
 	xzs_diag_emit("  MMCC_GPU_GFX3D_CBCR   = 0x"); xzs_d8p1_hex32(gfx3d_cbcr); xzs_diag_emit("\n");

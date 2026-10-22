@@ -156,3 +156,30 @@ OSObject -> IORegistryEntry -> IOService -> IOAccelerator -> IOAcceleratorES -> 
 | **`2`** | `XZSAccelSharedUserClient` | `sel 0` (`new_resource`: allocates or attaches `SweetSurface` / wired buffer, writes `0x58 B` `IOAccelNewResourceReturnData` with VA, size, `resource_id`, and `private_offset`), `sel 1` (`delete_resource`), `sel 4` (`page_off_resource`), `sel 5` (`create_shmem`: returns `{ va, size, shmem_id }`), `sel 6` (`destroy_shmem`), `sel 7` (`get_allocated_size`), `sel 8` (`create_event`: returns event index in `fEventPage`). |
 | **`0`, `3`, `0x200`** | `XZSAccelContextUserClient` | Handles context configuration (`sel 2`), event machine binding, and lightweight submissions (`sel 4` -> pushes PM4 `CP_NOP` marker packet to Adreno 530 CP Ringbuffer). |
 | **`4`, `8`** | `XZSAccelCommandQueueUserClient` | `sel 0` (`set_notification_port` / `OSAsyncReference64`), `sel 1` (`submit_command_buffers`: parses `0x10 + 0x1c * count` header, walks kernel command shmem for `cmd_type == 6` event signals, submits PM4 packet `'MTL0'` into Adreno 530 CP Ringbuffer, and fires `sendAsyncResult64` with `{ comp_block, 0, comp_refcon, ... }`), `sel 5` (`get_queue_trace_id`). |
+
+---
+
+## 7. Hardware Verification on Sony Xperia XZs (`BH905SX976`)
+
+### 7.1 Reverse-Engineered `gdsc_gpu_gx` (`0x008c4024`) Two-Register Uncollapse Sequence
+Disassembly of `gdsc_enable` (`0xa9d364..0xa9d584`) and `gdsc_probe` (`0xa9d82c..0xa9da50`) in `twrp-kernel.bin` along with `qcom,gdsc@8c4024` in `twrp-extracted.dts` (`reg = <0x8c4024 0x04 0x8c4300 0x04>; reg-names = "base", "domain_addr"; qcom,force-enable-root-clk;`) revealed three hardware invariants required on MSM8996 to uncollapse the Adreno 530 GX power domain without hanging or leaving `PWR_ON` (bit 31) deasserted:
+1. Force-enable both `GFX3D_CMD_RCGR` (`0x008c4000`) and `RBBMTIMER_CMD_RCGR` (`0x008c4090`) root clock generators on 19.2 MHz CXO (`CFG_RCGR = 0x1`, `CMD_RCGR |= 0x3`).
+2. Clear bit 0 of `domain_addr` (`XZS_MMCC_GPU_GX_DOMAIN_ADDR = 0x008c4300`) before clearing `SW_COLLAPSE` (bit 0) on `XZS_MMCC_GPU_GX_GDSC` (`0x008c4024`).
+3. Assert `CLK_ENABLE` (bit 0) on `XZS_MMCC_GPU_GX_RBBMTIMER_CBCR` (`0x008c40b0`) and `XZS_MMCC_GPU_GX_GFX3D_CBCR` (`0x008c4028`) so the GX GDSC state machine ticks and latches `PWR_ON` (`0xa0222000`).
+
+### 7.2 Live Silicon Telemetry (`BH905SX976`)
+On physical Sony Xperia XZs (`BH905SX976`) running iOS 16.7.16 (`20H392`), the `[D13]` diagnostic dump confirms live Adreno 530 (`A530v2`) MMIO bring-up alongside `AppleM2ScalerCSCDriver`, `XZSAccelerator`, `backboardd`, and `SpringBoard`:
+- `CHIP_ID = 0x05030002 (Adreno 530 v2)`
+- `VDD_GFX (pmi8994_s2) = 768 mV (st1=0x81 en=0x80)`
+- `MMCC_GPU_GDSC = 0xa0222000` (`PWR_ON` bit 31 = `1`)
+- `MMCC_GPU_GX_DOMAIN = 0x00000000` (`0x008c4300` bit 0 cleared)
+- `MMCC_GPU_GX_GDSC = 0xa0222000` (`PWR_ON` bit 31 = `1`)
+- `MMCC_GPU_AHB_CBCR = 0x20008001` (`CLK_OFF = 0`, `CLK_ENABLE = 1`)
+- `MMCC_GPU_GFX3D_CBCR = 0x00000221` (`CLK_OFF = 0`, `CLK_ENABLE = 1`)
+- `MMCC_RBBMTIMER_CBCR = 0x00000001` (`CLK_OFF = 0`, `CLK_ENABLE = 1`)
+- `GCC_BIMC_GFX_CBCR = 0x00000001` (`CLK_OFF = 0`, `CLK_ENABLE = 1`)
+- `GPU_MMIO_ACCESS_SAFE = YES`
+- `A5XX_RBBM_HW_VERSION = 0x00020002` (live read from `0x00b00000`)
+- `A5XX_VBIF_VERSION = 0x20040001` (live read from `0x00b0c000`)
+- `A5XX_RBBM_STATUS = 0x00000001` (live read from `0x00b00850`)
+

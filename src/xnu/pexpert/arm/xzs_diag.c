@@ -1113,6 +1113,11 @@ xzs_diag_dispatch(uint64_t which, uint64_t arg1, uint64_t arg2, uint64_t arg3)
  * 7. SSPP RGB0, LM0, Stream, CTL, Flush config
  * 8. Kickoff: CTL_START, WLED Backlight (2048), FBCON attachment
  */
+static volatile uint32_t s_early_disp_in_progress = 0;
+static volatile uint32_t s_gpu_boot_lock = 0;
+static volatile bool s_gpu_boot_done = false;
+bool xzs_gpu_boot_init(void);
+
 void
 xzs_display_bringup_auto(void)
 {
@@ -1121,6 +1126,7 @@ xzs_display_bringup_auto(void)
 		return;
 	}
 	s_auto_done = true;
+	__atomic_store_n(&s_early_disp_in_progress, 1u, __ATOMIC_RELEASE);
 
 	xzs_diag_emit("\n=======================================================\n");
 	xzs_diag_emit("=== [XZS-DISP] AUTO EARLY DISPLAY BRINGUP START     ===\n");
@@ -1162,12 +1168,18 @@ xzs_display_bringup_auto(void)
 		xzs_d8m8_kickoff();
 
 		xzs_diag_emit("\n[XZS-DISP] AUTO EARLY DISPLAY BRINGUP COMPLETE - LCD ACTIVE!\n");
+		__atomic_store_n(&s_early_disp_in_progress, 0u, __ATOMIC_RELEASE);
+
+		/* Milestone D13: Bring up Qualcomm Adreno 530 (A530v2) GPU sequentially after display */
+		(void)xzs_gpu_boot_init();
 
 		extern int xzs_usb_init(void);
 		extern int xzs_usb_t1z_service(void);
 		(void)xzs_usb_init();
 		(void)xzs_usb_t1z_service();
 		xzs_diag_emit("[XZS-USB] AUTO EARLY USB CDC CONSOLE ONLINE!\n");
+	} else {
+		__atomic_store_n(&s_early_disp_in_progress, 0u, __ATOMIC_RELEASE);
 	}
 }
 
@@ -1178,6 +1190,9 @@ uintptr_t xzs_fb_kernel_va(void);
 uintptr_t
 xzs_fb_kernel_va(void)
 {
+	while (__atomic_load_n(&s_early_disp_in_progress, __ATOMIC_ACQUIRE) != 0u) {
+		xzs_d8p2_delay_us(100u);
+	}
 	if (g_xzs_mdss_virt_base == 0) {
 		g_xzs_mdss_virt_base = (uintptr_t)ml_io_map(0x00900000ULL, 0x00100000ULL);
 	}
@@ -1234,6 +1249,17 @@ xzs_display_quiesce_for_reboot(void)
 bool
 xzs_gpu_boot_init(void)
 {
+	while (__atomic_load_n(&s_early_disp_in_progress, __ATOMIC_ACQUIRE) != 0u) {
+		xzs_d8p2_delay_us(100u);
+	}
+	while (__atomic_test_and_set(&s_gpu_boot_lock, __ATOMIC_ACQUIRE)) {
+		__asm__ volatile("yield");
+	}
+	if (s_gpu_boot_done) {
+		bool ready = g_xzs_gpu_state.hw_initialized;
+		__atomic_clear(&s_gpu_boot_lock, __ATOMIC_RELEASE);
+		return ready;
+	}
 	if (g_xzs_gpu_virt_base == 0) {
 		g_xzs_gpu_virt_base = (uintptr_t)ml_io_map(XZS_GPU_KGSL_PHYS_BASE, XZS_GPU_MMIO_MAP_SIZE);
 	}
@@ -1245,6 +1271,8 @@ xzs_gpu_boot_init(void)
 	}
 	bool ok = xzs_gpu_hw_init();
 	xzs_gpu_dump_status();
+	s_gpu_boot_done = true;
+	__atomic_clear(&s_gpu_boot_lock, __ATOMIC_RELEASE);
 	return ok;
 }
 
