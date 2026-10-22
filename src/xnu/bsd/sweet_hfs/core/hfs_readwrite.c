@@ -5708,8 +5708,8 @@ hfs_clonefile(struct vnode *vp, int blkstart, int blkcnt, int blksize)
 	uio_t auio;
 	int  error = 0;
 
-	writebase = blkstart * blksize;
-	copysize = blkcnt * blksize;
+	writebase = (off_t)blkstart * (off_t)blksize;
+	copysize = (size_t)blkcnt * (size_t)blksize;
 	iosize = bufsize = MIN(copysize, 128 * 1024);
 	offset = 0;
 

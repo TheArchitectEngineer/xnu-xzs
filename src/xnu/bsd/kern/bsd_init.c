@@ -846,24 +846,12 @@ bsd_init(void)
 #endif  /* FLOW_DIVERT */
 #endif /* SOCKETS */
 #if SKYWALK
-#if CONFIG_XZS_BRINGUP
-	/*
-	 * [XZS-WORKAROUND] CONFIG_XZS_BRINGUP:
-	 * Defer skywalk_init() for Phase D1 bringup to reach rootfs storage boundary.
-	 * Skywalk is userspace networking subsystem and is completely unreferenced
-	 * by VFS core, root-device discovery, or vfs_mountroot().
-	 * Deferring eliminates non-storage allocator/lock contention before reaching storage boundary.
-	 */
-	xzs_early_puts("[XZS-BOOT] [D42-5] skywalk_init DEFERRED (XZS-WORKAROUND)\n");
-	xzs_watchdog_pet();
-#else
 	xzs_early_puts("[XZS-BOOT] [D42-5] skywalk_init\n");
 	xzs_watchdog_pet();
 	bsd_init_kprintf("calling skywalk_init\n");
 	(void) skywalk_init();
 	xzs_early_puts("[XZS-BOOT] [D42a] skywalk_init done\n");
 	xzs_watchdog_pet();
-#endif
 #endif /* SKYWALK */
 #if NETWORKING
 #if NECP
@@ -964,18 +952,8 @@ bsd_init(void)
 	xzs_watchdog_pet();
 #endif
 #if NGIF
-#if CONFIG_XZS_BRINGUP
-	/*
-	 * [XZS-WORKAROUND] Defer gif_init() (virtual tunnel interface gif0) during Phase D1 bringup.
-	 * gif_init() creates gif0 via ifnet_attach(), which attempts to start worker threads
-	 * and waits for pending threads. Phase D1 does not require virtual tunnel interfaces.
-	 */
-	xzs_early_puts("[XZS-BOOT] [XZS-WORKAROUND] gif_init/gif0 DEFERRED\n");
-	xzs_watchdog_pet();
-#else
 	/* Initialize gif interface (after lo0) */
 	gif_init();
-#endif
 #endif
 
 #if PFLOG
@@ -990,21 +968,10 @@ bsd_init(void)
 	/* Register the built-in dlil ethernet interface family */
 	xzs_early_puts("[XZS-BOOT] [D47] ether_family_init ENTER\n");
 	xzs_watchdog_pet();
-#if CONFIG_XZS_BRINGUP
-	/*
-	 * [XZS-WORKAROUND] Defer ether_family_init() during Phase D1 bringup.
-	 * ether_family_init() registers VLAN, BOND, bridge, and fake ethernet families.
-	 * Fake ethernet (if_fake_init) depends on Skywalk nexus providers which are deferred in Phase D1.
-	 * Ethernet family registration is network-only and not required for VFS root mount.
-	 */
-	xzs_early_puts("[XZS-BOOT] [XZS-WORKAROUND] ether_family_init DEFERRED\n");
-	xzs_watchdog_pet();
-#else
 	bsd_init_kprintf("calling ether_family_init\n");
 	ether_family_init();
 	xzs_early_puts("[XZS-BOOT] [D47a] ether_family_init DONE\n");
 	xzs_watchdog_pet();
-#endif
 #endif /* ETHER */
 
 #if NETWORKING
@@ -1460,7 +1427,7 @@ sweet_sample_thread(__unused void *arg, __unused wait_result_t wr)
 		sec++;
 		xzs_watchdog_pet();
 		xzs_usb_pump_sync();
-		if (g_xzs_sample_requested || (sec >= 2 && (sec <= 8 ? ((sec % 2) == 0) : ((sec % 5) == 0)))) {
+		if (g_xzs_sample_requested || (sec >= 5 && ((sec % 15) == 0))) {
 			g_xzs_sample_requested = 0;
 			printf("SMP --- sample %u (t=%us)\n", sample_idx++, sec);
 			proc_iterate(PROC_ALLPROCLIST, sweet_sample_proc, NULL, NULL, NULL);

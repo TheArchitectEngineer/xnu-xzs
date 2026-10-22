@@ -1788,6 +1788,9 @@ skmem_cache_magazine_max(uint32_t chunksize)
 	struct skmem_magtype *mtp;
 	uint32_t magsize_max;
 
+	if (__improbable(ncpu == 0)) {
+		ncpu = ml_wait_max_cpus();
+	}
 	VERIFY(ncpu != 0);
 	VERIFY(chunksize > 0);
 

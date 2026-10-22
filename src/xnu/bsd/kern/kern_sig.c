@@ -1053,6 +1053,14 @@ __semwait_signal_nocancel(__unused proc_t p, struct __semwait_signal_nocancel_ar
 		if (uap->relative) {
 			then.tv_sec = (unsigned int)ts.tv_sec;
 			then.tv_nsec = (clock_res_t)ts.tv_nsec;
+#if CONFIG_XZS_BRINGUP
+			if (p != NULL && uap->cond_sem == 0 && uap->mutex_sem == 0 &&
+			    then.tv_sec == 0 && then.tv_nsec == 100000000 &&
+			    strncmp(p->p_comm, "backboardd", 10) == 0) {
+				/* Fast-forward backboardd's 300x 100ms IOAcceleratorES wait in CAMetalContextCreate */
+				then.tv_nsec = 100000;
+			}
+#endif
 		} else {
 			nanotime(&now);
 

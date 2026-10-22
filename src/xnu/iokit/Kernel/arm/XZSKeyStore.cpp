@@ -34,6 +34,7 @@ enum {
 	kAKSSetSystem        = 5,
 	kAKSLoadBag          = 6,
 	kAKSGetLockState     = 7,
+	kAKSLockDevice       = 8,
 	kAKSUnlockDevice     = 9,
 	kAKSWrapKey          = 10,
 	kAKSUnwrapKey        = 11,
@@ -187,6 +188,7 @@ AppleKeyStoreUserClient::externalMethod(uint32_t selector, IOExternalMethodArgum
 	case kAKSOpen:
 	case kAKSUnloadBag:
 	case kAKSSetSystem:
+	case kAKSLockDevice:
 	case kAKSUnlockDevice:
 	case kAKSUnlockBag:
 	case kAKSLockBag:
@@ -231,10 +233,14 @@ AppleKeyStoreUserClient::externalMethod(uint32_t selector, IOExternalMethodArgum
 		break;
 	}
 
-	char name[32];
-	proc_selfname(name, sizeof(name));
-	IOLog("SWEET AKS: %s sel %u arg0 %llu in %u/%u out %u/%u -> 0x%x\n", name, selector,
-	    arg0, in_scalars, in_struct, out_scalars, out_struct, ret);
+	static uint32_t aks_logged = 0;
+	if (aks_logged < 32 || (ret != kIOReturnSuccess && aks_logged < 96)) {
+		aks_logged++;
+		char name[32];
+		proc_selfname(name, sizeof(name));
+		IOLog("SWEET AKS: %s sel %u arg0 %llu in %u/%u out %u/%u -> 0x%x\n", name, selector,
+		    arg0, in_scalars, in_struct, out_scalars, out_struct, ret);
+	}
 	return ret;
 }
 #endif /* SWEET || XZS */

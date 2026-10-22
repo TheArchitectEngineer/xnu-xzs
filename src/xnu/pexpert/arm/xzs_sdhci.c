@@ -10353,6 +10353,11 @@ xzs_bdev_ioctl(dev_t dev, u_long cmd, caddr_t data, __unused int fflag, __unused
 		memcpy(data, &wr_flag, sizeof(uint32_t));
 		return 0;
 	}
+	case DKIOCISSOLIDSTATE: {
+		uint32_t ssd_flag = 1U;
+		memcpy(data, &ssd_flag, sizeof(uint32_t));
+		return 0;
+	}
 	default:
 		return ENOTTY;
 	}

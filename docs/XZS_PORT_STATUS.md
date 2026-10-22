@@ -23,7 +23,8 @@ D10-M1  = PASS (14 GB HFS+ iOS 16.7.16 RootFS flashed to userdata /dev/disk0s54,
 D10-M2  = PASS (Full-screen 1080x1920 135x120 console log, 8-color bars disabled, SDCC1 19.2 MHz 8-bit CMD18 multi-block PIO verified on BH905SX976)
 D10-M3  = PASS (4-core SMP virtual timer PPI 27, per-CPU pmap init, logd firehose fix, keybagd AppleKeyStore checkin, kern_exec old_proc cleanup verified on BH905SX976)
 D10-M4  = PASS (First visible iOS 16 GUI frames 1125x2436->1080x1920 presented by backboardd & SpringBoard on physical LCD panel on BH905SX976)
-D10-M5  = ACTIVE (Unblock lsd LaunchServices database seeding so SpringBoard advances to Home Screen)
+D10-M5  = PASS (lsd UDID/MAC ADT fix (<5s DB load), Skywalk skmem_cache ncpu fix, DKIOCISSOLIDSTATE HFS_SSD + hfs_clonefile 64-bit fix verified on BH905SX976)
+D10-M6  = PASS (Full SpringBoard Lock Screen -> Home Screen unlock via SweetHID edge swipe-up & persistent 1080x1920 GUI on physical LCD verified on BH905SX976)
 ```
 
 D8-M3 hardware verification summary:

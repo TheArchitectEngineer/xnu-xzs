@@ -85,18 +85,19 @@ uint32_t adt_build_tree_at(uint64_t base_addr) {
      * / (device-tree) -> 6 children: chosen, defaults, cpus, arm-io, buttons, product
      */
     static const char root_compat[] = "D22AP\0iPhone10,3\0sony,tone-keyaki\0qcom,msm8996\0AppleARM";
-    adt_put_node(8, 6);
+    adt_put_node(9, 6);
     adt_put_str("name", "device-tree");
     adt_put_prop("compatible", root_compat, sizeof(root_compat));
     adt_put_str("model", "iPhone10,3");
     adt_put_str("target-type", "D22");
     adt_put_str("target-sub-type", "D22AP");
     adt_put_str("manufacturer", "Apple Inc.");
+    adt_put_str("serial-number", "F2LV8000JCL8");
     adt_put_u32("#address-cells", 2);
     adt_put_u32("#size-cells", 2);
 
     /* Child 1: /chosen -> 2 children (memory-map, asmb) */
-    adt_put_node(16, 2);
+    adt_put_node(19, 2);
     adt_put_str("name", "chosen");
     adt_put_u32("debug-enabled", 1);
     adt_put_u64("dram-base", 0x80000000ULL);
@@ -127,6 +128,11 @@ uint32_t adt_build_tree_at(uint64_t base_addr) {
     adt_put_u32("display-scale", 3);
     adt_put_u64("unique-chip-id", 0x585a534b45594101ULL);
     adt_put_u32("chip-id", 0x8015);
+    static const uint8_t wifi_mac[6] = { 0x02, 0x00, 0x58, 0x5a, 0x53, 0x01 };
+    static const uint8_t bt_mac[6]   = { 0x02, 0x00, 0x58, 0x5a, 0x53, 0x02 };
+    adt_put_prop("mac-address-wifi0", wifi_mac, sizeof(wifi_mac));
+    adt_put_prop("mac-address-bluetooth0", bt_mac, sizeof(bt_mac));
+    adt_put_str("mlb-serial-number", "C0274010000JCL800");
     adt_put_u32("certificate-production-status", 0);
     adt_put_u32("effective-production-status-ap", 0);
     adt_put_u32("certificate-security-mode", 1);

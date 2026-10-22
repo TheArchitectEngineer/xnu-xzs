@@ -1150,6 +1150,9 @@ sweet_sample_task(const char *name, int pid, task_t task)
 		if (ss == NULL || !is_saved_state64(ss)) {
 			continue;
 		}
+		if (tn >= 4) {
+			break;
+		}
 		fp = get_saved_state_fp(ss);
 		n = snprintf(line, sizeof(line), "SMP %s t%d pc 0x%llx lr 0x%llx sp 0x%llx bt", name, tn++,
 		    get_saved_state_pc(ss), get_saved_state_lr(ss), get_saved_state_sp(ss));

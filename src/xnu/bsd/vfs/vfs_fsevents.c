@@ -261,13 +261,7 @@ fsevents_internal_init(void)
 
 	PE_get_default("kern.maxkfsevents", &max_kfs_events, sizeof(max_kfs_events));
 #if CONFIG_XZS_BRINGUP
-	/*
-	 * [XZS-WORKAROUND] CONFIG_XZS_BRINGUP:
-	 * Cap max_kfs_events to 8 entries (instead of default 4096) for bringup.
-	 * fsevents is userspace file event notification daemon and is not used
-	 * for VFS root mount or block device discovery.
-	 */
-	max_kfs_events = 8;
+	max_kfs_events = 2048;
 #endif
 
 	xzs_early_puts("      [fsevents_internal_init] creating zone\n");

@@ -2782,7 +2782,9 @@ sweet_iolog_dict(const char *name, const char *what, OSObject *dict, const char 
 	if (ser != NULL && dict != NULL && dict->serialize(ser)) {
 		text = ser->text();
 	}
-	IOLog("IOK %s: %s %.240s -> %s\n", name, what, text, result);
+	if (strnstr(text, "IOAccelerator", 240) == NULL) {
+		IOLog("IOK %s: %s %.240s -> %s\n", name, what, text, result);
+	}
 	OSSafeReleaseNULL(ser);
 }
 #endif

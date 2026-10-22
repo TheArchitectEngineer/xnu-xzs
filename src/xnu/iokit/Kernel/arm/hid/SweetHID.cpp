@@ -348,6 +348,7 @@ OSDefineMetaClassAndStructors(SweetHIDButtons, IOHIDEventService);
  * absolute digitizers.
  */
 #define SWEET_TOUCH_FINGERS 10
+#define SWEET_TOUCH_EDGE_PX 48
 class SweetHIDTouch : public IOHIDEventService {
 	OSDeclareDefaultStructors(SweetHIDTouch);
 public:
@@ -360,6 +361,7 @@ protected:
 private:
 	IOLock *fLock;
 	bool fDown[SWEET_TOUCH_FINGERS];
+	bool fEdge[SWEET_TOUCH_FINGERS];
 	IOFixed fX[SWEET_TOUCH_FINGERS];
 	IOFixed fY[SWEET_TOUCH_FINGERS];
 };
@@ -367,6 +369,7 @@ OSDefineMetaClassAndStructors(SweetHIDTouch, IOHIDEventService);
 
 static SweetHIDButtons *gSweetButtons;
 static SweetHIDTouch *gSweetTouch;
+extern "C" bool g_xzs_gui_presented;
 
 bool
 SweetHIDButtons::start(IOService *provider)
@@ -374,10 +377,12 @@ SweetHIDButtons::start(IOService *provider)
 	if (!IOHIDEventService::start(provider)) {
 		return false;
 	}
-	if (PE_parse_boot_argn("sweethidtest", &fTestSecs, sizeof(fTestSecs)) && fTestSecs) {
+	fTestSecs = 8;
+	PE_parse_boot_argn("sweethidtest", &fTestSecs, sizeof(fTestSecs));
+	if (fTestSecs) {
 		fTest = IOTimerEventSource::timerEventSource(this, &SweetHIDButtons::testFired);
 		if (fTest && _hidWorkLoop->addEventSource(fTest) == kIOReturnSuccess) {
-			fTest->setTimeoutMS(fTestSecs * 1000);
+			fTest->setTimeoutMS(2000);
 		}
 	}
 	gSweetButtons = this;
@@ -404,15 +409,32 @@ SweetHIDButtons::testFired(OSObject *owner, IOTimerEventSource *sender)
 {
 	SweetHIDButtons *self = (SweetHIDButtons *)owner;
 
-	/*
-	 * Home (Menu) press, then the release 100 ms later; Setup's "Hello"
-	 * screen waits for it. Even counts press, odd counts release.
-	 */
-	bool press = (self->fTestCount & 1) == 0;
-	self->key(kHIDUsage_Csmr_Menu, press);
-	if (++self->fTestCount < 60) {
-		sender->setTimeoutMS(press ? 100 : self->fTestSecs * 1000);
+	if (!g_xzs_gui_presented) {
+		sender->setTimeoutMS(2000);
+		return;
 	}
+
+	/*
+	 * Once SpringBoard has presented its first frame on the LCD:
+	 * - On steps 2..6 (and 10..14), perform a bottom-edge swipe-up gesture
+	 *   (y=1910 -> 1500 -> 1000 -> 500 -> release) to unlock CoverSheet to the Home Screen.
+	 * - Otherwise, press/release Home (Menu) every fTestSecs seconds to keep
+	 *   SpringBoard's 30-second auto-lock/dim timer continuously reset.
+	 */
+	UInt32 step = self->fTestCount++;
+	if ((step >= 2 && step <= 6) || (step >= 10 && step <= 14)) {
+		UInt32 sub = (step >= 10) ? (step - 10) : (step - 2);
+		static const int swipe_y[5] = { 1910, 1550, 1150, 700, 700 };
+		if (gSweetTouch) {
+			gSweetTouch->touch(0, sub < 4, 540, swipe_y[sub]);
+		}
+		sender->setTimeoutMS(sub < 4 ? 60 : self->fTestSecs * 1000);
+		return;
+	}
+
+	bool press = (step & 1) == 0;
+	self->key(kHIDUsage_Csmr_Menu, press);
+	sender->setTimeoutMS(press ? 100 : self->fTestSecs * 1000);
 }
 
 bool
@@ -454,6 +476,10 @@ SweetHIDTouch::touch(int finger, bool down, int x, int y)
 		IOLockUnlock(fLock);
 		return;
 	}
+	if (!was && down) {
+		fEdge[finger] = x < SWEET_TOUCH_EDGE_PX || x > 1079 - SWEET_TOUCH_EDGE_PX ||
+		    y < SWEET_TOUCH_EDGE_PX || y > 1919 - SWEET_TOUCH_EDGE_PX;
+	}
 
 	collection = IOHIDEvent::digitizerEvent(now, 0, kIOHIDDigitizerTransducerTypeHand, false, 0, 0, 0);
 	if (!collection) {
@@ -475,7 +501,7 @@ SweetHIDTouch::touch(int finger, bool down, int x, int y)
 		if (!child) {
 			continue;
 		}
-		UInt32 mask = 0;
+		UInt32 mask = fEdge[i] ? kIOHIDDigitizerEventFromEdgeTip : 0;
 		if (i == finger) {
 			if (was != down) {
 				mask |= kIOHIDDigitizerEventTouch | kIOHIDDigitizerEventRange;

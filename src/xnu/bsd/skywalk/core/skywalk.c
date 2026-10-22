@@ -549,7 +549,7 @@ skywalk_init(void)
 		xzs_watchdog_pet();
 		flowidns_init();
 
-#if (DEVELOPMENT || DEBUG)
+#if (DEVELOPMENT || DEBUG) && !CONFIG_XZS_BRINGUP
 		xzs_early_puts("    [skywalk_init] skywalk_self_tests\n");
 		xzs_watchdog_pet();
 		skywalk_self_tests();

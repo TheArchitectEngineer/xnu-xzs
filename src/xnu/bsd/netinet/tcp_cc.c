@@ -69,20 +69,7 @@ tcp_cc_init(void)
 	tcp_cc_algo_list[TCP_CC_ALGO_CUBIC_INDEX] = &tcp_cc_cubic;
 	tcp_cc_algo_list[TCP_CC_ALGO_PRAGUE_INDEX] = &tcp_cc_prague;
 
-#if CONFIG_XZS_BRINGUP
-	/*
-	 * [XZS-WORKAROUND] Defer TCP congestion control debug socket registration.
-	 * Canonical CCA core algorithm list (None, NewReno, LEDBAT, Cubic, Prague) is 100% preserved.
-	 * Deferring ctl_register eliminates socket mutex contention in early boot
-	 * without impacting TCP protocol functionality or VFS root mount.
-	 */
-	extern void xzs_early_puts(const char *s);
-	extern void xzs_watchdog_pet(void);
-	xzs_early_puts("      [tcp_cc_init] [XZS-WORKAROUND] tcp_ccdbg_control_register DEFERRED\n");
-	xzs_watchdog_pet();
-#else
 	tcp_ccdbg_control_register();
-#endif
 }
 
 void

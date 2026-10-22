@@ -294,64 +294,82 @@ xzs_fbcon_draw_test_bars(uintptr_t fb_va)
 	__asm__ volatile("dmb oshst" ::: "memory");
 }
 
-/* Fast Hardware Framebuffer Line Scroll with Zero Uncached Reads (Section 25) */
+/* Fast Hardware Framebuffer Line Scroll with Zero Uncached Reads & Cell Diffing (Section 25) */
+#define XZS_FBCON_SCROLL_STEP 16u
+
 static void
 xzs_fbcon_scroll_up(void)
 {
 	if (g_fbcon_va == 0) return;
 
+	const uint32_t step = XZS_FBCON_SCROLL_STEP < XZS_FBCON_ROWS ? XZS_FBCON_SCROLL_STEP : 1u;
+	const uint32_t keep = XZS_FBCON_ROWS - step;
+
 	/* Hide cursor before scroll */
 	xzs_fbcon_draw_cursor_raw(g_fbcon_col, g_fbcon_row, false);
 	xzs_watchdog_pet();
 
-	/* Shift screen text and row lengths up by 1 row in cacheable RAM */
-	uint8_t old_lens[XZS_FBCON_ROWS];
-	for (uint32_t i = 0; i < XZS_FBCON_ROWS; i++) {
-		old_lens[i] = g_fbcon_row_len[i];
+	/* Redraw only cells (c, r) whose glyph or color actually changes */
+	for (uint32_t r = 0; r < keep; r++) {
+		if ((r & 7u) == 0) {
+			xzs_watchdog_pet();
+		}
+		uint32_t src_r = r + step;
+		uint32_t old_len = g_fbcon_row_len[r];
+		uint32_t new_len = g_fbcon_row_len[src_r];
+		uint32_t max_col = new_len > old_len ? new_len : old_len;
+		if (max_col == 0) continue;
+		if (max_col > XZS_FBCON_COLS) max_col = XZS_FBCON_COLS;
+
+		for (uint32_t c = 0; c < max_col; c++) {
+			char old_ch = (c < old_len) ? g_fbcon_screen[r][c] : ' ';
+			char new_ch = (c < new_len) ? g_fbcon_screen[src_r][c] : ' ';
+			uint32_t old_fg = g_fbcon_screen_fg[r][c];
+			uint32_t new_fg = g_fbcon_screen_fg[src_r][c];
+			if (new_ch == old_ch && (new_ch == ' ' || new_fg == old_fg)) {
+				continue;
+			}
+			xzs_fbcon_draw_glyph_raw(c, r, new_ch, new_fg, g_fbcon_bg_color);
+		}
 	}
 
+	/* Clear the bottom 'step' rows only where non-space characters existed */
+	for (uint32_t r = keep; r < XZS_FBCON_ROWS; r++) {
+		uint32_t old_len = g_fbcon_row_len[r];
+		if (old_len > XZS_FBCON_COLS) old_len = XZS_FBCON_COLS;
+		for (uint32_t c = 0; c < old_len; c++) {
+			if (g_fbcon_screen[r][c] != ' ') {
+				xzs_fbcon_draw_glyph_raw(c, r, ' ', g_fbcon_fg_color, g_fbcon_bg_color);
+			}
+		}
+	}
+
+	/* Shift screen text and row lengths up by 'step' rows in cacheable RAM */
 	char *dst_s = (char *)g_fbcon_screen;
-	const char *src_s = (const char *)g_fbcon_screen + XZS_FBCON_COLS;
-	uint32_t len_s = (XZS_FBCON_ROWS - 1) * XZS_FBCON_COLS;
+	const char *src_s = (const char *)g_fbcon_screen + step * XZS_FBCON_COLS;
+	uint32_t len_s = keep * XZS_FBCON_COLS;
 	for (uint32_t i = 0; i < len_s; i++) {
 		dst_s[i] = src_s[i];
 	}
 
 	uint32_t *dst_fg = (uint32_t *)g_fbcon_screen_fg;
-	const uint32_t *src_fg = (const uint32_t *)g_fbcon_screen_fg + XZS_FBCON_COLS;
-	uint32_t len_fg = (XZS_FBCON_ROWS - 1) * XZS_FBCON_COLS;
-	for (uint32_t i = 0; i < len_fg; i++) {
+	const uint32_t *src_fg = (const uint32_t *)g_fbcon_screen_fg + step * XZS_FBCON_COLS;
+	for (uint32_t i = 0; i < len_s; i++) {
 		dst_fg[i] = src_fg[i];
 	}
 
-	uint8_t *dst_l = (uint8_t *)g_fbcon_row_len;
-	const uint8_t *src_l = (const uint8_t *)g_fbcon_row_len + 1;
-	for (uint32_t i = 0; i < XZS_FBCON_ROWS - 1; i++) {
-		dst_l[i] = src_l[i];
+	for (uint32_t i = 0; i < keep; i++) {
+		g_fbcon_row_len[i] = g_fbcon_row_len[i + step];
 	}
 
-	char *last_row = (char *)g_fbcon_screen + (XZS_FBCON_ROWS - 1) * XZS_FBCON_COLS;
-	for (uint32_t i = 0; i < XZS_FBCON_COLS; i++) {
-		last_row[i] = ' ';
+	char *tail_rows = (char *)g_fbcon_screen + keep * XZS_FBCON_COLS;
+	for (uint32_t i = 0; i < step * XZS_FBCON_COLS; i++) {
+		tail_rows[i] = ' ';
 	}
-	g_fbcon_row_len[XZS_FBCON_ROWS - 1] = 0;
-
-	uint32_t active_rows = g_fbcon_row < XZS_FBCON_ROWS ? (g_fbcon_row + 1) : XZS_FBCON_ROWS;
-	for (uint32_t r = 0; r < active_rows; r++) {
-		if ((r & 7u) == 0) {
-			xzs_watchdog_pet();
-		}
-		uint32_t max_col = g_fbcon_row_len[r] > old_lens[r] ? g_fbcon_row_len[r] : old_lens[r];
-		if (max_col == 0) continue;
-		if (max_col > XZS_FBCON_COLS) max_col = XZS_FBCON_COLS;
-
-		for (uint32_t c = 0; c < max_col; c++) {
-			char ch = g_fbcon_screen[r][c];
-			uint32_t fg = g_fbcon_screen_fg[r][c];
-			if (c >= g_fbcon_row_len[r]) ch = ' ';
-			xzs_fbcon_draw_glyph_raw(c, r, ch, fg, g_fbcon_bg_color);
-		}
+	for (uint32_t i = keep; i < XZS_FBCON_ROWS; i++) {
+		g_fbcon_row_len[i] = 0;
 	}
+	g_fbcon_row = keep;
 
 	__asm__ volatile("dmb oshst" ::: "memory");
 	xzs_watchdog_pet();
