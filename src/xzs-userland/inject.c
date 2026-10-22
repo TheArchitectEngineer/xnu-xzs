@@ -808,21 +808,96 @@ xzs_setup_preferences_and_apps(void)
 		}
 	}
 
-	/* 3. One-time reset of stale 1-page IconState.plist & lsd .csstore caches */
-	const char *marker = "/private/var/db/.xzs_userland_v8_done";
-	if (moved > 0 || !xzs_file_exists(marker)) {
-		(void)unlink("/private/var/mobile/Library/SpringBoard/IconState.plist");
-		(void)unlink("/private/var/mobile/Library/SpringBoard/DesiredIconState.plist");
+	/* 3. Write default 2-page IconState.plist / DesiredIconState.plist & reset stale lsd caches */
+	const char *marker = "/private/var/db/.xzs_userland_v9_done";
+	const char *icon_marker = "/private/var/db/.xzs_iconstate_v10_done";
+	if (moved > 0 || !xzs_file_exists(marker) || !xzs_file_exists(icon_marker) ||
+	    !xzs_file_exists("/private/var/mobile/Library/SpringBoard/IconState.plist")) {
+		if (moved > 0 || !xzs_file_exists(marker)) {
+			xzs_unlink_matching_recursive("/private/var", 0);
+		}
 		(void)unlink("/private/var/mobile/Library/SpringBoard/IconSupportState.plist");
 		(void)unlink("/private/var/mobile/Library/SpringBoard/TodayViewArchive.plist");
 
-		xzs_unlink_matching_recursive("/private/var", 0);
+		static const char k_icon_state_xml[] =
+		    "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n"
+		    "<!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" \"http://www.apple.com/DTDs/PropertyList-1.0.dtd\">\n"
+		    "<plist version=\"1.0\">\n"
+		    "<dict>\n"
+		    "\t<key>buttonBar</key>\n"
+		    "\t<array>\n"
+		    "\t\t<string>com.apple.mobilephone</string>\n"
+		    "\t\t<string>com.apple.mobilesafari</string>\n"
+		    "\t\t<string>com.apple.MobileSMS</string>\n"
+		    "\t\t<string>com.apple.Music</string>\n"
+		    "\t</array>\n"
+		    "\t<key>iconLists</key>\n"
+		    "\t<array>\n"
+		    "\t\t<array>\n"
+		    "\t\t\t<string>com.apple.facetime</string>\n"
+		    "\t\t\t<string>com.apple.mobilecal</string>\n"
+		    "\t\t\t<string>com.apple.mobileslideshow</string>\n"
+		    "\t\t\t<string>com.apple.camera</string>\n"
+		    "\t\t\t<string>com.apple.mobilemail</string>\n"
+		    "\t\t\t<string>com.apple.mobiletimer</string>\n"
+		    "\t\t\t<string>com.apple.Maps</string>\n"
+		    "\t\t\t<string>com.apple.weather</string>\n"
+		    "\t\t\t<string>com.apple.reminders</string>\n"
+		    "\t\t\t<string>com.apple.mobilenotes</string>\n"
+		    "\t\t\t<string>com.apple.stocks</string>\n"
+		    "\t\t\t<string>com.apple.iBooks</string>\n"
+		    "\t\t\t<string>com.apple.AppStore</string>\n"
+		    "\t\t\t<string>com.apple.podcasts</string>\n"
+		    "\t\t\t<string>com.apple.tv</string>\n"
+		    "\t\t\t<string>com.apple.Health</string>\n"
+		    "\t\t\t<string>com.apple.Home</string>\n"
+		    "\t\t\t<string>com.apple.Passbook</string>\n"
+		    "\t\t\t<string>com.apple.Preferences</string>\n"
+		    "\t\t\t<string>com.apple.DocumentsApp</string>\n"
+		    "\t\t</array>\n"
+		    "\t\t<array>\n"
+		    "\t\t\t<string>com.apple.calculator</string>\n"
+		    "\t\t\t<string>com.apple.compass</string>\n"
+		    "\t\t\t<string>com.apple.measure</string>\n"
+		    "\t\t\t<string>com.apple.VoiceMemos</string>\n"
+		    "\t\t\t<string>com.apple.MobileAddressBook</string>\n"
+		    "\t\t\t<string>com.apple.findmy</string>\n"
+		    "\t\t\t<string>com.apple.shortcuts</string>\n"
+		    "\t\t\t<string>com.apple.Translate</string>\n"
+		    "\t\t\t<string>com.apple.freeform</string>\n"
+		    "\t\t\t<string>com.apple.tips</string>\n"
+		    "\t\t\t<string>com.apple.MobileStore</string>\n"
+		    "\t\t\t<string>com.apple.Bridge</string>\n"
+		    "\t\t\t<string>com.apple.Fitness</string>\n"
+		    "\t\t\t<string>com.apple.Magnifier</string>\n"
+		    "\t\t\t<string>com.apple.news</string>\n"
+		    "\t\t</array>\n"
+		    "\t</array>\n"
+		    "</dict>\n"
+		    "</plist>\n";
+
+		(void)mkdir("/private/var/mobile/Library/SpringBoard", 0755);
+		(void)chown("/private/var/mobile/Library/SpringBoard", 501, 501);
+
+		CFDataRef xml_data = CFDataCreate(kCFAllocatorDefault,
+		    (const uint8_t *)k_icon_state_xml, (CFIndex)(sizeof(k_icon_state_xml) - 1));
+		if (xml_data) {
+			CFPropertyListRef plist = CFPropertyListCreateWithData(kCFAllocatorDefault,
+			    xml_data, 0, NULL, NULL);
+			if (plist) {
+				(void)xzs_write_plist_file("/private/var/mobile/Library/SpringBoard/IconState.plist",
+				    plist, 0644, 501, 501);
+				(void)xzs_write_plist_file("/private/var/mobile/Library/SpringBoard/DesiredIconState.plist",
+				    plist, 0644, 501, 501);
+				CFRelease(plist);
+			}
+			CFRelease(xml_data);
+		}
 
 		uint8_t one = '1';
 		(void)xzs_write_file_bytes(marker, &one, 1, 0644, 0, 0);
-		(void)xzs_write_file_bytes("/private/var/mobile/Library/SpringBoard/.xzs_sb_rebuild_delay",
-		    &one, 1, 0644, 501, 501);
-		xzs_log("[XZS-INJECT] tzinit: reset IconState, MobileInstallation & lsd caches across /private/var (moved=%u total_apps=%u)\n",
+		(void)xzs_write_file_bytes(icon_marker, &one, 1, 0644, 0, 0);
+		xzs_log("[XZS-INJECT] tzinit: wrote 2-page IconState.plist & DesiredIconState.plist (moved=%u total_apps=%u)\n",
 		    moved, total_apps);
 	} else {
 		xzs_log("[XZS-INJECT] tzinit: prefs updated (total_apps=%u)\n", total_apps);
@@ -940,78 +1015,138 @@ typedef struct {
 	xzs_cgsize_t size;
 } xzs_cgrect_t;
 
-static void
-xzs_strip_ca_filters_recursive(id layer, int depth)
+static id g_xzs_wallpaper_uiimage = NULL;
+
+static uint8_t
+xzs_clamp_byte(int v)
 {
-	if (!layer || depth > 8) {
-		return;
-	}
-	SEL sel_set_filters = sel_registerName("setFilters:");
-	SEL sel_set_comp = sel_registerName("setCompositingFilter:");
-	SEL sel_sublayers = sel_registerName("sublayers");
-	if (class_respondsToSelector(object_getClass(layer), sel_set_filters)) {
-		((void (*)(id, SEL, id))objc_msgSend)(layer, sel_set_filters, NULL);
-	}
-	if (class_respondsToSelector(object_getClass(layer), sel_set_comp)) {
-		((void (*)(id, SEL, id))objc_msgSend)(layer, sel_set_comp, NULL);
-	}
-	if (class_respondsToSelector(object_getClass(layer), sel_sublayers)) {
-		id subs = ((id (*)(id, SEL))objc_msgSend)(layer, sel_sublayers);
-		long cnt = subs ? ((long (*)(id, SEL))objc_msgSend)(subs, sel_registerName("count")) : 0;
-		for (long i = 0; i < cnt; i++) {
-			id sub = ((id (*)(id, SEL, long))objc_msgSend)(subs, sel_registerName("objectAtIndex:"), i);
-			xzs_strip_ca_filters_recursive(sub, depth + 1);
-		}
-	}
+	return (uint8_t)(v < 0 ? 0 : (v > 255 ? 255 : v));
 }
 
 static id
-xzs_uicolor_rgba(double r, double g, double b, double a)
+xzs_get_or_create_wallpaper_image(void)
 {
-	Class cls_color = objc_getClass("UIColor");
-	SEL sel_rgba = sel_registerName("colorWithRed:green:blue:alpha:");
-	if (!cls_color || !class_getClassMethod(cls_color, sel_rgba)) {
+	if (g_xzs_wallpaper_uiimage != NULL) {
+		return g_xzs_wallpaper_uiimage;
+	}
+	Class cls_data = objc_getClass("NSData");
+	Class cls_img = objc_getClass("UIImage");
+	SEL sel_data = sel_registerName("dataWithBytes:length:");
+	SEL sel_img = sel_registerName("imageWithData:");
+	if (!cls_data || !cls_img ||
+	    !class_getClassMethod(cls_data, sel_data) ||
+	    !class_getClassMethod(cls_img, sel_img)) {
 		return NULL;
 	}
-	return ((id (*)(Class, SEL, double, double, double, double))objc_msgSend)(cls_color, sel_rgba, r, g, b, a);
-}
 
-static void *
-xzs_cgcolor_rgba(double r, double g, double b, double a)
-{
-	id uic = xzs_uicolor_rgba(r, g, b, a);
-	if (!uic) {
+	const int w = 375;
+	const int h = 812;
+	const size_t pix_bytes = (size_t)w * (size_t)h * 4u;
+	const size_t bmp_size = 54u + pix_bytes;
+	uint8_t *bmp = (uint8_t *)malloc(bmp_size);
+	if (!bmp) {
 		return NULL;
 	}
-	return ((void *(*)(id, SEL))objc_msgSend)(uic, sel_registerName("CGColor"));
+	memset(bmp, 0, 54u);
+	/* 54-byte top-down 32-bpp BGRA8888 BMP header */
+	bmp[0] = 'B';
+	bmp[1] = 'M';
+	uint32_t fsz = (uint32_t)bmp_size;
+	uint32_t off = 54u;
+	uint32_t hdr_sz = 40u;
+	int32_t bw = w;
+	int32_t bh = -h; /* negative height = top-down scanlines */
+	uint16_t planes = 1u;
+	uint16_t bpp = 32u;
+	memcpy(bmp + 2, &fsz, 4);
+	memcpy(bmp + 10, &off, 4);
+	memcpy(bmp + 14, &hdr_sz, 4);
+	memcpy(bmp + 18, &bw, 4);
+	memcpy(bmp + 22, &bh, 4);
+	memcpy(bmp + 26, &planes, 2);
+	memcpy(bmp + 28, &bpp, 2);
+
+	/* Render iOS 16 WWDC 2022 iconic teal / cyan / gold / deep-indigo wave arches */
+	uint32_t *px = (uint32_t *)(bmp + 54u);
+	for (int y = 0; y < h; y++) {
+		int yn = (y * 256) / h; /* 0..255 */
+		for (int x = 0; x < w; x++) {
+			int xn = (x * 256) / w; /* 0..255 */
+			/* Base sky-to-ocean diagonal gradient */
+			int r = 12 + (yn * 22) / 256 + (xn * 18) / 256;
+			int g = 95 + ((256 - yn) * 85) / 256 + (xn * 25) / 256;
+			int b = 185 + ((256 - yn) * 55) / 256;
+
+			/* Arch 1: Upper-left cyan/turquoise wave */
+			int dx1 = x - 65;
+			int dy1 = y - 240;
+			int d1 = (dx1 * dx1 + dy1 * dy1) >> 8; /* scaled distance^2 */
+			if (d1 < 360) {
+				int w1 = 360 - d1;
+				r = (r * (360 - w1) + 18 * w1) / 360;
+				g = (g * (360 - w1) + 212 * w1) / 360;
+				b = (b * (360 - w1) + 235 * w1) / 360;
+			}
+
+			/* Arch 2: Center-right warm golden/amber WWDC22 ribbon */
+			int dx2 = x - 295;
+			int dy2 = y - 430;
+			int d2 = (dx2 * dx2 + dy2 * dy2) >> 8;
+			if (d2 < 320) {
+				int w2 = 320 - d2;
+				r = (r * (320 - w2) + 242 * w2) / 320;
+				g = (g * (320 - w2) + 196 * w2) / 320;
+				b = (b * (320 - w2) + 68 * w2) / 320;
+			}
+
+			/* Arch 3: Lower-left rich royal blue / teal wave */
+			int dx3 = x - 95;
+			int dy3 = y - 640;
+			int d3 = (dx3 * dx3 + dy3 * dy3) >> 8;
+			if (d3 < 400) {
+				int w3 = 400 - d3;
+				r = (r * (400 - w3) + 24 * w3) / 400;
+				g = (g * (400 - w3) + 138 * w3) / 400;
+				b = (b * (400 - w3) + 228 * w3) / 400;
+			}
+
+			uint8_t rb = xzs_clamp_byte(r);
+			uint8_t gb = xzs_clamp_byte(g);
+			uint8_t bb = xzs_clamp_byte(b);
+			px[y * w + x] = 0xff000000u | ((uint32_t)rb << 16) | ((uint32_t)gb << 8) | (uint32_t)bb;
+		}
+	}
+
+	id nsdata = ((id (*)(Class, SEL, const void *, unsigned long))objc_msgSend)(
+	    cls_data, sel_data, bmp, (unsigned long)bmp_size);
+	id img = nsdata ? ((id (*)(Class, SEL, id))objc_msgSend)(cls_img, sel_img, nsdata) : NULL;
+	free(bmp);
+
+	if (img) {
+		((id (*)(id, SEL))objc_msgSend)(img, sel_registerName("retain"));
+		g_xzs_wallpaper_uiimage = img;
+	}
+	return g_xzs_wallpaper_uiimage;
 }
 
 static void
-xzs_sb_ensure_wallpaper(void)
+xzs_install_wallpaper_into_window(id win, id ui_img, bool bring_to_front)
 {
-	Class cls_wc = objc_getClass("SBWallpaperController");
-	SEL sel_shared = sel_registerName("sharedInstance");
-	SEL sel_win = sel_registerName("_window");
-	if (!cls_wc || !class_getClassMethod(cls_wc, sel_shared)) {
+	if (!win || !ui_img) {
 		return;
 	}
-	id wc = ((id (*)(Class, SEL))objc_msgSend)(cls_wc, sel_shared);
-	if (!wc || !class_respondsToSelector(object_getClass(wc), sel_win)) {
-		return;
-	}
-	id wp_win = ((id (*)(id, SEL))objc_msgSend)(wc, sel_win);
-	if (!wp_win) {
-		return;
-	}
-
 	const long k_wall_tag = 0x585a5357L; /* 'XZSW' */
-	id existing = ((id (*)(id, SEL, long))objc_msgSend)(wp_win, sel_registerName("viewWithTag:"), k_wall_tag);
+	id existing = ((id (*)(id, SEL, long))objc_msgSend)(win, sel_registerName("viewWithTag:"), k_wall_tag);
 	if (existing) {
-		((void (*)(id, SEL, id))objc_msgSend)(wp_win, sel_registerName("bringSubviewToFront:"), existing);
+		if (bring_to_front) {
+			((void (*)(id, SEL, id))objc_msgSend)(win, sel_registerName("bringSubviewToFront:"), existing);
+		} else {
+			((void (*)(id, SEL, id))objc_msgSend)(win, sel_registerName("sendSubviewToBack:"), existing);
+		}
 		return;
 	}
 
-	xzs_cgrect_t bounds = ((xzs_cgrect_t (*)(id, SEL))objc_msgSend)(wp_win, sel_registerName("bounds"));
+	xzs_cgrect_t bounds = ((xzs_cgrect_t (*)(id, SEL))objc_msgSend)(win, sel_registerName("bounds"));
 	if (bounds.size.width <= 0.0 || bounds.size.height <= 0.0) {
 		bounds.origin.x = 0.0;
 		bounds.origin.y = 0.0;
@@ -1019,120 +1154,80 @@ xzs_sb_ensure_wallpaper(void)
 		bounds.size.height = 812.0;
 	}
 
-	Class cls_view = objc_getClass("UIView");
-	Class cls_grad = objc_getClass("CAGradientLayer");
-	Class cls_arr = objc_getClass("NSMutableArray");
-	if (!cls_view || !cls_grad || !cls_arr) {
+	Class cls_iv = objc_getClass("UIImageView");
+	if (!cls_iv) {
 		return;
 	}
-
 	id wall_view = ((id (*)(id, SEL, xzs_cgrect_t))objc_msgSend)(
-	    ((id (*)(Class, SEL))objc_msgSend)(cls_view, sel_registerName("alloc")),
+	    ((id (*)(Class, SEL))objc_msgSend)(cls_iv, sel_registerName("alloc")),
 	    sel_registerName("initWithFrame:"), bounds);
 	if (!wall_view) {
 		return;
 	}
+	((void (*)(id, SEL, id))objc_msgSend)(wall_view, sel_registerName("setImage:"), ui_img);
+	((void (*)(id, SEL, long))objc_msgSend)(wall_view, sel_registerName("setContentMode:"), 0L); /* UIViewContentModeScaleToFill */
 	((void (*)(id, SEL, long))objc_msgSend)(wall_view, sel_registerName("setTag:"), k_wall_tag);
 	((void (*)(id, SEL, BOOL))objc_msgSend)(wall_view, sel_registerName("setUserInteractionEnabled:"), NO);
 	((void (*)(id, SEL, unsigned long))objc_msgSend)(wall_view, sel_registerName("setAutoresizingMask:"), 18UL);
 
-	id root_layer = ((id (*)(id, SEL))objc_msgSend)(wall_view, sel_registerName("layer"));
-
-	/* 1. Base iOS 16 WWDC 2022 gradient layer (exact CAML colors from 7400.WWDC_2022) */
-	id grad = ((id (*)(Class, SEL))objc_msgSend)(cls_grad, sel_registerName("layer"));
-	if (grad && root_layer) {
-		((void (*)(id, SEL, xzs_cgrect_t))objc_msgSend)(grad, sel_registerName("setFrame:"), bounds);
-		id colors = ((id (*)(Class, SEL))objc_msgSend)(cls_arr, sel_registerName("array"));
-		void *c0 = xzs_cgcolor_rgba(0.005, 0.433, 0.786, 1.0);
-		void *c1 = xzs_cgcolor_rgba(0.060, 0.541, 0.798, 1.0);
-		void *c2 = xzs_cgcolor_rgba(0.016, 0.690, 0.761, 1.0);
-		void *c3 = xzs_cgcolor_rgba(0.096, 0.283, 0.644, 1.0);
-		if (c0) ((void (*)(id, SEL, void *))objc_msgSend)(colors, sel_registerName("addObject:"), c0);
-		if (c1) ((void (*)(id, SEL, void *))objc_msgSend)(colors, sel_registerName("addObject:"), c1);
-		if (c2) ((void (*)(id, SEL, void *))objc_msgSend)(colors, sel_registerName("addObject:"), c2);
-		if (c3) ((void (*)(id, SEL, void *))objc_msgSend)(colors, sel_registerName("addObject:"), c3);
-		((void (*)(id, SEL, id))objc_msgSend)(grad, sel_registerName("setColors:"), colors);
-		xzs_cgpoint_t sp = { 0.0, 0.0 }, ep = { 1.0, 1.0 };
-		((void (*)(id, SEL, xzs_cgpoint_t))objc_msgSend)(grad, sel_registerName("setStartPoint:"), sp);
-		((void (*)(id, SEL, xzs_cgpoint_t))objc_msgSend)(grad, sel_registerName("setEndPoint:"), ep);
-		((void (*)(id, SEL, id))objc_msgSend)(root_layer, sel_registerName("addSublayer:"), grad);
+	id layer = ((id (*)(id, SEL))objc_msgSend)(wall_view, sel_registerName("layer"));
+	if (layer && !bring_to_front && class_respondsToSelector(object_getClass(layer), sel_registerName("setZPosition:"))) {
+		((void (*)(id, SEL, double))objc_msgSend)(layer, sel_registerName("setZPosition:"), -1000.0);
 	}
 
-	/* 2. Soft iOS 16 WWDC 2022 layered wave arches (pure CoreAnimation, no Metal needed) */
-	static const struct {
-		double x, y, w, h, radius;
-		double r0, g0, b0, a0;
-		double r1, g1, b1, a1;
-	} k_arches[] = {
-		{ -90.0, 120.0, 480.0, 480.0, 240.0, 0.04, 0.78, 0.84, 0.85, 0.02, 0.36, 0.75, 0.90 },
-		{  20.0, 290.0, 460.0, 460.0, 230.0, 0.96, 0.78, 0.26, 0.82, 0.04, 0.68, 0.76, 0.88 },
-		{ -60.0, 470.0, 500.0, 500.0, 250.0, 0.08, 0.56, 0.88, 0.90, 0.05, 0.18, 0.52, 0.95 }
-	};
-	for (size_t i = 0; i < sizeof(k_arches) / sizeof(k_arches[0]); i++) {
-		id arch = ((id (*)(Class, SEL))objc_msgSend)(cls_grad, sel_registerName("layer"));
-		if (!arch || !root_layer) {
-			continue;
-		}
-		xzs_cgrect_t af = { { k_arches[i].x, k_arches[i].y }, { k_arches[i].w, k_arches[i].h } };
-		((void (*)(id, SEL, xzs_cgrect_t))objc_msgSend)(arch, sel_registerName("setFrame:"), af);
-		((void (*)(id, SEL, double))objc_msgSend)(arch, sel_registerName("setCornerRadius:"), k_arches[i].radius);
-		((void (*)(id, SEL, BOOL))objc_msgSend)(arch, sel_registerName("setMasksToBounds:"), YES);
-		id acolors = ((id (*)(Class, SEL))objc_msgSend)(cls_arr, sel_registerName("array"));
-		void *ac0 = xzs_cgcolor_rgba(k_arches[i].r0, k_arches[i].g0, k_arches[i].b0, k_arches[i].a0);
-		void *ac1 = xzs_cgcolor_rgba(k_arches[i].r1, k_arches[i].g1, k_arches[i].b1, k_arches[i].a1);
-		if (ac0) ((void (*)(id, SEL, void *))objc_msgSend)(acolors, sel_registerName("addObject:"), ac0);
-		if (ac1) ((void (*)(id, SEL, void *))objc_msgSend)(acolors, sel_registerName("addObject:"), ac1);
-		((void (*)(id, SEL, id))objc_msgSend)(arch, sel_registerName("setColors:"), acolors);
-		xzs_cgpoint_t asp = { 0.2, 0.0 }, aep = { 0.8, 1.0 };
-		((void (*)(id, SEL, xzs_cgpoint_t))objc_msgSend)(arch, sel_registerName("setStartPoint:"), asp);
-		((void (*)(id, SEL, xzs_cgpoint_t))objc_msgSend)(arch, sel_registerName("setEndPoint:"), aep);
-		((void (*)(id, SEL, id))objc_msgSend)(root_layer, sel_registerName("addSublayer:"), arch);
+	((void (*)(id, SEL, id))objc_msgSend)(win, sel_registerName("addSubview:"), wall_view);
+	if (bring_to_front) {
+		((void (*)(id, SEL, id))objc_msgSend)(win, sel_registerName("bringSubviewToFront:"), wall_view);
+	} else {
+		((void (*)(id, SEL, id))objc_msgSend)(win, sel_registerName("sendSubviewToBack:"), wall_view);
+	}
+}
+
+static void
+xzs_sb_ensure_wallpaper(void)
+{
+	id ui_img = xzs_get_or_create_wallpaper_image();
+	if (!ui_img) {
+		return;
 	}
 
-	/* 3. Also load official 7400.WWDC_2022 .ca packages if HEIC assets decode */
-	Class cls_capkg = objc_getClass("CAPackage");
-	Class cls_url = objc_getClass("NSURL");
-	SEL sel_pkg = sel_registerName("packageWithContentsOfURL:type:options:error:");
-	if (cls_capkg && cls_url && class_getClassMethod(cls_capkg, sel_pkg)) {
-		static const char *const k_ca_paths[] = {
-			"/Library/Wallpaper/Collections/iOS_16~iphone.wallpaperCollection/Wallpapers/7400.WWDC_2022-375w-812h@3x~iphone.wallpaper/7400.WWDC_2022_Background-375w-812h@3x~iphone.ca",
-			"/Library/Wallpaper/Collections/iOS_16~iphone.wallpaperCollection/Wallpapers/7400.WWDC_2022-375w-812h@3x~iphone.wallpaper/7400.WWDC_2022_Floating-375w-812h@3x~iphone.ca",
-			"/Library/Wallpaper/Collections/iOS_16~iphone.wallpaperCollection/Wallpapers/7400.WWDC_2022-375w-812h@3x~iphone.wallpaper/7400.WWDC_2022_Foreground-375w-812h@3x~iphone.ca"
-		};
-		CFStringRef pkg_type = CFStringCreateWithCString(kCFAllocatorDefault,
-		    "com.apple.coreanimation-bundle", kCFStringEncodingUTF8);
-		for (size_t i = 0; i < sizeof(k_ca_paths) / sizeof(k_ca_paths[0]); i++) {
-			CFStringRef p_cf = CFStringCreateWithCString(kCFAllocatorDefault,
-			    k_ca_paths[i], kCFStringEncodingUTF8);
-			if (!p_cf) {
-				continue;
+	/* 1. Install into SBWallpaperController._window (_SBWallpaperSecureWindow) */
+	Class cls_wc = objc_getClass("SBWallpaperController");
+	SEL sel_shared = sel_registerName("sharedInstance");
+	SEL sel_win = sel_registerName("_window");
+	if (cls_wc && class_getClassMethod(cls_wc, sel_shared)) {
+		id wc = ((id (*)(Class, SEL))objc_msgSend)(cls_wc, sel_shared);
+		if (wc && class_respondsToSelector(object_getClass(wc), sel_win)) {
+			id wp_win = ((id (*)(id, SEL))objc_msgSend)(wc, sel_win);
+			if (wp_win) {
+				((void (*)(id, SEL, BOOL))objc_msgSend)(wp_win, sel_registerName("setHidden:"), NO);
+				((void (*)(id, SEL, double))objc_msgSend)(wp_win, sel_registerName("setAlpha:"), 1.0);
+				xzs_install_wallpaper_into_window(wp_win, ui_img, true);
 			}
-			id url = ((id (*)(Class, SEL, id))objc_msgSend)(cls_url,
-			    sel_registerName("fileURLWithPath:"), (id)p_cf);
-			if (url) {
-				id err = NULL;
-				id pkg = ((id (*)(Class, SEL, id, id, id, id *))objc_msgSend)(
-				    cls_capkg, sel_pkg, url, (id)pkg_type, NULL, &err);
-				id rl = pkg ? ((id (*)(id, SEL))objc_msgSend)(pkg, sel_registerName("rootLayer")) : NULL;
-				if (rl && root_layer) {
-					xzs_strip_ca_filters_recursive(rl, 0);
-					((void (*)(id, SEL, BOOL))objc_msgSend)(rl, sel_registerName("setGeometryFlipped:"), YES);
-					((void (*)(id, SEL, id))objc_msgSend)(root_layer, sel_registerName("addSublayer:"), rl);
-				}
-			}
-			CFRelease(p_cf);
-		}
-		if (pkg_type) {
-			CFRelease(pkg_type);
 		}
 	}
 
-	((void (*)(id, SEL, BOOL))objc_msgSend)(wp_win, sel_registerName("setHidden:"), NO);
-	((void (*)(id, SEL, double))objc_msgSend)(wp_win, sel_registerName("setAlpha:"), 1.0);
-	((void (*)(id, SEL, id))objc_msgSend)(wp_win, sel_registerName("addSubview:"), wall_view);
-	((void (*)(id, SEL, id))objc_msgSend)(wp_win, sel_registerName("bringSubviewToFront:"), wall_view);
-	xzs_log("[XZS-INJECT] SpringBoard: installed iOS 16 WWDC22 wallpaper into _SBWallpaperSecureWindow (%.0fx%.0f)\n",
-	    bounds.size.width, bounds.size.height);
+	/* 2. Also install at the back (zPosition = -1000) of SBHomeScreenWindow & SBCoverSheetWindow */
+	Class cls_win = objc_getClass("UIWindow");
+	SEL sel_all = sel_registerName("allWindowsIncludingInternalWindows:onlyVisibleWindows:");
+	if (cls_win && class_getClassMethod(cls_win, sel_all)) {
+		id wins = ((id (*)(Class, SEL, BOOL, BOOL))objc_msgSend)(cls_win, sel_all, YES, NO);
+		long wcnt = wins ? ((long (*)(id, SEL))objc_msgSend)(wins, sel_registerName("count")) : 0;
+		for (long i = 0; i < wcnt; i++) {
+			id w = ((id (*)(id, SEL, long))objc_msgSend)(wins, sel_registerName("objectAtIndex:"), i);
+			const char *cname = w ? object_getClassName(w) : "";
+			if (!cname) continue;
+			if (strstr(cname, "Wallpaper") != NULL) {
+				((void (*)(id, SEL, BOOL))objc_msgSend)(w, sel_registerName("setHidden:"), NO);
+				((void (*)(id, SEL, double))objc_msgSend)(w, sel_registerName("setAlpha:"), 1.0);
+				xzs_install_wallpaper_into_window(w, ui_img, true);
+			} else if (strcmp(cname, "SBHomeScreenWindow") == 0 ||
+			           strcmp(cname, "SBCoverSheetWindow") == 0) {
+				xzs_install_wallpaper_into_window(w, ui_img, false);
+			}
+		}
+	}
+	xzs_log("[XZS-INJECT] SpringBoard: installed raster iOS 16 WWDC22 UIImage wallpaper (375x812 BMP)\n");
 }
 
 static void
@@ -1318,12 +1413,6 @@ xzs_sb_post_boot_check(__unused void *ctx)
 		    ((id (*)(id, SEL))objc_msgSend)(ic, sel_model) : NULL;
 
 		xzs_sb_ensure_all_apps(model);
-		if (model && class_respondsToSelector(object_getClass(model), sel_registerName("layout"))) {
-			((void (*)(id, SEL))objc_msgSend)(model, sel_registerName("layout"));
-		}
-		if (model && class_respondsToSelector(object_getClass(model), sel_registerName("saveIconStateIfNeeded"))) {
-			((void (*)(id, SEL))objc_msgSend)(model, sel_registerName("saveIconStateIfNeeded"));
-		}
 
 		id rf = (ic && class_respondsToSelector(object_getClass(ic), sel_rf)) ?
 		    ((id (*)(id, SEL))objc_msgSend)(ic, sel_rf) :
@@ -1356,6 +1445,7 @@ xzs_sb_post_boot_check(__unused void *ctx)
 				if (class_respondsToSelector(object_getClass(model), sel_registerName("layout"))) {
 					((void (*)(id, SEL))objc_msgSend)(model, sel_registerName("layout"));
 				}
+				xzs_sb_ensure_all_apps(model);
 				lists = ((id (*)(id, SEL))objc_msgSend)(rf, sel_registerName("lists"));
 				page_cnt = lists ? ((long (*)(id, SEL))objc_msgSend)(lists, sel_registerName("count")) : 0;
 				if (page_cnt >= 1) {
@@ -1377,15 +1467,26 @@ xzs_sb_post_boot_check(__unused void *ctx)
 				    page_cnt, p0_icons, p1_icons);
 			}
 		}
+		if (model && class_respondsToSelector(object_getClass(model), sel_registerName("saveIconStateIfNeeded"))) {
+			((void (*)(id, SEL))objc_msgSend)(model, sel_registerName("saveIconStateIfNeeded"));
+		}
+		SEL sel_relayout = sel_registerName("layoutIconLists:domino:forceRelayout:");
+		if (ic && class_respondsToSelector(object_getClass(ic), sel_relayout)) {
+			((void (*)(id, SEL, double, BOOL, BOOL))objc_msgSend)(ic, sel_relayout, 0.0, NO, YES);
+		}
 	}
 
-	/* 3. Log visible UIWindow count */
+	/* 3. Log visible UIWindow count & schedule a follow-up check if first pass */
 	Class cls_win = objc_getClass("UIWindow");
 	SEL sel_all = sel_registerName("allWindowsIncludingInternalWindows:onlyVisibleWindows:");
 	if (cls_win && class_getClassMethod(cls_win, sel_all)) {
 		id wins = ((id (*)(Class, SEL, BOOL, BOOL))objc_msgSend)(cls_win, sel_all, YES, YES);
 		long wcnt = wins ? ((long (*)(id, SEL))objc_msgSend)(wins, sel_registerName("count")) : 0;
 		xzs_log("[XZS-INJECT] SpringBoard: visible UIWindows=%ld\n", wcnt);
+	}
+	if (ctx == NULL) {
+		dispatch_after_f(dispatch_time(DISPATCH_TIME_NOW, 8ULL * NSEC_PER_SEC),
+		    &_dispatch_main_q, (void *)1, xzs_sb_post_boot_check);
 	}
 }
 

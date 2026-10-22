@@ -37,6 +37,7 @@
 #include "xzs_d8p2.h"
 #include "xzs_d8m5.h"
 #include "xzs_d8m8.h"
+#include "xzs_a530_fw.h"
 
 /* Physical Base Addresses */
 #define XZS_GPU_KGSL_PHYS_BASE          0x00b00000u
@@ -47,6 +48,8 @@
 #define XZS_GPU_QFPROM_SPEED_BIN_PHYS   0x00074130u
 #define XZS_GPU_VRAM_PHYS_BASE          0x90f00000u
 #define XZS_GPU_VRAM_PHYS_SIZE          0x00100000u /* 1 MB reserved GPU ring/scratch pool */
+#define XZS_GPU_PM4_FW_VRAM_OFFSET      0x00010000u /* 0x90f10000: a530_pm4.fw microcode */
+#define XZS_GPU_PFP_FW_VRAM_OFFSET      0x00018000u /* 0x90f18000: a530_pfp.fw microcode */
 #define XZS_GPU_GMEM_SIZE               0x00100000u /* 1 MB Adreno 530 GMEM */
 #define XZS_GPU_CHIPID_A530V2           0x05030002u
 
@@ -116,7 +119,13 @@
 #define A5XX_CP_MEQ_THRESHOLDS          0x0825u
 #define A5XX_CP_MERCIU_SIZE             0x0826u
 #define A5XX_CP_CHICKEN_DBG             0x0833u
+#define A5XX_CP_PFP_INSTR_BASE_LO       0x0835u
+#define A5XX_CP_PFP_INSTR_BASE_HI       0x0836u
+#define A5XX_CP_PM4_INSTR_BASE_LO       0x0838u
+#define A5XX_CP_PM4_INSTR_BASE_HI       0x0839u
 #define A5XX_CP_ME_CNTL                 0x0860u
+#define A5XX_CP_PROTECT_CNTL            0x0880u
+#define A5XX_CP_PROTECT_REG_0           0x0881u
 #define A5XX_CP_HW_FAULT                0x08a0u
 
 #define A5XX_PC_DBG_ECO_CNTL            0x0d00u
@@ -143,6 +152,7 @@
 #define CP_WAIT_REG_MEM                 0x3cu
 #define CP_MEM_WRITE                    0x3du
 #define CP_EVENT_WRITE                  0x46u
+#define CP_ME_INIT                      0x48u
 #define CP_DMA                          0x50u
 #define CP_MEM_TO_MEM                   0x73u
 
@@ -155,6 +165,7 @@ struct xzs_gpu_telemetry {
 	bool     mmio_accessible;
 	bool     hw_initialized;
 	bool     ringbuffer_ready;
+	bool     ucode_loaded;
 	uint8_t  vdd_gfx_status1;
 	uint8_t  vdd_gfx_en_ctl;
 	uint16_t vdd_gfx_mv;
@@ -167,6 +178,9 @@ struct xzs_gpu_telemetry {
 	uint32_t cp_rb_base;
 	uint32_t cp_rb_wptr;
 	uint32_t cp_rb_rptr;
+	uint32_t cp_pm4_base;
+	uint32_t cp_pfp_base;
+	uint32_t cp_me_cntl;
 	uint64_t blit_count;
 	uint64_t blit_bytes;
 	uint64_t fill_count;
@@ -420,13 +434,11 @@ xzs_gpu_power_up(void)
 	(void)xzs_gpu_enable_cbcr(XZS_GCC_BASE + XZS_GCC_MMSS_BIMC_GFX_CBCR, 500u);
 	(void)xzs_gpu_enable_cbcr(XZS_GCC_BASE + XZS_GCC_BIMC_GFX_CBCR, 500u);
 
-	/* 4. Enable GPU AHB & AON ISENSE clocks */
-	bool ahb_ok = xzs_gpu_enable_cbcr(XZS_MMCC_BASE + XZS_MMCC_GPU_AHB_CBCR, 1000u);
-	(void)xzs_gpu_enable_cbcr(XZS_MMCC_BASE + XZS_MMCC_GPU_AON_ISENSE_CBCR, 500u);
-
-	/* 5. Uncollapse GPU CX GDSC (0x008c4034) */
+	/* 4. Uncollapse GPU CX GDSC (0x008c4034) first, then enable GPU AHB & AON ISENSE clocks */
 	d8p1_write32(XZS_MMCC_BASE + XZS_MMCC_GPU_GDSC_HW_CTRL, 0x0u);
 	g_xzs_gpu_state.cx_gdsc_ready = xzs_gpu_enable_gdsc(XZS_MMCC_BASE + XZS_MMCC_GPU_GDSC, 2000u);
+	bool ahb_ok = xzs_gpu_enable_cbcr(XZS_MMCC_BASE + XZS_MMCC_GPU_AHB_CBCR, 1000u);
+	(void)xzs_gpu_enable_cbcr(XZS_MMCC_BASE + XZS_MMCC_GPU_AON_ISENSE_CBCR, 500u);
 
 	/* 6. Force-enable GFX3D_CMD_RCGR & RBBMTIMER_CMD_RCGR root clocks (19.2 MHz CXO safe boot source) */
 	d8p1_write32(XZS_MMCC_BASE + XZS_MMCC_GFX3D_CFG_RCGR, 0x00000001u); /* SRC=CXO, DIV=1 */
@@ -470,7 +482,10 @@ xzs_gpu_power_up(void)
 
 	g_xzs_gpu_state.gx_gdsc_ready = xzs_gpu_enable_gdsc(XZS_MMCC_BASE + XZS_MMCC_GPU_GX_GDSC, 3000u);
 
-	/* 8. Poll GPU RBBM timer & GFX3D core clocks for CLK_OFF == 0, then re-verify GX GDSC PWR_ON */
+	/* 8. Poll GPU AHB, RBBM timer & GFX3D core clocks for CLK_OFF == 0, then re-verify GX GDSC PWR_ON */
+	if (!ahb_ok) {
+		ahb_ok = xzs_gpu_enable_cbcr(XZS_MMCC_BASE + XZS_MMCC_GPU_AHB_CBCR, 1000u);
+	}
 	bool rbbm_ok = xzs_gpu_enable_cbcr(XZS_MMCC_BASE + XZS_MMCC_GPU_GX_RBBMTIMER_CBCR, 1000u);
 	bool gfx3d_ok = xzs_gpu_enable_cbcr(XZS_MMCC_BASE + XZS_MMCC_GPU_GX_GFX3D_CBCR, 1000u);
 	if (!g_xzs_gpu_state.gx_gdsc_ready) {
@@ -484,8 +499,12 @@ xzs_gpu_power_up(void)
 }
 
 /*
- * Step 3: Initialize Adreno 530 (A530v2) Hardware Registers & CP Ringbuffer
- * Follows the exact register sequence from Sony Xperia XZs twrp-kernel.bin (a5xx_start @ 0x60cd14)
+ * Step 3: Initialize Adreno 530 (A530v2) Hardware Registers, PM4/PFP Microcode & CP Ringbuffer
+ * Follows the exact register sequence from Sony Xperia XZs twrp-kernel.bin:
+ *   - a5xx_start            @ 0x60cd14
+ *   - a5xx_cp_init          @ 0x609d70
+ *   - a5xx_me_init          @ 0x609418
+ *   - a5xx_ringbuffer_start @ 0x609fb0
  */
 static bool
 xzs_gpu_hw_init(void)
@@ -506,13 +525,13 @@ xzs_gpu_hw_init(void)
 	xzs_gpu_reg_write(A5XX_VBIF_ROUND_ROBIN_QOS_ARB, 0x00000003u);
 	xzs_gpu_reg_write(A5XX_VBIF_GATE_OFF_WRREQ_EN, 0x00000009u);
 
-	/* 2. Configure RBBM AHB & timeout controls */
+	/* 2. Configure RBBM AHB & Non-Secure SECVID controls (a5xx_start @ 0x60ce40..0x60ce84) */
 	xzs_gpu_reg_write(A5XX_RBBM_AHB_CNTL0, 0x4000ffffu);
-	xzs_gpu_reg_write(A5XX_RBBM_SECVID_TRUST_CNTL, 0xffffffffu);
+	xzs_gpu_reg_write(A5XX_RBBM_SECVID_TRUST_CNTL, 0x00000000u);
 	xzs_gpu_reg_write(A5XX_RBBM_INTERFACE_HANG_INT_CNTL, 0x00000001u);
 	xzs_gpu_reg_write(A5XX_RBBM_AHB_CNTL1, 0xf0000000u);
 	xzs_gpu_reg_write(A5XX_RBBM_AHB_CNTL2, 0xffffffffu);
-	xzs_gpu_reg_write(A5XX_RBBM_SECVID_TSB_CNTL, 0x00000001u);
+	xzs_gpu_reg_write(A5XX_RBBM_SECVID_TSB_CNTL, 0x00000000u);
 
 	/* 3. Configure UCHE (Unified L2 Cache) & 1 MB On-Chip GMEM range */
 	xzs_gpu_reg_write(A5XX_UCHE_CACHE_WAYS, 0x00000002u);
@@ -540,13 +559,46 @@ xzs_gpu_hw_init(void)
 		xzs_gpu_reg_write(s_a530_hwcg_regs[i].reg_dword, s_a530_hwcg_regs[i].value);
 	}
 
-	/* 7. Enable RBBM performance counters & AHB split control */
+	/* 7. Enable RBBM performance counters, AHB split control & CP register protection */
 	xzs_gpu_reg_write(A5XX_RBBM_INT_0_MASK, 0x00000000u); /* Mask IRQs until user client requests */
 	xzs_gpu_reg_write(A5XX_RBBM_AHB_ME_SPLIT_CNTL, 0x0000003fu);
 	xzs_gpu_reg_write(A5XX_CP_HW_FAULT, 0x00000007u);
 	xzs_gpu_reg_write(A5XX_RBBM_PERFCTR_CNTL, 0x00000001u);
 
-	/* 8. Configure Command Processor Ringbuffer at physical 0x90f00000 (32 KB) */
+	/* Program CP_PROTECT_CNTL & CP_PROTECT_REG_0..15 (a5xx_cp_init @ 0x609e04..0x609f4c) */
+	xzs_gpu_reg_write(A5XX_CP_PROTECT_CNTL, 0x00000007u);
+	xzs_gpu_reg_write(A5XX_CP_PROTECT_REG_0 + 0u,  0x62000004u);
+	xzs_gpu_reg_write(A5XX_CP_PROTECT_REG_0 + 1u,  0x60000010u);
+	xzs_gpu_reg_write(A5XX_CP_PROTECT_REG_0 + 2u,  0x60000024u);
+	xzs_gpu_reg_write(A5XX_CP_PROTECT_REG_0 + 3u,  0x60000028u);
+	xzs_gpu_reg_write(A5XX_CP_PROTECT_REG_0 + 4u,  0x6400004bu);
+	xzs_gpu_reg_write(A5XX_CP_PROTECT_REG_0 + 5u,  0x66000100u);
+	xzs_gpu_reg_write(A5XX_CP_PROTECT_REG_0 + 6u,  0x65000200u);
+	xzs_gpu_reg_write(A5XX_CP_PROTECT_REG_0 + 7u,  0x6200020cu);
+	xzs_gpu_reg_write(A5XX_CP_PROTECT_REG_0 + 8u,  0x6000020eu);
+	xzs_gpu_reg_write(A5XX_CP_PROTECT_REG_0 + 9u,  0x68000210u);
+	xzs_gpu_reg_write(A5XX_CP_PROTECT_REG_0 + 10u, 0x64000112u);
+	xzs_gpu_reg_write(A5XX_CP_PROTECT_REG_0 + 11u, 0x60000221u);
+	xzs_gpu_reg_write(A5XX_CP_PROTECT_REG_0 + 12u, 0x6b000380u);
+	xzs_gpu_reg_write(A5XX_CP_PROTECT_REG_0 + 13u, 0x710000c0u);
+	xzs_gpu_reg_write(A5XX_CP_PROTECT_REG_0 + 14u, 0x650003a0u);
+	xzs_gpu_reg_write(A5XX_CP_PROTECT_REG_0 + 15u, 0x62000400u);
+
+	/* 8. Load Adreno 530 PM4 & PFP Microcode into VRAM & Program Instruction Base Registers */
+	if (g_xzs_gpu_vram_va != 0) {
+		memcpy((void *)(g_xzs_gpu_vram_va + XZS_GPU_PM4_FW_VRAM_OFFSET),
+		    g_xzs_a530_pm4_fw, sizeof(g_xzs_a530_pm4_fw));
+		memcpy((void *)(g_xzs_gpu_vram_va + XZS_GPU_PFP_FW_VRAM_OFFSET),
+		    g_xzs_a530_pfp_fw, sizeof(g_xzs_a530_pfp_fw));
+		__asm__ volatile("dsb sy" ::: "memory");
+		g_xzs_gpu_state.ucode_loaded = true;
+	}
+	xzs_gpu_reg_write(A5XX_CP_PM4_INSTR_BASE_LO, XZS_GPU_VRAM_PHYS_BASE + XZS_GPU_PM4_FW_VRAM_OFFSET);
+	xzs_gpu_reg_write(A5XX_CP_PM4_INSTR_BASE_HI, 0x00000000u);
+	xzs_gpu_reg_write(A5XX_CP_PFP_INSTR_BASE_LO, XZS_GPU_VRAM_PHYS_BASE + XZS_GPU_PFP_FW_VRAM_OFFSET);
+	xzs_gpu_reg_write(A5XX_CP_PFP_INSTR_BASE_HI, 0x00000000u);
+
+	/* 9. Configure Command Processor Ringbuffer at physical 0x90f00000 (32 KB) */
 	xzs_gpu_reg_write(A5XX_CP_RB_CNTL, 0x0800000bu); /* BUFSZ=32KB (log2(4096 dwords)=11), NO_UPDATE=1 */
 	xzs_gpu_reg_write(A5XX_CP_RB_BASE, XZS_GPU_VRAM_PHYS_BASE);
 	xzs_gpu_reg_write(A5XX_CP_RB_BASE_HI, 0x00000000u);
@@ -554,9 +606,42 @@ xzs_gpu_hw_init(void)
 	xzs_gpu_reg_write(A5XX_CP_RB_RPTR_ADDR_HI, 0x00000000u);
 	xzs_gpu_reg_write(A5XX_CP_RB_WPTR, 0x00000000u);
 
+	/* 10. Unhalt Adreno 530 Pipeline Blocks & CP Micro-Engine (a5xx_me_init @ 0x609418) */
+	xzs_gpu_reg_write(0x0bc1u, 0x00000001u); /* HLSQ_UPDATE_CNTL */
+	xzs_gpu_reg_write(0x0c81u, 0x00000001u); /* GRAS_UPDATE_CNTL */
+	xzs_gpu_reg_write(0x0cc5u, 0x00000001u); /* RB_UPDATE_CNTL */
+	xzs_gpu_reg_write(0x0d01u, 0x00000001u); /* PC_UPDATE_CNTL */
+	xzs_gpu_reg_write(0x0e05u, 0x00000001u); /* VFD_UPDATE_CNTL */
+	xzs_gpu_reg_write(0x0e41u, 0x00000001u); /* VPC_UPDATE_CNTL */
+	xzs_gpu_reg_write(0x0e61u, 0x00000001u); /* UCHE_UPDATE_CNTL */
+	xzs_gpu_reg_write(0x0e80u, 0x00000001u); /* UCHE_MODE_CNTL */
+	xzs_gpu_reg_write(0x0ec1u, 0x00000001u); /* SP_UPDATE_CNTL */
+	xzs_gpu_reg_write(0x0f01u, 0x00000001u); /* TPL1_UPDATE_CNTL */
+	xzs_gpu_reg_write(A5XX_CP_ME_CNTL, 0x00000000u); /* Clear ME_HALT (bit 28) & PFP_HALT (bit 27) */
+
+	/* 11. Submit CP_ME_INIT packet (a5xx_ringbuffer_start @ 0x609fec) if VRAM ring is mapped */
+	if (g_xzs_gpu_vram_va != 0) {
+		volatile uint32_t *ring = (volatile uint32_t *)g_xzs_gpu_vram_va;
+		ring[0] = CP_TYPE7_PKT(CP_ME_INIT, 7); /* 0x70c80007 */
+		ring[1] = 0x0000000fu;                 /* sub_bitmask: enable all ME/PFP pipes */
+		ring[2] = 0x00000003u;                 /* multiple_contexts */
+		ring[3] = 0x20000000u;                 /* error_detection_control */
+		ring[4] = 0x00000000u;
+		ring[5] = 0x00000000u;
+		ring[6] = 0x00000000u;
+		ring[7] = 0x00000000u;
+		__asm__ volatile("dsb sy" ::: "memory");
+		g_xzs_gpu_state.cp_rb_wptr = 8u;
+		xzs_gpu_reg_write(A5XX_CP_RB_WPTR, 8u);
+		g_xzs_gpu_state.cmdbuf_submissions = 1ULL;
+	}
+
 	g_xzs_gpu_state.cp_rb_base = xzs_gpu_reg_read(A5XX_CP_RB_BASE);
 	g_xzs_gpu_state.cp_rb_wptr = xzs_gpu_reg_read(A5XX_CP_RB_WPTR);
 	g_xzs_gpu_state.cp_rb_rptr = xzs_gpu_reg_read(A5XX_CP_RB_RPTR);
+	g_xzs_gpu_state.cp_pm4_base = xzs_gpu_reg_read(A5XX_CP_PM4_INSTR_BASE_LO);
+	g_xzs_gpu_state.cp_pfp_base = xzs_gpu_reg_read(A5XX_CP_PFP_INSTR_BASE_LO);
+	g_xzs_gpu_state.cp_me_cntl = xzs_gpu_reg_read(A5XX_CP_ME_CNTL);
 	g_xzs_gpu_state.rbbm_status = xzs_gpu_reg_read(A5XX_RBBM_STATUS);
 	g_xzs_gpu_state.rbbm_status3 = xzs_gpu_reg_read(A5XX_RBBM_STATUS3);
 	g_xzs_gpu_state.hw_initialized = true;
@@ -636,14 +721,21 @@ xzs_gpu_dump_status(void)
 		g_xzs_gpu_state.cp_rb_base = xzs_gpu_reg_read(A5XX_CP_RB_BASE);
 		g_xzs_gpu_state.cp_rb_wptr = xzs_gpu_reg_read(A5XX_CP_RB_WPTR);
 		g_xzs_gpu_state.cp_rb_rptr = xzs_gpu_reg_read(A5XX_CP_RB_RPTR);
+		g_xzs_gpu_state.cp_pm4_base = xzs_gpu_reg_read(A5XX_CP_PM4_INSTR_BASE_LO);
+		g_xzs_gpu_state.cp_pfp_base = xzs_gpu_reg_read(A5XX_CP_PFP_INSTR_BASE_LO);
+		g_xzs_gpu_state.cp_me_cntl = xzs_gpu_reg_read(A5XX_CP_ME_CNTL);
 
 		xzs_diag_emit("  A5XX_RBBM_HW_VERSION  = 0x"); xzs_d8p1_hex32(g_xzs_gpu_state.hw_version); xzs_diag_emit("\n");
 		xzs_diag_emit("  A5XX_VBIF_VERSION     = 0x"); xzs_d8p1_hex32(g_xzs_gpu_state.vbif_version); xzs_diag_emit("\n");
 		xzs_diag_emit("  A5XX_RBBM_STATUS      = 0x"); xzs_d8p1_hex32(g_xzs_gpu_state.rbbm_status); xzs_diag_emit("\n");
+		xzs_diag_emit("  A5XX_CP_PM4_BASE      = 0x"); xzs_d8p1_hex32(g_xzs_gpu_state.cp_pm4_base); xzs_diag_emit("\n");
+		xzs_diag_emit("  A5XX_CP_PFP_BASE      = 0x"); xzs_d8p1_hex32(g_xzs_gpu_state.cp_pfp_base); xzs_diag_emit("\n");
+		xzs_diag_emit("  A5XX_CP_ME_CNTL       = 0x"); xzs_d8p1_hex32(g_xzs_gpu_state.cp_me_cntl); xzs_diag_emit("\n");
 		xzs_diag_emit("  A5XX_CP_RB_BASE       = 0x"); xzs_d8p1_hex32(g_xzs_gpu_state.cp_rb_base); xzs_diag_emit("\n");
 		xzs_diag_emit("  A5XX_CP_RB_WPTR       = 0x"); xzs_d8p1_hex32(g_xzs_gpu_state.cp_rb_wptr); xzs_diag_emit("\n");
 		xzs_diag_emit("  A5XX_CP_RB_RPTR       = 0x"); xzs_d8p1_hex32(g_xzs_gpu_state.cp_rb_rptr); xzs_diag_emit("\n");
 	}
+	xzs_diag_emit("  UCODE_LOADED          = "); xzs_diag_emit(g_xzs_gpu_state.ucode_loaded ? "YES (a530_pm4.fw + a530_pfp.fw)\n" : "NO\n");
 	xzs_diag_emit("  BLIT_COUNT            = "); xzs_d8m8_dec(g_xzs_gpu_state.blit_count); xzs_diag_emit("\n");
 	xzs_diag_emit("  BLIT_BYTES            = "); xzs_d8m8_dec(g_xzs_gpu_state.blit_bytes); xzs_diag_emit("\n");
 	xzs_diag_emit("  CMDBUF_SUBMISSIONS    = "); xzs_d8m8_dec(g_xzs_gpu_state.cmdbuf_submissions); xzs_diag_emit("\n");

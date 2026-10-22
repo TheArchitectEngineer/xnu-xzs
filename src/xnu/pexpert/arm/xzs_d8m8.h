@@ -3541,6 +3541,8 @@ extern bool g_xzs_gui_presented;
 extern void delay_for_interval(uint32_t interval, uint32_t scale_factor);
 extern boolean_t ml_get_interrupts_enabled(void);
 
+static bool g_m8_gui_bgra_unpack_latched = false;
+
 static bool
 xzs_d8m8_wait_frame_idle(uint32_t timeout_us)
 {
@@ -3571,7 +3573,7 @@ xzs_d8m8_wait_frame_idle(uint32_t timeout_us)
 			xzs_watchdog_pet();
 		}
 		if (can_sleep) {
-			delay_for_interval(500u, 1000u);
+			delay_for_interval(150u, 1000u);
 		} else {
 			xzs_d8p2_delay_us(50u);
 		}
@@ -3611,9 +3613,20 @@ xzs_d8m8_kick_frame_ex(bool wait_for_idle)
 			}
 		}
 	}
-	if (!xzs_d8m8_wait_frame_idle(wait_for_idle ? 50000u : 0u)) {
+	uint32_t wait_us = wait_for_idle ? (g_xzs_gui_presented ? 18000u : 50000u) : 0u;
+	if (!xzs_d8m8_wait_frame_idle(wait_us)) {
 		__atomic_clear(&g_m8_kick_lock, __ATOMIC_RELEASE);
 		return;
+	}
+	/*
+	 * Once iOS GUI (backboardd/SpringBoard) owns the display, switch MDP5
+	 * SSPP RGB0_SRC_UNPACK (0x00915034) from 0x03010002 (RGBA/XRGB) to
+	 * 0x03020001 (native iOS BGRA8888 hardware unpack), eliminating all CPU
+	 * R/B byte-swapping in XZSFramebuffer!
+	 */
+	if (g_xzs_gui_presented && !g_m8_gui_bgra_unpack_latched) {
+		d8p1_write32(0x00915034u, 0x03020001u); /* RGB0_SRC_UNPACK = BGRA8888 */
+		g_m8_gui_bgra_unpack_latched = true;
 	}
 	d8p1_write32(0x00901018u, 0x00000100u);
 	d8p1_write32(0x00994110u, d8p1_read32(0x00994110u) | 0x00000100u);

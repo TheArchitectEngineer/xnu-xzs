@@ -202,13 +202,13 @@ xzs_fb_blend(uint32_t a, uint32_t b, uint32_t w)
 	return rb | ga;
 }
 
-static inline uint32_t
+static inline __unused uint32_t
 xzs_bgra_to_mdp5(uint32_t p)
 {
 	return (p & 0xff00ff00u) | ((p & 0x00ff0000u) >> 16) | ((p & 0x000000ffu) << 16);
 }
 
-static inline uint64_t
+static inline __unused uint64_t
 xzs_bgra_to_mdp5_swar2(uint64_t p2)
 {
 	return (p2 & 0xff00ff00ff00ff00ULL) |
@@ -436,18 +436,8 @@ AppleCLCD::renderSlice(uint32_t worker_id, uint32_t total_workers)
 		uint32_t *to = (uint32_t *)(fPixels + (size_t)y * fRowBytes);
 		if (job.unscaled) {
 			const uint32_t *src_row = (const uint32_t *)(pixels + (size_t)(sy + y - py0) * stride) + sx;
-			int32_t x = cx0;
-			if ((x & 1) != 0 && x < cx1) {
-				to[x] = xzs_bgra_to_mdp5(src_row[x - cx0]);
-				x++;
-			}
-			for (; x + 1 < cx1; x += 2) {
-				uint64_t p2;
-				memcpy(&p2, &src_row[x - cx0], sizeof(p2));
-				*(uint64_t *)&to[x] = xzs_bgra_to_mdp5_swar2(p2);
-			}
-			if (x < cx1) {
-				to[x] = xzs_bgra_to_mdp5(src_row[x - cx0]);
+			if (cx1 > cx0) {
+				memcpy(&to[cx0], src_row, (size_t)(cx1 - cx0) * sizeof(uint32_t));
 			}
 			continue;
 		}
@@ -488,8 +478,7 @@ AppleCLCD::renderSlice(uint32_t worker_id, uint32_t total_workers)
 				uint32_t c = fColumn[x];
 				uint32_t w = fColumnWeight[x];
 				uint32_t a = from[c];
-				uint32_t p = (w == 0 || a == from[c + 1u]) ? a : xzs_fb_blend(a, from[c + 1u], w);
-				to[x] = xzs_bgra_to_mdp5(p);
+				to[x] = (w == 0 || a == from[c + 1u]) ? a : xzs_fb_blend(a, from[c + 1u], w);
 				x++;
 			}
 			for (; x + 1 < cx1; x += 2) {
@@ -497,28 +486,28 @@ AppleCLCD::renderSlice(uint32_t worker_id, uint32_t total_workers)
 				uint32_t p0 = (w0 == 0 || a0 == from[c0 + 1u]) ? a0 : xzs_fb_blend(a0, from[c0 + 1u], w0);
 				uint32_t c1 = fColumn[x + 1], w1 = fColumnWeight[x + 1], a1 = from[c1];
 				uint32_t p1 = (w1 == 0 || a1 == from[c1 + 1u]) ? a1 : xzs_fb_blend(a1, from[c1 + 1u], w1);
-				uint64_t pair = (uint64_t)p0 | ((uint64_t)p1 << 32);
-				*(uint64_t *)&to[x] = xzs_bgra_to_mdp5_swar2(pair);
+				*(uint64_t *)&to[x] = (uint64_t)p0 | ((uint64_t)p1 << 32);
 			}
 			if (x < cx1) {
 				uint32_t c = fColumn[x];
 				uint32_t w = fColumnWeight[x];
 				uint32_t a = from[c];
-				uint32_t p = (w == 0 || a == from[c + 1u]) ? a : xzs_fb_blend(a, from[c + 1u], w);
-				to[x] = xzs_bgra_to_mdp5(p);
+				to[x] = (w == 0 || a == from[c + 1u]) ? a : xzs_fb_blend(a, from[c + 1u], w);
 			}
 		} else {
 			int32_t x = cx0;
 			if ((x & 1) != 0 && x < cx1) {
-				to[x] = xzs_bgra_to_mdp5(from[fColumn[x]]);
+				to[x] = from[fColumn[x]];
 				x++;
 			}
-			for (; x + 1 < cx1; x += 2) {
-				uint64_t pair = (uint64_t)from[fColumn[x]] | ((uint64_t)from[fColumn[x + 1]] << 32);
-				*(uint64_t *)&to[x] = xzs_bgra_to_mdp5_swar2(pair);
+			for (; x + 3 < cx1; x += 4) {
+				uint64_t p01 = (uint64_t)from[fColumn[x]] | ((uint64_t)from[fColumn[x + 1]] << 32);
+				uint64_t p23 = (uint64_t)from[fColumn[x + 2]] | ((uint64_t)from[fColumn[x + 3]] << 32);
+				*(uint64_t *)&to[x] = p01;
+				*(uint64_t *)&to[x + 2] = p23;
 			}
-			if (x < cx1) {
-				to[x] = xzs_bgra_to_mdp5(from[fColumn[x]]);
+			for (; x < cx1; x++) {
+				to[x] = from[fColumn[x]];
 			}
 		}
 	}
@@ -705,6 +694,13 @@ AppleCLCD::present(const uint8_t *rec)
 			} else if (g_xzs_springboard_surface_ready && !g_xzs_gui_presented) {
 				g_xzs_gui_presented = true;
 			}
+			if (sweet_fb_swaps_logged <= 24) {
+				const uint32_t *mid_row = (const uint32_t *)(src + s->offset +
+				    (uint64_t)(sy + sh / 2) * s->bytesPerRow);
+				uint32_t center_px = mid_row[sx + sw / 2];
+				IOLog("SWEET FB: swap %u surface %u center_px=0x%08x\n",
+				    get32(rec, 0x50), s->id, center_px);
+			}
 
 			int32_t job_sx = full_surface_coords ? 0 : sx;
 			int32_t job_sy = full_surface_coords ? 0 : sy;
@@ -712,7 +708,9 @@ AppleCLCD::present(const uint8_t *rec)
 			int32_t job_sh = full_surface_coords ? (int32_t)fLogicalH : sh;
 			int32_t map_px0 = full_surface_coords ? 0 : px0;
 			int32_t map_pw  = full_surface_coords ? (int32_t)fWidth : pw;
-			bool filter = (job_sw <= (int32_t)SWEET_FB_LOGICAL_W);
+			int use_bilinear = 0;
+			(void)PE_parse_boot_argn("sweetfb_filter", &use_bilinear, sizeof(use_bilinear));
+			bool filter = (use_bilinear != 0) && (job_sw <= (int32_t)SWEET_FB_LOGICAL_W);
 
 			for (int32_t x = px0; x < px1; x++) {
 				if (filter) {
