@@ -1700,7 +1700,9 @@ arm_vm_prot_finalize(boot_args * args __unused)
 	 * should be immediately followed by XNU's TEXT segment
 	 */
 
+#if !CONFIG_XZS_BRINGUP
 	ml_static_mfree(phystokv(gPhysBase), segLOWEST - gVirtBase);
+#endif
 
 	/*
 	 * KTRR support means we will be mucking with these pages and trying to

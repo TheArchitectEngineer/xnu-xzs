@@ -1007,14 +1007,13 @@ msm_uart_init_rx_transfer(void)
 static unsigned int
 msm_uart_transmit_ready(void)
 {
-	if (!msm_uart_base) return 1;
-	return (msm_uart_read(MSM_UART_SR) & MSM_UART_SR_TX_EMPTY) != 0;
+	return 1;
 }
 
 static void
 msm_uart_transmit_data(uint8_t c)
 {
-	/* 1. Record character into preserved DRAM log buffer */
+	/* Record character into preserved DRAM log buffer (USB + LCD fbcon are fed in _cnputs) */
 	if (g_dram_log && g_dram_log->magic == DRAM_LOG_MAGIC) {
 		uint32_t idx = g_dram_log->write_offset;
 		if (idx < DRAM_LOG_SIZE - 1) {
@@ -1023,20 +1022,6 @@ msm_uart_transmit_data(uint8_t c)
 			g_dram_log->data[idx + 1] = '\0';
 		}
 	}
-
-	/* 2. Transmit over Qualcomm MSM BLSP UARTDM */
-	if (!msm_uart_base) return;
-	uint32_t timeout = 50000;
-	while (!(msm_uart_read(MSM_UART_SR) & MSM_UART_SR_TX_EMPTY)) {
-		if (--timeout == 0) return;
-	}
-	msm_uart_write(UARTDM_NCF_TX, 1);
-	(void)msm_uart_read(UARTDM_NCF_TX);
-	timeout = 50000;
-	while (!(msm_uart_read(MSM_UART_SR) & MSM_UART_SR_TX_READY)) {
-		if (--timeout == 0) return;
-	}
-	msm_uart_write(UARTDM_TF, (uint32_t)c);
 }
 
 static unsigned int

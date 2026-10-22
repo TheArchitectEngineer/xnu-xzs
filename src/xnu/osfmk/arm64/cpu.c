@@ -644,6 +644,18 @@ cpu_idle_exit(boolean_t from_reset)
 
 	assert(exception_stack_pointer() != 0);
 
+	/* Ensure CNTKCTL_EL1 and SCTLR_EL1 EL0 bits survive WFI / idle exit on all cores */
+	{
+		uint64_t cntkctl_wake = __builtin_arm_rsr64("CNTKCTL_EL1");
+		if ((cntkctl_wake & 0x3ULL) != 0x3ULL) {
+			__builtin_arm_wsr64("CNTKCTL_EL1", cntkctl_wake | 0x4fULL);
+		}
+		uint64_t sctlr_wake = __builtin_arm_rsr64("SCTLR_EL1");
+		if ((sctlr_wake & 0x0405c000ULL) != 0x0405c000ULL) {
+			__builtin_arm_wsr64("SCTLR_EL1", sctlr_wake | 0x0405c120ULL);
+		}
+	}
+
 	/* Back from WFI, unlock OSLAR and EDLAR. */
 	if (from_reset) {
 		configure_coresight_registers(cpu_data_ptr);

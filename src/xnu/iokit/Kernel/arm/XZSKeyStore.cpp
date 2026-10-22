@@ -47,6 +47,7 @@ enum {
 	kAKSUnloadSessionBags = 55,
 	kAKSAssertConsume    = 101,
 	kAKSNotifyStateSet   = 102,
+	kAKSNotifyStateIsSet = 103,
 };
 
 /* The system (device) bag handle. */
@@ -210,6 +211,14 @@ AppleKeyStoreUserClient::externalMethod(uint32_t selector, IOExternalMethodArgum
 			break;
 		}
 		args->scalarOutput[0] = SWEET_AKS_LOCK_STATE;
+		args->scalarOutputCount = 1;
+		break;
+	case kAKSNotifyStateIsSet:
+		if (out_scalars < 1) {
+			ret = kIOReturnBadArgument;
+			break;
+		}
+		args->scalarOutput[0] = 0;
 		args->scalarOutputCount = 1;
 		break;
 	case kAKSGetDeviceState:

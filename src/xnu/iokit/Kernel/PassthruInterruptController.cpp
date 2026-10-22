@@ -154,5 +154,7 @@ PassthruInterruptController::handleInterrupt(void */*refCon*/,
 void
 PassthruInterruptController::externalInterrupt(void)
 {
-	child_handler(child_target, child_refCon, child_nub, 0);
+	if (child_handler != NULL) {
+		child_handler(child_target, child_refCon, child_nub, 0);
+	}
 }

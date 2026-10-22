@@ -5701,8 +5701,17 @@ memorystatus_allowed_vm_map_fork(task_t task, bool *is_large)
 void
 memorystatus_get_task_page_counts(task_t task, uint32_t *footprint, uint32_t *max_footprint_lifetime, uint32_t *purgeable_pages)
 {
-	assert(task);
 	assert(footprint);
+	if (task == TASK_NULL) {
+		*footprint = 0;
+		if (max_footprint_lifetime) {
+			*max_footprint_lifetime = 0;
+		}
+		if (purgeable_pages) {
+			*purgeable_pages = 0;
+		}
+		return;
+	}
 
 	uint64_t pages;
 
@@ -5730,7 +5739,9 @@ memorystatus_get_task_phys_footprint_page_counts(task_t task,
     uint64_t *iokit_mapped_pages, uint64_t *page_table_pages, uint64_t *frozen_to_swap_pages,
     uint64_t *neural_nofootprint_total_pages)
 {
-	assert(task);
+	if (task == TASK_NULL) {
+		return;
+	}
 
 	if (internal_pages) {
 		*internal_pages = (get_task_internal(task) / PAGE_SIZE_64);
@@ -6104,6 +6115,9 @@ memorystatus_init_jetsam_snapshot_entry_locked(proc_t p, memorystatus_jetsam_sna
 	uint32_t trust                                  = 0;
 	kern_return_t ret                               = 0;
 	memset(entry, 0, sizeof(memorystatus_jetsam_snapshot_entry_t));
+	if (p == NULL || proc_task(p) == TASK_NULL || p->p_stats == NULL) {
+		return FALSE;
+	}
 
 	entry->pid = proc_getpid(p);
 	strlcpy(&entry->name[0], p->p_name, sizeof(entry->name));

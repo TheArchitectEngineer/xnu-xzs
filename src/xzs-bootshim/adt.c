@@ -262,8 +262,8 @@ uint32_t adt_build_tree_at(uint64_t base_addr) {
     adt_put_str("name", "disp0");
     adt_put_str("device_type", "display-subsystem");
     adt_put_str("compatible", "xzs,display");
-    adt_put_u32("canvas-width", 1080);
-    adt_put_u32("canvas-height", 1920);
+    adt_put_u32("canvas-width", 1125);
+    adt_put_u32("canvas-height", 2436);
 
     /* Child 5: /buttons -> 0 children */
     static const char button_names[] = "volup\0voldown\0hold";

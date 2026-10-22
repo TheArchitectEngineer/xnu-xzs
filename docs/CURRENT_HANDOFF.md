@@ -2,15 +2,15 @@
 
 ```text
 CURRENT_PHASE=D10_IOS_ROOTFS_AND_LAUNCHD_BRINGUP
-CURRENT_MILESTONE=XZS_D10_M1_HFS_ROOTFS_MOUNT_AND_PID1_VERIFIED_ON_HARDWARE
-HARDWARE_STATUS=BH905SX976 (1080x1920 PHYSICAL LCD ACTIVE, 14GB HFS+ iOS 16.7.16 ROOTFS FLASHED & MOUNTED ON /dev/disk0s54, /dev MOUNTED, PID 1 CREATED, PAC=0 VERIFIED)
+CURRENT_MILESTONE=XZS_D10_M4_FIRST_IOS16_GUI_FRAMES_AND_SPRINGBOARD_ON_PHYSICAL_LCD
+HARDWARE_STATUS=BH905SX976 (1080x1920 FULL-SCREEN CONSOLE + FIRST VISIBLE iOS 16 GUI FRAMES 1125x2436->1080x1920 ON LCD, 4-CORE SMP + SDCC1 19.2MHz 8-BIT CMD18 PIO, ZERO PANICS PAST t=550s, PAC=0 VERIFIED)
 REFERENCE_PROJECT_INTEGRATED=ios-sweet (MIRRORED_AND_GITIGNORED)
 ARCHITECTURAL_BLUEPRINT=docs/XZS_IOS_HYBRID_ARCHITECTURE.md (CREATED_AND_APPROVED)
 HARDWARE_EVALUATION_REPORT=docs/XZS_D8_M10_HARDWARE_EVALUATION.md (COMPLETE_AND_SEALED)
 REGRESSION_BISECT_REPORT=docs/DISPLAY_REGRESSION_BISECT_RESULT.md (RESOLVED_AND_SEALED)
 IPSW_STATUS=DOWNLOADED_EXTRACTED_AND_FLASHED_TO_USERDATA (iPhone10,3_16.7.16_20H392 -> /dev/disk0s54)
 COMPAT_SERVICES=XZSSurface, XZSFramebuffer, XZSKeyStore, XZSWatchdog, XZSEntitlements, XZSPlatformExpert, SweetHID, SweetBattery, sweet_hfs, sweet_libpthread, sweet_bearssl, xzs_amfi (COMPILED_AND_INTEGRATED)
-NEXT_OBJECTIVE=Boot with AST_BSD unmasked in locore.s to execute /sbin/launchd -> backboardd -> SpringBoard
+NEXT_OBJECTIVE=Unblock lsd LaunchServices database seeding (MobileInstallation / installd) so SpringBoard transitions to Home Screen
 ```
 
 ---
@@ -48,6 +48,13 @@ NEXT_OBJECTIVE=Boot with AST_BSD unmasked in locore.s to execute /sbin/launchd -
   - Expanded XPU-safe contiguous DRAM in `src/xzs-bootshim/main.c` and `src/xnu/osfmk/arm64/arm_vm_init.c` (`0x80000000..0x85900000` + `0x8ac00000..0xdac00000` = `1,368 MB` total RAM) and integrated authentic `D22AP` (`iPhone10,3`) Apple Device Tree properties in `src/xzs-bootshim/adt.c`.
   - Verified live on `BH905SX976` that XNU enumerates eMMC GPT partitions, publishes `IOMedia` `disk0s54`, mounts `/dev/disk0s54` as `/` via `sweet_hfs`, mounts `/dev` (`devfs`), and bootstraps PID 1 (`bsd_utaskbootstrap` -> `task_wait_to_return`).
   - Fixed `locore.s` `return_to_user` AST mask (`and w0, w0, #0x20`) that had blocked `AST_BSD` (`0x80`) from invoking `bsd_ast()` -> `bsdinit_task()` -> `load_init_program("/sbin/launchd")`.
+- **D10-M2 / D10-M3 / D10-M4 (Full-Screen LCD Console, High-Speed eMMC Multi-Block PIO, 4-Core SMP & First Visible iOS 16 GUI Frames on LCD)**: **COMPLETE & VERIFIED on physical silicon (`BH905SX976`)**:
+  - Disabled diagnostic 8-color bars (`xzs_d8m8.h`) and expanded `xzs_fbcon` to full `1080x1920` (`135x120` glyphs) with automatic console detachment upon presenting the first visible iOS GUI frame.
+  - Upgraded SDCC1 eMMC controller (`xzs_sdhci.c`) to 19.2 MHz + 8-bit bus width (`CMD6`) + `CMD18` multi-block PIO reads, accelerating `dyld_shared_cache_arm64` and daemon paging by ~15-20x.
+  - Fixed 4-core SMP virtual timer (`CNTV_CTL_EL0` PPI 27), per-CPU `pmap_cpu_data_init()`, `TPIDR_EL0` user TLS preservation, and boot CPU `SIGPdisabled` clearing.
+  - Fixed `/usr/libexec/logd` `SIGTRAP` (`firehose_buffer_private.h`) and `execve()` `old_proc` leak (`kern_exec.c`, `kern_memorystatus.c`).
+  - Aligned `/arm-io/disp0` ADT `canvas-width=1125` / `canvas-height=2436` with `AppleCLCD` and implemented `1125x2436 -> 1080x1920` fixed-point scaling with `BGRA -> RGBA` swizzle in `XZSFramebuffer.cpp`.
+  - Verified live on `BH905SX976`: zero panics past `t=550s`, over 360 userland processes spawned, `com.apple.datamigrator` exited cleanly (`0x0`), and `backboardd` + `SpringBoard` presented visible `1125x2436` `BGRA` GUI frames (`surface 2` & `surface 3`, swaps 1..4) onto the physical LCD panel.
 
 ### 1.2 Display Pipeline Architecture (CPU vs. GPU / Hardware Display Engine)
 - **Pixel Rendering (vẽ vào RAM Framebuffer `0x98000000`)**: Hiện thực hiện bằng **CPU** (nhân ARM64 Kryo ghi font chữ 8x16 và dải màu 32-bit `XRGB8888` vào vùng nhớ Framebuffer; ở tầng iOS `backboardd` / `SpringBoard` / `RenderServer` theo kiến trúc `ios-sweet` cũng sử dụng CPU software rasterization qua `IOSurface` + `IOMobileFramebuffer`). GPU Adreno 530 chưa cần dùng ở giai đoạn này.

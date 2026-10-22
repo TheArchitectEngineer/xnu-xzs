@@ -2238,6 +2238,32 @@ _kernelrpc_mach_ports_register3(
 	return KERN_SUCCESS;
 }
 
+kern_return_t
+mach_ports_register(
+	task_t                  task,
+	mach_port_array_t       memory,
+	mach_msg_type_number_t  portsCnt)
+{
+	ipc_port_t ports[TASK_PORT_REGISTER_MAX] = { };
+	kern_return_t kr;
+
+	if ((task == TASK_NULL) ||
+	    (portsCnt > TASK_PORT_REGISTER_MAX) ||
+	    (portsCnt && memory == NULL)) {
+		return KERN_INVALID_ARGUMENT;
+	}
+
+	for (unsigned int i = 0; i < portsCnt; i++) {
+		ports[i] = memory[i].port;
+	}
+
+	kr = _kernelrpc_mach_ports_register3(task, ports[0], ports[1], ports[2]);
+	if (kr == KERN_SUCCESS && portsCnt != 0) {
+		mach_port_array_free(memory, portsCnt);
+	}
+	return kr;
+}
+
 /*
  *	Routine:	mach_ports_lookup [kernel call]
  *	Purpose:
@@ -2275,6 +2301,40 @@ _kernelrpc_mach_ports_lookup3(
 
 	itk_unlock(task);
 
+	return KERN_SUCCESS;
+}
+
+kern_return_t
+mach_ports_lookup(
+	task_t                  task,
+	mach_port_array_t      *portsp,
+	mach_msg_type_number_t *portsCnt)
+{
+	mach_port_array_t memory;
+	ipc_port_t ports[TASK_PORT_REGISTER_MAX] = { };
+	kern_return_t kr;
+
+	if (task == TASK_NULL) {
+		return KERN_INVALID_ARGUMENT;
+	}
+
+	memory = mach_port_array_alloc(TASK_PORT_REGISTER_MAX, Z_WAITOK | Z_ZERO);
+	if (memory == NULL) {
+		return KERN_RESOURCE_SHORTAGE;
+	}
+
+	kr = _kernelrpc_mach_ports_lookup3(task, &ports[0], &ports[1], &ports[2]);
+	if (kr != KERN_SUCCESS) {
+		mach_port_array_free(memory, TASK_PORT_REGISTER_MAX);
+		return kr;
+	}
+
+	for (int i = 0; i < TASK_PORT_REGISTER_MAX; i++) {
+		memory[i].port = ports[i];
+	}
+
+	*portsp = memory;
+	*portsCnt = TASK_PORT_REGISTER_MAX;
 	return KERN_SUCCESS;
 }
 

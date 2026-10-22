@@ -1056,12 +1056,38 @@ xzs_secondary_c_entry(uint64_t cpu_id)
 
 #if CONFIG_XZS_MACH_SMP
 	if (cpu_id >= 1 && cpu_id <= 3) {
-		// 3. Per-core GICv3 Redistributor & CPU Interface Initialization
+		// 3. Per-core Timer & EL0 System Register Initialization (CNTKCTL_EL1, SCTLR_EL1)
+		extern void wfe_timeout_init(void);
+		wfe_timeout_init();
+		{
+			uint64_t cntkctl_sec = 0, sctlr_sec = 0;
+			__asm__ volatile("mrs %0, CNTKCTL_EL1" : "=r"(cntkctl_sec));
+			cntkctl_sec |= 0x4fULL; /* PL0PCTEN | PL0VCTEN | EVNTEN | EVENTDIR | (4 << 4) */
+			__asm__ volatile("msr CNTKCTL_EL1, %0\nisb sy" :: "r"(cntkctl_sec) : "memory");
+			__asm__ volatile("mrs %0, SCTLR_EL1" : "=r"(sctlr_sec));
+			sctlr_sec |= 0x0405c120ULL; /* UCI | nTWE | nTWI | UCT | DZE | SED | CP15BEN */
+			__asm__ volatile("msr SCTLR_EL1, %0\nisb sy" :: "r"(sctlr_sec) : "memory");
+		}
+		// 4. Per-core GICv3 Redistributor & CPU Interface Initialization
 		extern void pe_init_fiq(void);
 		pe_init_fiq();
 		xzs_early_puts("[SMP] CPU");
 		xzs_early_puthex64(cpu_id);
 		xzs_early_puts(" GICR ready\n");
+
+		// 5. Canonical per-core pmap, timebase, and virtual timer (CNTV_CTL_EL0) init
+		extern void pmap_clear_user_ttb(void);
+		extern void flush_mmu_tlb(void);
+		extern void pmap_cpu_data_init(void);
+		extern void cpu_timebase_init(boolean_t from_boot);
+		extern void fiq_context_init(boolean_t enable_fiq);
+		extern void timer_resync_deadlines(void);
+		pmap_clear_user_ttb();
+		flush_mmu_tlb();
+		pmap_cpu_data_init();
+		cpu_timebase_init(FALSE);
+		fiq_context_init(TRUE);
+		timer_resync_deadlines();
 
 		xzs_early_puts("\n[SMP] =======================================\n");
 		xzs_early_puts("[SMP] CPU");
@@ -1188,11 +1214,16 @@ xzs_bringup_secondary_cpu(uint32_t cpu_id, uint64_t target_mpidr, vm_offset_t se
 	cdp->cpu_number = (unsigned short)cpu_id;
 	cdp->cpu_id = (cpu_id_t)(uintptr_t)cpu_id;
 	cdp->cpu_phys_id = (uint32_t)target_mpidr;
+	cdp->cpu_cluster_id = (cpu_id >= 2) ? 1 : 0;
+	cdp->cpu_tpidr_el0 = (((uint64_t)cpu_id) & 0xfffULL) |
+	    (((uint64_t)cdp->cpu_cluster_id << 12) & 0xff000ULL);
 	cdp->cpu_type = CPU_TYPE_ARM64;
 	cdp->cpu_subtype = CPU_SUBTYPE_ARM64_V8;
 	timer_call_queue_init(&cdp->rtclock_timer.queue);
 	cdp->rtclock_timer.deadline = EndOfAllTime;
 	cdp->cpu_running = TRUE;
+	extern unsigned int real_ncpus;
+	os_atomic_inc(&real_ncpus, relaxed);
 #if CONFIG_XZS_MACH_SMP
 	if (cpu_id >= 1 && cpu_id <= 3) {
 		os_atomic_store(&cdp->cpu_flags, InitState, relaxed);
@@ -1682,8 +1713,8 @@ kernel_bootstrap_thread(void)
 	Flush_Dcache();
 	__asm__ volatile("dsb sy\nisb sy" ::: "memory");
 
-	xzs_early_puts("[DCACHE] enabling C bit (SCTLR_EL1.C = 1)...\n");
-	sctlr_val |= (1ULL << 2);
+	xzs_early_puts("[DCACHE] enabling C bit (SCTLR_EL1.C = 1) + EL0 UCI/UCT/DZE/nTWE...\n");
+	sctlr_val |= (1ULL << 2) | 0x0405c120ULL;
 	__asm__ volatile("msr SCTLR_EL1, %0\ndsb sy\nisb sy" :: "r"(sctlr_val) : "memory");
 
 	uint64_t sctlr_post = 0;
@@ -1823,10 +1854,15 @@ kernel_bootstrap_thread(void)
 	xzs_early_puts("[DCACHE] Atomic / Exclusive test: PASS\n");
 
 	// =========================================================================
-	// 5. Enable Interrupts (spllo)
+	// 5. Enable Interrupts (spllo) & Boot CPU IPI/Signal Readiness
 	// =========================================================================
+	os_atomic_or(&BootCpuData.cpu_flags, InitState, relaxed);
 	xzs_early_puts("[XNU-XZS] K16: calling spllo()...\n");
 	(void) spllo();         /* Allow interruptions */
+	{
+		extern void cpu_machine_init(void);
+		cpu_machine_init(); /* Clear SIGPdisabled via self-IPI and mark CPU0 up */
+	}
 
 	uint64_t daif_post = 0;
 	__asm__ volatile("mrs %0, DAIF" : "=r"(daif_post));

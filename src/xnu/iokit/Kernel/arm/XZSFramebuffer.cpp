@@ -40,6 +40,7 @@
 extern "C" {
 void xzs_fb_present_kick(void);
 void xzs_fbcon_detach(void);
+bool xzs_fbcon_is_active(void);
 }
 #include <IOKit/IOService.h>
 #include <IOKit/IOUserClient.h>
@@ -317,23 +318,14 @@ void
 AppleCLCD::present(const uint8_t *rec)
 {
 	uint32_t mask = get32(rec, 0x104);
-
-	if (!fConsolePaused) {
-		int quiet = 0;
-		fConsolePaused = true;
-		if (PE_parse_boot_argn("sweetfb_noconsole", &quiet, sizeof(quiet)) && quiet != 0) {
-			PE_Video video;
-			PE_current_console(&video);
-			PE_initialize_console(&video, kPEDisableScreen);
-			xzs_fbcon_detach();
-		}
-	}
+	bool any_drawn = false;
 
 	for (uint32_t layer = 0; layer < SWEET_FB_LAYERS; layer++) {
 		uint32_t id = get32(rec, 0x54 + 4 * layer);
 		const uint8_t *a = rec + 0x64 + 16 * layer;
 		const uint8_t *b = rec + 0xc4 + 16 * layer;
 		int32_t sx = (int32_t)get32(a, 0), sy = (int32_t)get32(a, 4);
+		int32_t sw = (int32_t)get32(a, 8), sh = (int32_t)get32(a, 12);
 		int32_t dx = (int32_t)get32(b, 0), dy = (int32_t)get32(b, 4);
 		int32_t w = (int32_t)get32(b, 8), h = (int32_t)get32(b, 12);
 
@@ -343,10 +335,10 @@ AppleCLCD::present(const uint8_t *rec)
 		SweetSurface *s = sweet_surface_copy(id);
 		if (sweet_fb_swaps_logged < 16) {
 			sweet_fb_swaps_logged++;
-			IOLog("SWEET FB: swap %u layer %u surface %u %ux%u fmt 0x%x bpr %u a %d,%d %ux%u b %d,%d %dx%d\n",
+			IOLog("SWEET FB: swap %u layer %u surface %u %ux%u fmt 0x%x bpr %u a %d,%d %dx%d b %d,%d %dx%d\n",
 			    get32(rec, 0x50), layer, id, s ? s->width : 0, s ? s->height : 0,
-			    s ? s->pixelFormat : 0, s ? s->bytesPerRow : 0, sx, sy, get32(a, 8),
-			    get32(a, 12), dx, dy, w, h);
+			    s ? s->pixelFormat : 0, s ? s->bytesPerRow : 0, sx, sy, sw,
+			    sh, dx, dy, w, h);
 		}
 		if (s == NULL || s == fSurface) {
 			OSSafeReleaseNULL(s);
@@ -358,53 +350,107 @@ AppleCLCD::present(const uint8_t *rec)
 			w = (int32_t)s->width;
 			h = (int32_t)s->height;
 		}
-		if (sx < 0 || sy < 0) {
-			sx = sy = 0;
+		if (sw <= 0 || sh <= 0) {
+			sw = w;
+			sh = h;
 		}
-		if (dx < 0 || dy < 0) {
-			dx = dy = 0;
-		}
-		/* Logical (presented) display coordinates -> panel coordinates. */
-		dx -= fOffX;
-		dy -= fOffY;
+		if (sx < 0) sx = 0;
+		if (sy < 0) sy = 0;
 		if (dx < 0) {
 			sx -= dx;
+			sw += dx;
 			w += dx;
 			dx = 0;
 		}
 		if (dy < 0) {
 			sy -= dy;
+			sh += dy;
 			h += dy;
 			dy = 0;
 		}
-		if (w > (int32_t)s->width - sx) {
-			w = (int32_t)s->width - sx;
+		if (sw > (int32_t)s->width - sx) {
+			sw = (int32_t)s->width - sx;
 		}
-		if (h > (int32_t)s->height - sy) {
-			h = (int32_t)s->height - sy;
+		if (sh > (int32_t)s->height - sy) {
+			sh = (int32_t)s->height - sy;
 		}
-		if (w > (int32_t)fWidth - dx) {
-			w = (int32_t)fWidth - dx;
+		if (w > (int32_t)fLogicalW - dx) {
+			w = (int32_t)fLogicalW - dx;
 		}
-		if (h > (int32_t)fHeight - dy) {
-			h = (int32_t)fHeight - dy;
+		if (h > (int32_t)fLogicalH - dy) {
+			h = (int32_t)fLogicalH - dy;
 		}
-		uint64_t last = (uint64_t)s->offset + (uint64_t)(sy + h - 1) * s->bytesPerRow +
-		    (uint64_t)(sx + w) * 4;
-		if (w <= 0 || h <= 0 || s->elementWidth != 1 || s->elementHeight != 1 ||
+		/* Scale logical (fLogicalW x fLogicalH) rect onto physical panel (fWidth x fHeight) */
+		int32_t px0 = (int32_t)(((int64_t)dx * fWidth) / fLogicalW);
+		int32_t py0 = (int32_t)(((int64_t)dy * fHeight) / fLogicalH);
+		int32_t px1 = (int32_t)(((int64_t)(dx + w) * fWidth) / fLogicalW);
+		int32_t py1 = (int32_t)(((int64_t)(dy + h) * fHeight) / fLogicalH);
+		int32_t pw = px1 - px0;
+		int32_t ph = py1 - py0;
+
+		uint64_t last = (uint64_t)s->offset + (uint64_t)(sy + sh - 1) * s->bytesPerRow +
+		    (uint64_t)(sx + sw) * 4;
+		if (pw <= 0 || ph <= 0 || sw <= 0 || sh <= 0 ||
+		    s->elementWidth != 1 || s->elementHeight != 1 ||
 		    s->memory == NULL || last > s->memory->getLength()) {
 			src = 0;
 		}
 		if (src != 0 && bpe == 4) {
-			for (int32_t y = 0; y < h; y++) {
-				memcpy((void *)(fPixels + (uint64_t)(dy + y) * fRowBytes + (uint64_t)dx * 4),
-				    (const void *)(src + s->offset + (uint64_t)(sy + y) * s->bytesPerRow + (uint64_t)sx * 4),
-				    (size_t)w * 4);
+			/* If fbcon is still active, check if this surface has any non-black pixels
+			 * before replacing the full-screen boot console log. */
+			if (!fConsolePaused) {
+				bool has_pixels = false;
+				uint32_t step_check_y = sh > 64 ? (uint32_t)(sh / 64) : 1u;
+				for (int32_t cy = sy; cy < sy + sh && !has_pixels; cy += (int32_t)step_check_y) {
+					const uint32_t *crow = (const uint32_t *)(src + s->offset + (uint64_t)cy * s->bytesPerRow);
+					for (int32_t cx = sx; cx < sx + sw; cx += 8) {
+						if ((crow[cx] & 0x00ffffffu) != 0) {
+							has_pixels = true;
+							break;
+						}
+					}
+				}
+				if (has_pixels) {
+					int keep_console = 0;
+					fConsolePaused = true;
+					IOLog("SWEET FB: first visible GUI frame presented (surface %u %ux%u -> %ux%u), switching LCD to iOS GUI\n",
+					    s->id, s->width, s->height, fWidth, fHeight);
+					if (!PE_parse_boot_argn("sweetfb_console", &keep_console, sizeof(keep_console)) || keep_console == 0) {
+						xzs_fbcon_detach();
+					}
+				} else if (xzs_fbcon_is_active()) {
+					/* Keep full-screen console visible while GUI surface is still all-black */
+					s->release();
+					continue;
+				}
 			}
+
+			uint32_t step_x = ((uint32_t)sw << 16) / (uint32_t)pw;
+			uint32_t step_y = ((uint32_t)sh << 16) / (uint32_t)ph;
+			uint32_t acc_y = (uint32_t)sy << 16;
+			for (int32_t py = py0; py < py1; py++) {
+				uint32_t src_y = acc_y >> 16;
+				acc_y += step_y;
+				if (src_y >= s->height) {
+					src_y = s->height - 1;
+				}
+				const uint32_t *src_row = (const uint32_t *)(src + s->offset + (uint64_t)src_y * s->bytesPerRow);
+				uint32_t *dst_row = (uint32_t *)(fPixels + (uint64_t)py * fRowBytes);
+				uint32_t acc_x = (uint32_t)sx << 16;
+				for (int32_t px = px0; px < px1; px++) {
+					uint32_t p = src_row[acc_x >> 16];
+					acc_x += step_x;
+					/* Convert iOS BGRA (B0=B, B1=G, B2=R, B3=A) to XZS MDP5 unpack (B0=R, B1=G, B2=B, B3=A) */
+					dst_row[px] = (p & 0xff00ff00u) | ((p & 0x00ff0000u) >> 16) | ((p & 0x000000ffu) << 16);
+				}
+			}
+			any_drawn = true;
 		}
 		s->release();
 	}
-	xzs_fb_present_kick();
+	if (any_drawn) {
+		xzs_fb_present_kick();
+	}
 }
 
 bool

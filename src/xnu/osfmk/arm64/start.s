@@ -645,23 +645,23 @@ Lkernelcache_base_found:
 	and		x6, x6, #(ARM_TTE_TABLE_MASK)
 
 	/* Map 0x80000000 - 0x81ffffff (entry 64: 0x80000000 >> 25 = 64) covering 0x80060000 and boot_args */
-	MOV64	x7, (ARM_TTE_BOOT_BLOCK_LOWER | ARM_TTE_BOOT_BLOCK_UPPER | 0x80000000)
+	MOV64	x7, (ARM_TTE_BOOT_BLOCK_LOWER | ARM_TTE_BOOT_BLOCK_UPPER | (1 << 11) | 0x80000000)
 	str		x7, [x6, #(64 * 8)]
 
 	/* Map 0x06000000 - 0x07ffffff (entry 3: 0x06000000 >> 25 = 3) covering IMEM restart 0x066bf65c & UART 0x075b0000 */
-	MOV64	x7, (ARM_TTE_TYPE_BLOCK | ARM_TTE_VALID | ARM_TTE_BLOCK_AF | ARM_TTE_BLOCK_ATTRINDX(CACHE_ATTRINDX_DISABLE) | ARM_TTE_BLOCK_NX | ARM_TTE_BLOCK_PNX | 0x06000000)
+	MOV64	x7, (ARM_TTE_TYPE_BLOCK | ARM_TTE_VALID | ARM_TTE_BLOCK_AF | ARM_TTE_BLOCK_ATTRINDX(CACHE_ATTRINDX_DISABLE) | ARM_TTE_BLOCK_NX | ARM_TTE_BLOCK_PNX | (1 << 11) | 0x06000000)
 	str		x7, [x6, #(3 * 8)]
 
 	/* Map 0x08000000 - 0x09ffffff (entry 4: 0x08000000 >> 25 = 4) covering APCS watchdog 0x09830000 */
-	MOV64	x7, (ARM_TTE_TYPE_BLOCK | ARM_TTE_VALID | ARM_TTE_BLOCK_AF | ARM_TTE_BLOCK_ATTRINDX(CACHE_ATTRINDX_DISABLE) | ARM_TTE_BLOCK_NX | ARM_TTE_BLOCK_PNX | 0x08000000)
+	MOV64	x7, (ARM_TTE_TYPE_BLOCK | ARM_TTE_VALID | ARM_TTE_BLOCK_AF | ARM_TTE_BLOCK_ATTRINDX(CACHE_ATTRINDX_DISABLE) | ARM_TTE_BLOCK_NX | ARM_TTE_BLOCK_PNX | (1 << 11) | 0x08000000)
 	str		x7, [x6, #(4 * 8)]
 
 	/* Map 0x00000000 - 0x01ffffff (entry 0: 0x00000000 >> 25 = 0) covering MPM PS_HOLD 0x004ab000 */
-	MOV64	x7, (ARM_TTE_TYPE_BLOCK | ARM_TTE_VALID | ARM_TTE_BLOCK_AF | ARM_TTE_BLOCK_ATTRINDX(CACHE_ATTRINDX_DISABLE) | ARM_TTE_BLOCK_NX | ARM_TTE_BLOCK_PNX | 0x00000000)
+	MOV64	x7, (ARM_TTE_TYPE_BLOCK | ARM_TTE_VALID | ARM_TTE_BLOCK_AF | ARM_TTE_BLOCK_ATTRINDX(CACHE_ATTRINDX_DISABLE) | ARM_TTE_BLOCK_NX | ARM_TTE_BLOCK_PNX | (1 << 11) | 0x00000000)
 	str		x7, [x6, #(0 * 8)]
 
 	/* Map 0xa6000000 - 0xa7ffffff (entry 83: 0xa6000000 >> 25 = 83) covering pstore ramoops 0xa7f00000 & console 0xa7fbe000 as Normal Writeback RAM */
-	MOV64	x7, (ARM_TTE_BOOT_BLOCK_LOWER | ARM_TTE_BOOT_BLOCK_UPPER | 0xa6000000)
+	MOV64	x7, (ARM_TTE_BOOT_BLOCK_LOWER | ARM_TTE_BOOT_BLOCK_UPPER | (1 << 11) | 0xa6000000)
 	str		x7, [x6, #(83 * 8)]
 
 	/* Ensure TTEs are visible */
@@ -1448,6 +1448,16 @@ xzs_breadcrumb:
 	stp		x29, x30, [sp, #-48]!
 	stp		x19, x20, [sp, #16]
 	stp		x21, x22, [sp, #32]
+	adrp	x2, EXT(g_xzs_wdt_virt_base)@page
+	add		x2, x2, EXT(g_xzs_wdt_virt_base)@pageoff
+	ldr		x2, [x2]
+	cbz		x2, 10f
+	bl		EXT(xzs_watchdog_pet)
+	ldp		x21, x22, [sp, #32]
+	ldp		x19, x20, [sp, #16]
+	ldp		x29, x30, [sp], #48
+	ret
+10:
 	mov		x19, x0
 	mov		w20, w1
 	mrs		x21, DAIF
@@ -1523,7 +1533,27 @@ xzs_watchdog_arm:
 1:	MOV64	x0, 0xF0000			// ~30 seconds (983040 ticks at 32765 Hz)
 2:	mrs		x5, DAIF
 	msr		DAIFSet, #0x2		// Mask IRQ
-	adrp	x3, EXT(g_xzs_ttbr0)@page
+	adrp	x1, EXT(g_xzs_wdt_virt_base)@page
+	add		x1, x1, EXT(g_xzs_wdt_virt_base)@pageoff
+	ldr		x1, [x1]
+	cbz		x1, 20f
+	// High KVA path (TTBR1_EL1): never touches TTBR0_EL1!
+	adrp	x3, EXT(g_xzs_imem_virt_base)@page
+	add		x3, x3, EXT(g_xzs_imem_virt_base)@pageoff
+	ldr		x3, [x3]
+	cbz		x3, 21f
+	MOV64	x2, 0x77665500
+	str		w2, [x3, #0x65c]
+21:	str		wzr, [x1, #0x08]		// WDT_EN = 0
+	str		w0, [x1, #0x14]			// WDT_BITE_TIME
+	mov		w2, #1
+	str		w2, [x1, #0x04]			// WDT_RST = 1
+	str		w2, [x1, #0x08]			// WDT_EN = 1
+	dsb		sy
+	isb
+	msr		DAIF, x5
+	ret
+20:	adrp	x3, EXT(g_xzs_ttbr0)@page
 	add		x3, x3, EXT(g_xzs_ttbr0)@pageoff
 	ldr		x3, [x3]
 	cbz		x3, 3f
@@ -1612,6 +1642,14 @@ xzs_secondary_stacks_end:
 LEXT(g_xzs_ttbr0)
 	.quad 0
 
+	.globl EXT(g_xzs_wdt_virt_base)
+LEXT(g_xzs_wdt_virt_base)
+	.quad 0
+
+	.globl EXT(g_xzs_imem_virt_base)
+LEXT(g_xzs_imem_virt_base)
+	.quad 0
+
 xzs_secondary_kva_target:
 	.quad xzs_secondary_kva_entry
 
@@ -1670,8 +1708,8 @@ xzs_secondary_entry:
 	add		x1, x1, EXT(LowExceptionVectorBase)@pageoff
 	msr		VBAR_EL1, x1
 
-	// 7. Enable MMU & I-cache: SCTLR_EL1 = 0x10c01801 (M=1, I=1, C=0)
-	MOV64	x1, 0x10c01801
+	// 7. Enable MMU & I-cache: SCTLR_EL1 = 0x14c5d921 (M=1, I=1, C=0, UCI/UCT/DZE/nTWE=1)
+	MOV64	x1, 0x14c5d921
 	msr		SCTLR_EL1, x1
 	isb		sy
 
@@ -1751,6 +1789,10 @@ LEXT(xzs_early_putc)
 	stp		x29, x30, [sp, #-48]!
 	stp		x19, x20, [sp, #16]
 	stp		x21, x22, [sp, #32]
+	adrp	x20, EXT(g_xzs_wdt_virt_base)@page
+	add		x20, x20, EXT(g_xzs_wdt_virt_base)@pageoff
+	ldr		x20, [x20]
+	cbnz	x20, 4f
 	mrs		x22, DAIF
 	msr		DAIFSet, #0xf			// Mask interrupts during character output
 	mov		w19, w0
@@ -1775,7 +1817,7 @@ LEXT(xzs_early_putc)
 	msr		TTBR0_EL1, x21
 	isb		sy
 3:	msr		DAIF, x22			// Restore interrupts
-	ldp		x21, x22, [sp, #32]
+4:	ldp		x21, x22, [sp, #32]
 	ldp		x19, x20, [sp, #16]
 	ldp		x29, x30, [sp], #48
 	ret

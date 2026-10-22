@@ -37,7 +37,7 @@ def main():
         ["/opt/homebrew/bin/fastboot", "boot", str(boot_img)],
         check=True,
     )
-    time.sleep(4.0)
+    time.sleep(1.5)
 
     print("=== Waiting for XNU USB device 1209:000a ===", flush=True)
     dev = xzs_console.open_stable_device(timeout_sec=45)
@@ -49,14 +49,18 @@ def main():
     if not xzs_console.transport_handshake(dev):
         print("WARNING: transport_handshake returned False; attempting raw read...", flush=True)
 
-    print("=== Capturing Live iOS 16 Console Output (75s window) ===", flush=True)
+    window_sec = float(sys.argv[1]) if len(sys.argv) > 1 else 90.0
+    print(f"=== Capturing Live iOS 16 Console Output ({window_sec:.0f}s window) ===", flush=True)
     t_start = time.time()
     collected = bytearray()
-    sent_probe = False
 
     with open(log_path, "wb") as lf:
-        while time.time() - t_start < 75.0:
-            chunk, kind = xzs_console.bulk_read(dev, timeout_ms=250)
+        while time.time() - t_start < window_sec:
+            try:
+                chunk, kind = xzs_console.bulk_read(dev, timeout_ms=250)
+            except Exception as exc:
+                print(f"\n[USB disconnected: {exc}]", flush=True)
+                break
             if chunk:
                 collected.extend(chunk)
                 lf.write(chunk)
@@ -64,12 +68,10 @@ def main():
                 sys.stdout.write(chunk.decode("utf-8", errors="replace"))
                 sys.stdout.flush()
             else:
-                if not sent_probe and (time.time() - t_start) > 15.0:
-                    sent_probe = True
-                    for cmd in (b"\n", b"uname -a\n", b"mount\n", b"ps -ef\n"):
-                        xzs_console.bulk_write(dev, cmd, timeout_ms=1000)
-                        time.sleep(0.3)
-                time.sleep(0.05)
+                if kind == "error":
+                    print("\n[USB bulk_read error / device rebooted]", flush=True)
+                    break
+                time.sleep(0.02)
 
     print(f"\n=== Capture finished ({len(collected)} bytes saved to {log_path}) ===", flush=True)
 

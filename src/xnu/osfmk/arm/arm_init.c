@@ -343,31 +343,43 @@ extern void xzs_early_putc(char c);
 extern void xzs_early_puthex64(uint64_t v);
 
 void xzs_panic_hook(const char *str) {
-	/* 1. Ensure Fastboot restart reason 0x77665500 in IMEM SRAM */
-	*(volatile uint32_t *)0x066bf65cUL = 0x77665500;
-
-	/* 2. Record fault into IMEM SRAM */
+	extern void xzs_bringup_console_write(const void *buf, int len);
+	extern void xzs_display_quiesce_for_reboot(void);
+	extern void xzs_usb_panic_flush_and_wait(uint32_t wait_ms);
 	extern void xzs_record_fault(uint32_t fault_type, uint64_t esr, uint64_t elr, uint64_t far);
+	extern void xzs_spin_halt(void);
+
+	static volatile int s_in_panic_hook = 0;
+	if (__atomic_exchange_n(&s_in_panic_hook, 1, __ATOMIC_ACQ_REL) != 0) {
+		xzs_display_quiesce_for_reboot();
+		xzs_spin_halt();
+	}
+
+	/*
+	 * Record fault into IMEM SRAM safely (xzs_record_fault switches TTBR0_EL1
+	 * to g_xzs_ttbr0 and writes Fastboot magic 0x77665500 to 0x066bf65c).
+	 * Note: xzs_record_fault leaves TTBR0_EL1 = g_xzs_ttbr0.
+	 */
 	xzs_record_fault(1 /* PANIC */, 0, (uint64_t)__builtin_return_address(0), 0);
 
 	volatile uint32_t *stg = (volatile uint32_t *)0x80060014UL;
 	if (*stg == 0) {
 		*stg = 0x2ff; /* Panic stage marker if not already set */
 	}
-	xzs_early_puts("\nPANIC_ENTERED=yes\n");
-	xzs_early_puts("*** XNU EARLY PANIC TRAPPED ***\n");
+	xzs_bringup_console_write("\nPANIC_ENTERED=yes\n*** XNU EARLY PANIC TRAPPED ***\n", 51);
 	if (str) {
-		xzs_early_puts(str);
-		xzs_early_puts("\n");
+		int len = 0;
+		while (str[len] != '\0' && len < 1024) {
+			len++;
+		}
+		xzs_bringup_console_write(str, len);
+		xzs_bringup_console_write("\n", 1);
 	}
-	xzs_early_puts("Rebooting warm to Fastboot...\n");
+	xzs_bringup_console_write("Flushing USB console & rebooting warm to Fastboot...\n", 53);
 	__asm__ volatile("dsb sy\nisb" ::: "memory");
 
-	for (volatile int i = 0; i < 100000; i++) {
-		__asm__ volatile("nop");
-	}
-
-	extern void xzs_spin_halt(void);
+	xzs_usb_panic_flush_and_wait(3000);
+	xzs_display_quiesce_for_reboot();
 	xzs_spin_halt();
 }
 

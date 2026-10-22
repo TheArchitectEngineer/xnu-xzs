@@ -32,9 +32,9 @@
 #define XZS_FONT_HEIGHT         16u
 #define XZS_FBCON_COLS          (XZS_FB_WIDTH / XZS_FONT_WIDTH)   /* 135 columns */
 #define XZS_FBCON_TOTAL_ROWS    (XZS_FB_HEIGHT / XZS_FONT_HEIGHT) /* 120 rows total */
-#define XZS_FBCON_ROWS          39u                               /* Console viewport: rows 0..38 */
-#define XZS_FBCON_DIVIDER_ROW   39u                               /* Fixed divider at row 39 */
-#define XZS_FBCON_BARS_START    40u                               /* Hardware test bars: rows 40..119 */
+#define XZS_FBCON_ROWS          120u                              /* Full-screen console viewport: rows 0..119 */
+#define XZS_FBCON_DIVIDER_ROW   120u
+#define XZS_FBCON_BARS_START    120u
 #define XZS_SCROLLBACK_LINES    256u
 #define XZS_EARLY_RING_CAP      65536u
 
@@ -584,7 +584,7 @@ xzs_fbcon_replay_optimized(const char *log_data, uint32_t log_len)
 	s_replay_lines[last_slot][cur_col] = '\0';
 
 	/* Number of valid lines available in ring buffer */
-	uint32_t available_rows = 28; /* Fits into console viewport (rows 3..30), leaving space for prompt */
+	uint32_t available_rows = 80; /* Fits into full-screen console viewport (rows 3..82) */
 	uint32_t num_lines_to_draw = total_lines_seen + 1;
 	if (num_lines_to_draw > available_rows) {
 		num_lines_to_draw = available_rows;
@@ -632,19 +632,15 @@ xzs_fbcon_attach(uintptr_t fb_va)
 
 	g_fbcon_va = fb_va;
 
-	/* Clear console viewport (rows 0..38) */
+	/* Clear full-screen console viewport (rows 0..119) */
 	xzs_fbcon_clear(XZS_COLOR_BG);
 	xzs_diag_emit("[XZS-ATTACH] 2: clear done\n");
-
-	/* Render permanent hardware test bars onto lines 640..1919 (rows 40..119) */
-	xzs_fbcon_draw_test_bars(g_fbcon_va);
-	xzs_diag_emit("[XZS-ATTACH] 2b: test bars rendered\n");
 
 	/* Render Title Banner */
 	g_fbcon_row = 0;
 	g_fbcon_col = 0;
 	xzs_fbcon_puts_raw("=======================================================================================================================================\n", XZS_COLOR_CYAN, XZS_COLOR_BG);
-	xzs_fbcon_puts_raw("  Sony Xperia XZs (G8231 / MSM8996) - Native XNU Framebuffer Console [1080x1920, 135x120 text, XRGB8888, 60Hz Autonomous Refresh]     \n", XZS_COLOR_GREEN, XZS_COLOR_BG);
+	xzs_fbcon_puts_raw("  Sony Xperia XZs (G8231 / MSM8996) - Native XNU Full-Screen Console [1080x1920, 135x120 text, XRGB8888, 60Hz Autonomous Refresh]  \n", XZS_COLOR_GREEN, XZS_COLOR_BG);
 	xzs_fbcon_puts_raw("=======================================================================================================================================\n", XZS_COLOR_CYAN, XZS_COLOR_BG);
 	xzs_diag_emit("[XZS-ATTACH] 3: banner done\n");
 
@@ -674,19 +670,8 @@ xzs_fbcon_attach(uintptr_t fb_va)
 	if (g_fbcon_row + 2 < XZS_FBCON_ROWS) {
 		g_fbcon_row++;
 	}
-	xzs_fbcon_puts_raw("--- [XZS-FBCON] Framebuffer Console Attached - Live Kernel & Shell Display Active ---\n", XZS_COLOR_YELLOW, XZS_COLOR_BG);
+	xzs_fbcon_puts_raw("--- [XZS-FBCON] Full-Screen Framebuffer Console Attached - Live iOS 16 Display Active ---\n", XZS_COLOR_YELLOW, XZS_COLOR_BG);
 	xzs_diag_emit("[XZS-ATTACH] 5: marker done\n");
-
-	/* Render Divider Bar at row 39 */
-	for (uint32_t c = 0; c < XZS_FBCON_COLS; c++) {
-		xzs_fbcon_draw_glyph_raw(c, XZS_FBCON_DIVIDER_ROW, '=', XZS_COLOR_YELLOW, XZS_COLOR_BG);
-	}
-	const char *div_text = " [XZS-FBCON] LIVE CONSOLE (ROWS 0-38) | HARDWARE TEST BARS (ROWS 40-119) ";
-	uint32_t div_len = (uint32_t)strlen(div_text);
-	uint32_t div_start = (XZS_FBCON_COLS > div_len) ? (XZS_FBCON_COLS - div_len) / 2 : 0;
-	for (uint32_t c = 0; c < div_len && (div_start + c) < XZS_FBCON_COLS; c++) {
-		xzs_fbcon_draw_glyph_raw(div_start + c, XZS_FBCON_DIVIDER_ROW, div_text[c], XZS_COLOR_GREEN, XZS_COLOR_BG);
-	}
 
 	/* Position cursor and activate live console */
 	xzs_fbcon_draw_cursor_raw(g_fbcon_col, g_fbcon_row, true);

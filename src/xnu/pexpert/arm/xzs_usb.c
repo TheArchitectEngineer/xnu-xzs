@@ -873,7 +873,7 @@ uint32_t dwc3_read32_pub(uint32_t offset)
  * Z1–Z4 leave g_xzs_usb_console_ready clear, so this path does not run.
  * Lock order: tty_lock, then this lock. Never take tty_lock or log while held.
  */
-#define XZS_TX_RING_SIZE 16384u
+#define XZS_TX_RING_SIZE 262144u
 #define XZS_RX_RING_SIZE 1024u
 static uint8_t s_tx_ring[XZS_TX_RING_SIZE];
 static volatile uint32_t s_tx_head = 0;
@@ -902,8 +902,10 @@ volatile uint32_t g_xzs_usb_z5_count = 0;
 volatile uint32_t g_xzs_usb_z5_bytes[4] = { 0, 0, 0, 0 };
 
 static boolean_t
-xzs_tx_lock_acquire(void)
+xzs_tx_lock_acquire(uint64_t *daif_out)
 {
+	uint64_t daif = 0;
+	__asm__ volatile("mrs %0, DAIF; msr DAIFSet, #0x2" : "=r"(daif));
 	for (uint32_t spin = 0; spin < 4096; spin++) {
 		uint32_t locked;
 		uint32_t status;
@@ -922,17 +924,20 @@ xzs_tx_lock_acquire(void)
 			: "r"(&s_tx_lock), "r"(1)
 			: "memory");
 		if (locked == 0) {
+			*daif_out = daif;
 			return TRUE;
 		}
 		__asm__ volatile("yield");
 	}
+	__asm__ volatile("msr DAIF, %0" :: "r"(daif));
 	return FALSE;
 }
 
 static void
-xzs_tx_lock_release(void)
+xzs_tx_lock_release(uint64_t daif)
 {
 	__asm__ volatile("stlr %w0, [%1]" :: "r"(0), "r"(&s_tx_lock) : "memory");
+	__asm__ volatile("msr DAIF, %0" :: "r"(daif));
 }
 
 static boolean_t
@@ -940,8 +945,9 @@ xzs_tx_enqueue(uint8_t byte)
 {
 	uint32_t head;
 	uint32_t next;
+	uint64_t daif = 0;
 
-	if (!xzs_tx_lock_acquire()) {
+	if (!xzs_tx_lock_acquire(&daif)) {
 		g_xzs_usb_tx_drops++;
 		return FALSE;
 	}
@@ -949,7 +955,7 @@ xzs_tx_enqueue(uint8_t byte)
 	next = (head + 1u) % XZS_TX_RING_SIZE;
 	if (next == s_tx_tail) {
 		g_xzs_usb_tx_drops++;
-		xzs_tx_lock_release();
+		xzs_tx_lock_release(daif);
 		return FALSE;
 	}
 	s_tx_ring[head] = byte;
@@ -959,7 +965,7 @@ xzs_tx_enqueue(uint8_t byte)
 	if ((next + XZS_TX_RING_SIZE - s_tx_tail) % XZS_TX_RING_SIZE > g_xzs_usb_tx_high) {
 		g_xzs_usb_tx_high = (next + XZS_TX_RING_SIZE - s_tx_tail) % XZS_TX_RING_SIZE;
 	}
-	xzs_tx_lock_release();
+	xzs_tx_lock_release(daif);
 	return TRUE;
 }
 
@@ -991,12 +997,23 @@ xzs_usb_busy_delay_us(uint32_t usec)
 	} while ((cur - start) < ticks);
 }
 
+void xzs_usb_pump_sync(void);
+
 void
 xzs_usb_console_write(const unsigned char *buf, int len)
 {
 	int i;
 
-	if (!g_xzs_usb_console_ready || buf == NULL || len <= 0) {
+	if (buf == NULL || len <= 0) {
+		return;
+	}
+	if (!g_xzs_usb_console_ready) {
+		/* Buffer early boot output into the 16 KB static ring until host connects */
+		for (i = 0; i < len; i++) {
+			if (!xzs_tx_enqueue(buf[i])) {
+				break;
+			}
+		}
 		return;
 	}
 	for (i = 0; i < len; i++) {
@@ -1004,11 +1021,19 @@ xzs_usb_console_write(const unsigned char *buf, int len)
 			if (xzs_tx_enqueue(buf[i])) {
 				break;
 			}
-			xzs_tx_kick();
+			if (!ml_get_interrupts_enabled()) {
+				xzs_usb_pump_sync();
+			} else {
+				xzs_tx_kick();
+			}
 			xzs_usb_busy_delay_us(20);
 		}
 	}
-	xzs_tx_kick();
+	if (!ml_get_interrupts_enabled()) {
+		xzs_usb_pump_sync();
+	} else {
+		xzs_tx_kick();
+	}
 }
 
 int xzs_usb_send_bulk_in(const uint8_t *data, uint32_t len)
@@ -1894,25 +1919,32 @@ xzs_t1z_tx_worker(thread_call_param_t p0 __unused, thread_call_param_t p1 __unus
 {
 	uint8_t tmp[512];
 	uint32_t count = 0;
+	uint64_t daif = 0;
 
 	g_xzs_usb_tx_worker_calls++;
-	if (!g_xzs_usb_tty_bridge || s_tx_busy) {
+	if (!g_xzs_usb_tty_bridge) {
 		return;
 	}
-	if (!xzs_tx_lock_acquire()) {
+	if (!xzs_tx_lock_acquire(&daif)) {
+		return;
+	}
+	if (s_tx_busy) {
+		xzs_tx_lock_release(daif);
 		return;
 	}
 	while (count < sizeof(tmp) && s_tx_tail != s_tx_head) {
 		tmp[count++] = s_tx_ring[s_tx_tail];
 		s_tx_tail = (s_tx_tail + 1u) % XZS_TX_RING_SIZE;
 	}
-	xzs_tx_lock_release();
 	if (count == 0) {
+		xzs_tx_lock_release(daif);
 		return;
 	}
 	s_tx_programmed = count;
 	s_tx_busy = 1;
 	g_xzs_usb_tx_dequeued += count;
+	xzs_tx_lock_release(daif);
+
 	if (xzs_t1z_arm_in(tmp, count, &g_xzs_usb_t1z_ep3_rsc) != 0) {
 		s_tx_busy = 0;
 		g_xzs_usb_tx_drops += count;
@@ -1951,6 +1983,12 @@ xzs_t1z_on_out_complete(void)
 		extern void xzs_spin_halt(void);
 		xzs_display_quiesce_for_reboot();
 		xzs_spin_halt();
+	}
+	if (length >= 14 && memcmp(s_bulk_out_buf, "__XZS_SAMPLE__", 14) == 0) {
+		extern volatile uint32_t g_xzs_sample_requested;
+		g_xzs_sample_requested = 1;
+		(void)xzs_t1z_arm_out();
+		return;
 	}
 	if (s_t1z_phase == XZS_T1Z_PHASE_DONE && g_xzs_usb_tty_bridge) {
 		for (i = 0; i < length; i++) {
@@ -2221,11 +2259,20 @@ xzs_t1y_process_event(uint32_t event)
 
 void xzs_usb_poll_events(void);
 
+static volatile uint32_t s_usb_event_worker_lock = 0;
+
 static void
 xzs_t1y_event_deferred(thread_call_param_t p0 __unused,
     thread_call_param_t p1 __unused)
 {
 	unsigned round;
+	uint64_t daif = 0;
+
+	__asm__ volatile("mrs %0, DAIF; msr DAIFSet, #0x2" : "=r"(daif));
+	if (__atomic_exchange_n(&s_usb_event_worker_lock, 1, __ATOMIC_ACQUIRE) != 0) {
+		__asm__ volatile("msr DAIF, %0" :: "r"(daif));
+		return;
+	}
 
 	for (round = 0; round < 4u; round++) {
 		for (;;) {
@@ -2255,8 +2302,13 @@ xzs_t1y_event_deferred(thread_call_param_t p0 __unused,
 	}
 	if (g_xzs_usb_t1z_activation_pending && !g_xzs_usb_t1z_worker_entered) {
 		g_xzs_usb_t1z_worker_entered = 1;
+		__atomic_store_n(&s_usb_event_worker_lock, 0, __ATOMIC_RELEASE);
+		__asm__ volatile("msr DAIF, %0" :: "r"(daif));
 		xzs_t1z_worker();
+		return;
 	}
+	__atomic_store_n(&s_usb_event_worker_lock, 0, __ATOMIC_RELEASE);
+	__asm__ volatile("msr DAIF, %0" :: "r"(daif));
 }
 
 static volatile boolean_t s_t1y_sync_telemetry_logged = FALSE;
@@ -2424,9 +2476,12 @@ xzs_t1y_drain_event_buffer(void)
 {
 	unsigned spins = 0;
 	unsigned pass;
+	uint64_t daif = 0;
 
+	__asm__ volatile("mrs %0, DAIF; msr DAIFSet, #0x2" : "=r"(daif));
 	while (__atomic_exchange_n(&s_usb_drain_lock, 1, __ATOMIC_ACQUIRE) != 0) {
 		if (++spins > 100000u) {
+			__asm__ volatile("msr DAIF, %0" :: "r"(daif));
 			return;
 		}
 	}
@@ -2439,12 +2494,42 @@ xzs_t1y_drain_event_buffer(void)
 		xzs_t1y_drain_event_buffer_locked();
 	}
 	__atomic_store_n(&s_usb_drain_lock, 0, __ATOMIC_RELEASE);
+	__asm__ volatile("msr DAIF, %0" :: "r"(daif));
 }
 
 void xzs_usb_poll_events(void)
 {
 	if (s_dwc3_base != 0 && s_t1y_event_call != NULL) {
 		xzs_t1y_drain_event_buffer();
+	}
+}
+
+void
+xzs_usb_pump_sync(void)
+{
+	if (s_dwc3_base == 0 || s_t1y_event_call == NULL) {
+		return;
+	}
+	xzs_t1y_drain_event_buffer();
+	if (s_t1y_event_tail != s_t1y_event_head ||
+	    s_t1y_ep0_state == XZS_T1Y_EP0_WAIT_STATUS) {
+		xzs_t1y_event_deferred(NULL, NULL);
+	}
+	if (g_xzs_usb_tty_bridge && !s_tx_busy && s_tx_tail != s_tx_head) {
+		xzs_t1z_tx_worker(NULL, NULL);
+	}
+}
+
+void
+xzs_usb_panic_flush_and_wait(uint32_t wait_ms)
+{
+	if (s_dwc3_base == 0) {
+		return;
+	}
+	for (uint32_t ms = 0; ms < wait_ms; ms++) {
+		xzs_usb_pump_sync();
+		xzs_watchdog_pet();
+		xzs_usb_busy_delay_us(1000);
 	}
 }
 

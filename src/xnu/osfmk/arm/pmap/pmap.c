@@ -7820,6 +7820,9 @@ pmap_has_managed_page(ppnum_t first, ppnum_t last)
 	if (ptoa(last) < vm_first_phys) {
 		return FALSE;
 	}
+	if (pmap_is_bad_ram(first) && pmap_is_bad_ram(last)) {
+		return FALSE;
+	}
 
 	return TRUE;
 }

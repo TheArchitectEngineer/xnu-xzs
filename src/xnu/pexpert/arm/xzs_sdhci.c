@@ -6186,10 +6186,18 @@ xzs_emmc_read_sector_pio(uint32_t lba, uint64_t validated_sector_count, uint8_t 
 		return -2;
 	}
 
-	/* Verify host command and data lines are idle */
-	uint32_t pstate = xzs_sdhci_hc_read32(SDHCI_PRESENT_STATE);
+	/* Verify host command and data lines are idle (wait up to 500ms if busy after prior cmd/write) */
+	uint32_t pstate = 0;
+	for (uint32_t wait_idle = 0; wait_idle < 500000; wait_idle++) {
+		pstate = xzs_sdhci_hc_read32(SDHCI_PRESENT_STATE);
+		if ((pstate & (SDHCI_CMD_INHIBIT | SDHCI_DATA_INHIBIT)) == 0) {
+			break;
+		}
+		delay(1);
+	}
 	if ((pstate & (SDHCI_CMD_INHIBIT | SDHCI_DATA_INHIBIT)) != 0) {
-		xzs_early_puts("[XZS-SDHCI] ERROR: Host engine not idle before CMD17!\n");
+		xzs_sdhci_hc_write8(SDHCI_SOFTWARE_RESET, SDHCI_RESET_CMD | SDHCI_RESET_DATA);
+		delay(10);
 		return -3;
 	}
 
@@ -6249,14 +6257,17 @@ xzs_emmc_read_sector_pio(uint32_t lba, uint64_t validated_sector_count, uint8_t 
 		if (!brr_seen) {
 			if ((st & SDHCI_INT_BUF_READ_READY) != 0) {
 				brr_seen = TRUE;
+				volatile uint32_t *fifo_reg = (volatile uint32_t *)(g_xzs_sdcc1_hc_base + SDHCI_BUFFER);
+				__asm__ volatile ("dsb sy" ::: "memory");
 				for (uint32_t w = 0; w < 128; w++) {
-					uint32_t val32 = xzs_sdhci_hc_read32(SDHCI_BUFFER);
+					uint32_t val32 = *fifo_reg;
 					out[w * 4 + 0] = (uint8_t)(val32 >> 0);
 					out[w * 4 + 1] = (uint8_t)(val32 >> 8);
 					out[w * 4 + 2] = (uint8_t)(val32 >> 16);
 					out[w * 4 + 3] = (uint8_t)(val32 >> 24);
 					words_read++;
 				}
+				__asm__ volatile ("dsb sy" ::: "memory");
 				bytes_read = words_read * 4;
 				xzs_sdhci_hc_write32(SDHCI_INT_STATUS, SDHCI_INT_BUF_READ_READY);
 			} else if (cmd_complete_seen) {
@@ -9559,6 +9570,119 @@ xzs_emmc_read_sector_sync(uint64_t lba, void *out512)
 	}
 }
 
+static int g_xzs_d10_fast_multiblock = 0;
+
+static int
+xzs_emmc_read_multiblock_pio(uint32_t start_lba, uint32_t count, uint8_t *out)
+{
+	if (out == NULL || count == 0 || count > 128) {
+		return -1;
+	}
+	uint32_t pstate = 0;
+	for (uint32_t wait_idle = 0; wait_idle < 500000; wait_idle++) {
+		pstate = xzs_sdhci_hc_read32(SDHCI_PRESENT_STATE);
+		if ((pstate & (SDHCI_CMD_INHIBIT | SDHCI_DATA_INHIBIT)) == 0) {
+			break;
+		}
+		delay(1);
+	}
+	if ((pstate & (SDHCI_CMD_INHIBIT | SDHCI_DATA_INHIBIT)) != 0) {
+		xzs_sdhci_hc_write8(SDHCI_SOFTWARE_RESET, SDHCI_RESET_CMD | SDHCI_RESET_DATA);
+		delay(10);
+		return -2;
+	}
+
+	xzs_sdhci_hc_write16(SDHCI_BLOCK_SIZE, 0x0200U);
+	xzs_sdhci_hc_write16(SDHCI_BLOCK_COUNT, (uint16_t)count);
+	xzs_sdhci_hc_write32(SDHCI_ARGUMENT, start_lba);
+	xzs_sdhci_hc_write16(SDHCI_TRANSFER_MODE,
+	    SDHCI_TRNS_MULTI | SDHCI_TRNS_BLK_CNT_EN | SDHCI_TRNS_AUTO_CMD12 | SDHCI_TRNS_READ);
+	xzs_sdhci_hc_write32(SDHCI_INT_ENABLE, 0xFFFF8023U);
+	xzs_sdhci_hc_write32(SDHCI_SIGNAL_ENABLE, 0x00000000U);
+	xzs_sdhci_hc_write32(SDHCI_INT_STATUS, 0xFFFFFFFFU);
+
+	/* CMD18: READ_MULTIPLE_BLOCK */
+	xzs_sdhci_hc_write16(SDHCI_COMMAND,
+	    SDHCI_MAKE_CMD(18, SDHCI_CMD_RESP_48 | SDHCI_CMD_CRC | SDHCI_CMD_INDEX | SDHCI_CMD_DATA));
+
+	const uint32_t MAX_POLLS = 2000000;
+	boolean_t cmd_done = FALSE;
+	for (uint32_t p = 0; p < MAX_POLLS; p++) {
+		uint32_t st = xzs_sdhci_hc_read32(SDHCI_INT_STATUS);
+		if ((st & (SDHCI_INT_ERROR | 0xFFFF0000U)) != 0) {
+			xzs_sdhci_hc_write8(SDHCI_SOFTWARE_RESET, SDHCI_RESET_CMD | SDHCI_RESET_DATA);
+			delay(10);
+			return -3;
+		}
+		if ((st & SDHCI_INT_RESPONSE) != 0) {
+			(void)xzs_sdhci_hc_read32(SDHCI_RESPONSE_0);
+			xzs_sdhci_hc_write32(SDHCI_INT_STATUS, SDHCI_INT_RESPONSE);
+			cmd_done = TRUE;
+			break;
+		}
+	}
+	if (!cmd_done) {
+		xzs_sdhci_hc_write8(SDHCI_SOFTWARE_RESET, SDHCI_RESET_CMD | SDHCI_RESET_DATA);
+		delay(10);
+		return -4;
+	}
+
+	volatile uint32_t *fifo_reg = (volatile uint32_t *)(g_xzs_sdcc1_hc_base + SDHCI_BUFFER);
+	for (uint32_t b = 0; b < count; b++) {
+		boolean_t blk_ready = FALSE;
+		for (uint32_t p = 0; p < MAX_POLLS; p++) {
+			uint32_t st = xzs_sdhci_hc_read32(SDHCI_INT_STATUS);
+			if ((st & (SDHCI_INT_ERROR | 0xFFFF0000U)) != 0) {
+				xzs_sdhci_hc_write8(SDHCI_SOFTWARE_RESET, SDHCI_RESET_CMD | SDHCI_RESET_DATA);
+				delay(10);
+				return -5;
+			}
+			if ((st & SDHCI_INT_BUF_READ_READY) != 0) {
+				xzs_sdhci_hc_write32(SDHCI_INT_STATUS, SDHCI_INT_BUF_READ_READY);
+				blk_ready = TRUE;
+				break;
+			}
+		}
+		if (!blk_ready) {
+			xzs_sdhci_hc_write8(SDHCI_SOFTWARE_RESET, SDHCI_RESET_CMD | SDHCI_RESET_DATA);
+			delay(10);
+			return -6;
+		}
+		uint8_t *blk_out = out + ((size_t)b * 512);
+		__asm__ volatile ("dsb sy" ::: "memory");
+		for (uint32_t w = 0; w < 128; w++) {
+			uint32_t val32 = *fifo_reg;
+			blk_out[w * 4 + 0] = (uint8_t)(val32 >> 0);
+			blk_out[w * 4 + 1] = (uint8_t)(val32 >> 8);
+			blk_out[w * 4 + 2] = (uint8_t)(val32 >> 16);
+			blk_out[w * 4 + 3] = (uint8_t)(val32 >> 24);
+		}
+		__asm__ volatile ("dsb sy" ::: "memory");
+	}
+
+	boolean_t tc_done = FALSE;
+	for (uint32_t p = 0; p < MAX_POLLS; p++) {
+		uint32_t st = xzs_sdhci_hc_read32(SDHCI_INT_STATUS);
+		if ((st & (SDHCI_INT_ERROR | 0xFFFF0000U)) != 0) {
+			xzs_sdhci_hc_write8(SDHCI_SOFTWARE_RESET, SDHCI_RESET_CMD | SDHCI_RESET_DATA);
+			delay(10);
+			return -7;
+		}
+		if ((st & SDHCI_INT_DATA_END) != 0) {
+			xzs_sdhci_hc_write32(SDHCI_INT_STATUS, SDHCI_INT_DATA_END);
+			tc_done = TRUE;
+			break;
+		}
+	}
+	if (!tc_done) {
+		xzs_sdhci_hc_write8(SDHCI_SOFTWARE_RESET, SDHCI_RESET_CMD | SDHCI_RESET_DATA);
+		delay(10);
+		return -8;
+	}
+	g_xzs_emmc_ctx.successful_sector_reads += count;
+	return 0;
+}
+
 int
 xzs_emmc_read_blocks_sync(uint64_t start_lba, uint32_t count, void *buffer)
 {
@@ -9587,15 +9711,33 @@ xzs_emmc_read_blocks_sync(uint64_t start_lba, uint32_t count, void *buffer)
 	}
 
 	uint8_t *dst = (uint8_t *)buffer;
-	for (uint32_t i = 0; i < count; i++) {
+	uint32_t i = 0;
+	while (i < count) {
 		if ((i & 0x3fu) == 0) {
 			extern void xzs_watchdog_pet(void);
 			xzs_watchdog_pet();
 		}
-		int rc = xzs_emmc_read_sector_sync(start_lba + (uint64_t)i, dst + ((size_t)i * 512));
+		uint32_t rem = count - i;
+		if (g_xzs_d10_fast_multiblock && rem > 1) {
+			uint32_t chunk = (rem > 128U) ? 128U : rem;
+			if (xzs_emmc_read_multiblock_pio((uint32_t)(start_lba + (uint64_t)i),
+			    chunk, dst + ((size_t)i * 512)) == 0) {
+				i += chunk;
+				continue;
+			}
+		}
+		int rc = -1;
+		for (int retry = 0; retry < 3; retry++) {
+			rc = xzs_emmc_read_sector_sync(start_lba + (uint64_t)i, dst + ((size_t)i * 512));
+			if (rc == 0) {
+				break;
+			}
+			delay(10);
+		}
 		if (rc != 0) {
 			return rc;
 		}
+		i++;
 	}
 
 	return 0;
@@ -10088,7 +10230,15 @@ xzs_emmc_write_blocks_sync(uint64_t start_lba, uint32_t count, const void *buffe
 			extern void xzs_watchdog_pet(void);
 			xzs_watchdog_pet();
 		}
-		int rc = xzs_emmc_write_sector_pio((uint32_t)(start_lba + (uint64_t)i), src + ((size_t)i * 512));
+		int rc = -1;
+		for (int retry = 0; retry < 3; retry++) {
+			rc = xzs_emmc_write_sector_pio((uint32_t)(start_lba + (uint64_t)i), src + ((size_t)i * 512));
+			if (rc == 0) {
+				break;
+			}
+			xzs_sdhci_hc_write8(SDHCI_SOFTWARE_RESET, SDHCI_RESET_CMD | SDHCI_RESET_DATA);
+			delay(10);
+		}
 		if (rc != 0) {
 			return rc;
 		}
@@ -10344,6 +10494,8 @@ xzs_bdev_strategy(struct buf *bp)
 		buf_setresid(bp, 0);
 		buf_seterror(bp, 0);
 	} else {
+		printf("[XZS-SDHCI] ERROR: strategy %s lba=%llu cnt=%u rc=%d\n",
+		    is_read ? "READ" : "WRITE", (unsigned long long)target_start_lba, sector_count, rc);
 		buf_seterror(bp, EIO);
 		buf_setresid(bp, requested_bytes);
 	}
@@ -11027,7 +11179,52 @@ xzs_sdhci_phase_d4_probe(void)
 		int rc_hs = xzs_d4_read_via_strategy(dev0, 1, 512, g_xzs_d4_scratch_buf);
 		uint32_t crc_hs = (rc_hs == 0) ? crc32(0, g_xzs_d4_scratch_buf, 512) : 0;
 		if (rc_hs == 0 && crc_hs == 0xD3A34BC1) {
-			xzs_early_puts("[XZS-SDHCI] D10: 19.2 MHz clock VERIFIED (LBA1 CRC32=0xD3A34BC1, 48x speedup)!\n");
+			printf("[XZS-SDHCI] D10: 19.2 MHz clock VERIFIED (LBA1 CRC32=0xD3A34BC1, 48x speedup)!\n");
+
+			/* Upgrade bus width from 1-bit to 8-bit SDR via CMD6 (EXT_CSD[183] = 2) */
+			xzs_sdhci_hc_write32(SDHCI_INT_STATUS, 0xFFFFFFFFU);
+			xzs_sdhci_hc_write32(SDHCI_ARGUMENT, 0x03B70201U);
+			xzs_sdhci_hc_write16(SDHCI_TRANSFER_MODE, 0x0000U);
+			xzs_sdhci_hc_write16(SDHCI_COMMAND,
+			    SDHCI_MAKE_CMD(6, SDHCI_CMD_RESP_48_BUSY | SDHCI_CMD_CRC | SDHCI_CMD_INDEX));
+			for (uint32_t i = 0; i < 100000; i++) {
+				if ((xzs_sdhci_hc_read32(SDHCI_INT_STATUS) & SDHCI_INT_RESPONSE) != 0) {
+					break;
+				}
+				delay(1);
+			}
+			xzs_sdhci_hc_write32(SDHCI_INT_STATUS, 0xFFFFFFFFU);
+			for (uint32_t i = 0; i < 500000; i++) {
+				uint32_t ps = xzs_sdhci_hc_read32(SDHCI_PRESENT_STATE);
+				if ((ps & (SDHCI_CMD_INHIBIT | SDHCI_DATA_INHIBIT)) == 0 &&
+				    (ps & (1U << 20)) != 0) {
+					break;
+				}
+				delay(1);
+			}
+			xzs_sdhci_hc_write8(SDHCI_HOST_CONTROL, SDHCI_CTRL_8BITBUS);
+			delay(50);
+
+			int rc_8b = xzs_d4_read_via_strategy(dev0, 1, 512, g_xzs_d4_scratch_buf);
+			uint32_t crc_8b = (rc_8b == 0) ? crc32(0, g_xzs_d4_scratch_buf, 512) : 0;
+			if (rc_8b == 0 && crc_8b == 0xD3A34BC1) {
+				printf("[XZS-SDHCI] D10: 8-bit eMMC bus width VERIFIED (LBA1 CRC32=0xD3A34BC1, 8x bus speedup)!\n");
+			} else {
+				printf("[XZS-SDHCI] D10: 8-bit readback mismatch, reverting to 1-bit...\n");
+				xzs_sdhci_hc_write8(SDHCI_HOST_CONTROL, 0x00U);
+			}
+
+			/* Test CMD18 multi-block read against GPT array oracle (LBA 2..33, CRC32=0x64EDE0F4) */
+			g_xzs_d10_fast_multiblock = 1;
+			memset(g_xzs_d4_gpt_primary_entries, 0, sizeof(g_xzs_d4_gpt_primary_entries));
+			int rc_mb = xzs_d4_read_via_strategy(dev0, 2, 16384, g_xzs_d4_gpt_primary_entries);
+			uint32_t crc_mb = (rc_mb == 0) ? crc32(0, g_xzs_d4_gpt_primary_entries, 16384) : 0;
+			if (rc_mb == 0 && crc_mb == 0x64EDE0F4) {
+				printf("[XZS-SDHCI] D10: CMD18 multi-block PIO VERIFIED (GPT CRC32=0x64EDE0F4)!\n");
+			} else {
+				printf("[XZS-SDHCI] D10: CMD18 test returned rc=%d crc=0x%08x, using CMD17 fallback\n", rc_mb, crc_mb);
+				g_xzs_d10_fast_multiblock = 0;
+			}
 		} else {
 			xzs_early_puts("[XZS-SDHCI] D10: 19.2 MHz LBA1 readback mismatch, restoring 400 kHz...\n");
 			g_xzs_emmc_ctx.initialized = false;

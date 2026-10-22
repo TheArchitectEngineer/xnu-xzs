@@ -1849,44 +1849,13 @@ xzs_d8m8_fb_init(void)
 	 *   Blue    = 0x00FF0000 (R=00, G=00, B=FF)
 	 *   Dark    = 0x00101010
 	 */
-	static const uint32_t s_bar_colors[8] = {
-		0x00ffffffu, /* White */
-		0x0000ffffu, /* Yellow */
-		0x00ffff00u, /* Cyan */
-		0x0000ff00u, /* Green */
-		0x00ff00ffu, /* Magenta */
-		0x000000ffu, /* Red */
-		0x00ff0000u, /* Blue */
-		0x00101010u  /* Dark Slate */
-	};
-
 	for (uint32_t y = 0; y < XZS_FB_HEIGHT; y++) {
 		if ((y & 63) == 0) {
 			xzs_watchdog_pet();
 		}
 		uint32_t *line_ptr = (uint32_t *)(g_m8_fb_va + y * XZS_FB_STRIDE);
-		for (uint32_t x = 0; x < XZS_FB_WIDTH; x++) {
-			/* Outer border: 30px white */
-			if (y < 30 || y >= (XZS_FB_HEIGHT - 30) || x < 30 || x >= (XZS_FB_WIDTH - 30)) {
-				line_ptr[x] = 0x00ffffffu;
-			}
-			/* Center contrasting test badge: lines 760..1160, cols 240..840 */
-			else if (y >= 760 && y < 1160 && x >= 240 && x < 840) {
-				if (((x / 40) + (y / 40)) & 1) {
-					line_ptr[x] = 0x00ffffffu;
-				} else {
-					line_ptr[x] = 0x00000000u;
-				}
-			}
-			/* 8 vertical color bars (135 pixels each) */
-			else {
-				uint32_t bar = x / 135u;
-				if (bar > 7) bar = 7;
-				line_ptr[x] = s_bar_colors[bar];
-			}
-		}
-		for (uint32_t pad = XZS_FB_WIDTH; pad < (XZS_FB_STRIDE / 4); pad++) {
-			line_ptr[pad] = 0x00000000u;
+		for (uint32_t x = 0; x < (XZS_FB_STRIDE / 4); x++) {
+			line_ptr[x] = 0x00050505u;
 		}
 	}
 

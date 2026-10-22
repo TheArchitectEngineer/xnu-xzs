@@ -668,8 +668,8 @@ vnode_pagein(
 			 * long as it continues to include the "must have" page... 'f_offset' + 'upl_offset'
 			 * identifies that page
 			 */
-			g_xzs_vnop_pagein_called = 1;
-			{
+			if (g_xzs_vnop_pagein_called < 4) {
+				g_xzs_vnop_pagein_called++;
 				char pibuf[128];
 				int pilen = snprintf(pibuf, sizeof(pibuf), "[XZS-T2N3] VNOP_PAGEIN_CALLED: vp=%p upl_offset=0x%x f_offset=0x%llx size=%u\n", (void *)vp, upl_offset, (unsigned long long)f_offset, size);
 				xzs_bringup_console_write(pibuf, pilen);
@@ -806,8 +806,8 @@ vnode_pagein(
 			xsize = (last_pg - start_pg) * PAGE_SIZE;
 			xoff  = start_pg * PAGE_SIZE;
 
-			g_xzs_vnop_pagein_called = 1;
-			{
+			if (g_xzs_vnop_pagein_called < 4) {
+				g_xzs_vnop_pagein_called++;
 				char pibuf[128];
 				int pilen = snprintf(pibuf, sizeof(pibuf), "[XZS-T2N3] VNOP_PAGEIN_CALLED: vp=%p upl=%p xoff=%d f_offset=0x%llx size=%d\n", (void *)vp, (void *)upl, xoff, (unsigned long long)f_offset + xoff, xsize);
 				xzs_bringup_console_write(pibuf, pilen);
@@ -815,7 +815,7 @@ vnode_pagein(
 			error = VNOP_PAGEIN(vp, upl, (upl_offset_t) xoff,
 			    (off_t)f_offset + xoff,
 			    xsize, flags, vfs_context_current());
-			{
+			if (error) {
 				char pibuf[64];
 				int pilen = snprintf(pibuf, sizeof(pibuf), "[XZS-T2N3] VNOP_PAGEIN_RETURN: error=%d\n", error);
 				xzs_bringup_console_write(pibuf, pilen);

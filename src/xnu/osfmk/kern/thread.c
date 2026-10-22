@@ -466,11 +466,14 @@ thread_terminate_self(void)
 	int threadcnt;
 
 #if CONFIG_XZS_BRINGUP
-	extern void xzs_bringup_console_write(const void *buf, int len);
-	char thmsg[128];
-	int thlen = snprintf(thmsg, sizeof(thmsg), "[XZS-T4R] CP=T4R-50 THREAD_TERMINATE_SELF_ENTER thread=%p task=%p\n",
-	    (void *)thread, (void *)task);
-	xzs_bringup_console_write(thmsg, thlen);
+	extern volatile boolean_t xzs_d6m4_probe_armed;
+	if (xzs_d6m4_probe_armed) {
+		extern void xzs_bringup_console_write(const void *buf, int len);
+		char thmsg[128];
+		int thlen = snprintf(thmsg, sizeof(thmsg), "[XZS-T4R] CP=T4R-50 THREAD_TERMINATE_SELF_ENTER thread=%p task=%p\n",
+		    (void *)thread, (void *)task);
+		xzs_bringup_console_write(thmsg, thlen);
+	}
 #endif
 
 	pal_thread_terminate_self(thread);
@@ -758,7 +761,7 @@ thread_terminate_self(void)
 	/* splsched */
 
 #if CONFIG_XZS_BRINGUP
-	{
+	if (xzs_d6m4_probe_armed) {
 		extern void xzs_bringup_console_write(const void *buf, int len);
 		char bmsg[96];
 		int blen = snprintf(bmsg, sizeof(bmsg), "[XZS-T4R] CP=T4R-60 THREAD_TERMINATE_SELF_PRE_BLOCK thread=%p\n",

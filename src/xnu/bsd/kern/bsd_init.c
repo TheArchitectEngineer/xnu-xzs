@@ -1394,8 +1394,90 @@ bsd_init(void)
 	check_for_failure_injection(XNU_STAGE_BSD_INIT_END);
 #endif
 
+#if CONFIG_XZS_BRINGUP || defined(ARM64_BOARD_CONFIG_SWEET)
+	{
+		extern void sweet_sample_start(void);
+		sweet_sample_start();
+	}
+#endif
+
 	bsd_init_kprintf("done\n");
 }
+
+#if CONFIG_XZS_BRINGUP || defined(ARM64_BOARD_CONFIG_SWEET)
+extern void sweet_sample_task(const char *name, int pid, task_t task);
+volatile uint32_t g_xzs_sample_requested = 0;
+static char sweet_sample_names[128];
+
+static bool
+sweet_sample_wanted(const char *name)
+{
+	size_t n = strlen(name);
+	for (const char *t = sweet_sample_names; *t;) {
+		const char *end = strchr(t, ',');
+		size_t tl = end ? (size_t)(end - t) : strlen(t);
+		if (tl == n && n > 0 && strncmp(t, name, n) == 0) {
+			return true;
+		}
+		if (!end) {
+			break;
+		}
+		t = end + 1;
+	}
+	return false;
+}
+
+static int
+sweet_sample_proc(proc_t p, __unused void *arg)
+{
+	char name[32];
+	proc_name(proc_pid(p), name, sizeof(name));
+	if (sweet_sample_wanted(name)) {
+		task_t task = proc_task(p);
+		if (task != TASK_NULL) {
+			sweet_sample_task(name, proc_pid(p), task);
+		}
+	}
+	return PROC_RETURNED;
+}
+
+static void
+sweet_sample_thread(__unused void *arg, __unused wait_result_t wr)
+{
+	extern void xzs_watchdog_pet(void);
+	extern void xzs_usb_pump_sync(void);
+	uint32_t sample_idx = 0;
+	uint32_t sec = 0;
+	if (!PE_parse_boot_argn("sweetsample", sweet_sample_names, sizeof(sweet_sample_names))) {
+		strlcpy(sweet_sample_names, "launchd,SpringBoard,backboardd,logd,keybagd,seld,dasd", sizeof(sweet_sample_names));
+	}
+	if (sweet_sample_names[0] == '-') {
+		return;
+	}
+	printf("SMP: sampler thread active for [%s]\n", sweet_sample_names);
+	while (sample_idx < 120) {
+		delay_for_interval(1, NSEC_PER_SEC);
+		sec++;
+		xzs_watchdog_pet();
+		xzs_usb_pump_sync();
+		if (g_xzs_sample_requested || (sec >= 2 && (sec <= 8 ? ((sec % 2) == 0) : ((sec % 5) == 0)))) {
+			g_xzs_sample_requested = 0;
+			printf("SMP --- sample %u (t=%us)\n", sample_idx++, sec);
+			proc_iterate(PROC_ALLPROCLIST, sweet_sample_proc, NULL, NULL, NULL);
+			xzs_usb_pump_sync();
+		}
+	}
+}
+
+void
+sweet_sample_start(void)
+{
+	thread_t thread;
+	if (kernel_thread_start(sweet_sample_thread, NULL, &thread) == KERN_SUCCESS) {
+		thread_deallocate(thread);
+	}
+}
+#endif
 
 void
 bsdinit_task(void)
@@ -1425,6 +1507,24 @@ bsdinit_task(void)
 
 #if CONFIG_XZS_BRINGUP
 	extern void xzs_bringup_console_write(const void *buf, int len);
+	extern volatile uint32_t g_xzs_usb_tty_bridge;
+	extern void xzs_usb_pump_sync(void);
+	extern void xzs_watchdog_pet(void);
+	extern uint64_t g_xzs_wdt_virt_base;
+	extern uint64_t g_xzs_imem_virt_base;
+	extern vm_offset_t ml_io_map(vm_offset_t phys_addr, vm_size_t size);
+	if (g_xzs_imem_virt_base == 0) {
+		g_xzs_imem_virt_base = (uint64_t)ml_io_map(0x066bf000ULL, 0x1000ULL);
+	}
+	if (g_xzs_wdt_virt_base == 0) {
+		g_xzs_wdt_virt_base = (uint64_t)ml_io_map(0x09830000ULL, 0x1000ULL);
+		__asm__ volatile("dsb ish\ntlbi vmalle1is\ndsb ish\nisb sy" ::: "memory");
+	}
+	for (uint32_t w = 0; w < 8000 && !g_xzs_usb_tty_bridge; w++) {
+		xzs_usb_pump_sync();
+		xzs_watchdog_pet();
+		delay(1000);
+	}
 	xzs_bringup_console_write("[XZS-BOOT] [D10] bsdinit_task: calling load_init_program(/sbin/launchd)\n", 72);
 #endif
 	load_init_program(p);

@@ -34,6 +34,7 @@
  */
 #if CONFIG_COREDUMP || CONFIG_UCOREDUMP
 
+#include <pexpert/arm64/board_config.h>
 #include <mach/vm_param.h>
 #include <mach/thread_status.h>
 #include <sys/content_protection.h>
@@ -83,7 +84,7 @@ kern_return_t thread_getstatus(thread_t act, int flavor,
     thread_state_t tstate, mach_msg_type_number_t *count);
 void task_act_iterate_wth_args(task_t, void (*)(thread_t, void *), void *);
 
-#if defined(SECURE_KERNEL) || defined(ARM64_BOARD_CONFIG_SWEET) || defined(XZS)
+#if defined(SECURE_KERNEL) || defined(ARM64_BOARD_CONFIG_SWEET) || defined(XZS) || CONFIG_XZS_BRINGUP
 __XNU_PRIVATE_EXTERN int do_coredump = 0;       /* default: don't dump cores */
 #else
 __XNU_PRIVATE_EXTERN int do_coredump = 1;       /* default: dump cores */

@@ -1892,6 +1892,16 @@ proc_handle_critical_exit(proc_t p, int rv)
 
 	proc_crash_coredump(p);
 
+#if CONFIG_XZS_BRINGUP || defined(ARM64_BOARD_CONFIG_SWEET)
+	if (p == current_proc()) {
+		struct uthread *crit_ut = get_bsdthread_info(current_thread());
+		extern void sweet_crash_log(const char *, int, int, uint64_t, uint64_t);
+		sweet_crash_log(p->p_comm, proc_getpid(p), WTERMSIG(rv),
+		    crit_ut ? (((uint64_t)crit_ut->uu_exception << 32) | (uint32_t)crit_ut->uu_code) : 0,
+		    crit_ut ? crit_ut->uu_subcode : 0);
+	}
+#endif
+
 	sync(p, (void *)NULL, (int *)NULL);
 	const uint64_t panic_options_mask = DEBUGGER_OPTION_INITPROC_PANIC | DEBUGGER_OPTION_USERSPACE_INITIATED_PANIC;
 
@@ -1964,6 +1974,20 @@ proc_prepareexit(proc_t p, int rv, boolean_t perf_notify)
 		    ((int)ut->uu_code & 0xfffff);
 		subcode = ut->uu_subcode;
 		etype = ut->uu_exception;
+
+#if CONFIG_XZS_BRINGUP || defined(ARM64_BOARD_CONFIG_SWEET)
+		if (p == current_proc()) {
+			extern void sweet_crash_log(const char *, int, int, uint64_t, uint64_t);
+			sweet_crash_log(p->p_comm, proc_getpid(p), WTERMSIG(rv),
+			    ((uint64_t)ut->uu_exception << 32) | (uint32_t)ut->uu_code, ut->uu_subcode);
+			if (PROC_HAS_EXITREASON(p)) {
+				char *desc = exit_reason_get_string_desc(p->p_exit_reason);
+				printf("CRASH %s reason ns %u code 0x%llx: %s\n", p->p_comm,
+				    p->p_exit_reason->osr_namespace, p->p_exit_reason->osr_code,
+				    desc != NULL ? desc : "(none)");
+			}
+		}
+#endif
 
 		/* Defualt to EXC_CRASH if the exception is not an EXC_RESOURCE or EXC_GUARD */
 		if (etype != EXC_RESOURCE || etype != EXC_GUARD) {

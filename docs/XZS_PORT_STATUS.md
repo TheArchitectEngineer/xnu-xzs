@@ -20,7 +20,10 @@ D9-M1   = COMPLETE (AppleCLCD & IOCoreSurfaceRoot / XZSFramebuffer & XZSSurface 
 D9-M2   = COMPLETE (xzs_amfi.c permissive Sandbox & AMFI MAC policies + sweet_libpthread + sweet_bearssl integrated)
 D9-M3   = COMPLETE (XZSKeyStore.cpp AppleKeyStore stub + sweet_hfs Case-Sensitive Journaled HFS+ VFS integrated)
 D10-M1  = PASS (14 GB HFS+ iOS 16.7.16 RootFS flashed to userdata /dev/disk0s54, mounted as /, /dev mounted, PID 1 created on BH905SX976)
-D10-M2  = ACTIVE (Boot with AST_BSD unmasked in locore.s to execute /sbin/launchd -> backboardd -> SpringBoard)
+D10-M2  = PASS (Full-screen 1080x1920 135x120 console log, 8-color bars disabled, SDCC1 19.2 MHz 8-bit CMD18 multi-block PIO verified on BH905SX976)
+D10-M3  = PASS (4-core SMP virtual timer PPI 27, per-CPU pmap init, logd firehose fix, keybagd AppleKeyStore checkin, kern_exec old_proc cleanup verified on BH905SX976)
+D10-M4  = PASS (First visible iOS 16 GUI frames 1125x2436->1080x1920 presented by backboardd & SpringBoard on physical LCD panel on BH905SX976)
+D10-M5  = ACTIVE (Unblock lsd LaunchServices database seeding so SpringBoard advances to Home Screen)
 ```
 
 D8-M3 hardware verification summary:

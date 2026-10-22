@@ -24,9 +24,16 @@ class IOWatchdog : public IOService {
 
 public:
 	bool start(IOService *provider) APPLE_KEXT_OVERRIDE;
+	IOReturn setProperties(OSObject *properties) APPLE_KEXT_OVERRIDE;
 };
 
 OSDefineMetaClassAndStructors(IOWatchdog, IOService);
+
+IOReturn
+IOWatchdog::setProperties(__unused OSObject *properties)
+{
+	return kIOReturnSuccess;
+}
 
 bool
 IOWatchdog::start(IOService *provider)
@@ -35,6 +42,7 @@ IOWatchdog::start(IOService *provider)
 		return false;
 	}
 	setProperty(kIOUserClientClassKey, "IOWatchdogUserClient");
+	setProperty("IOPMUPrimary", 1ULL, 32);
 	registerService();
 	IOLog("SWEET WDT: IOWatchdog registered (accepts check-ins, never fires)\n");
 	return true;

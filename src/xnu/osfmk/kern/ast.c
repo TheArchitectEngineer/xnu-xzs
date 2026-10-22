@@ -152,7 +152,6 @@ ast_taken_kernel(void)
 
 	assert(urgent_reason & AST_PREEMPT);
 
-	xzs_early_puts("[AST] ast_taken_kernel: calling thread_preempted_in_kernel\n");
 	/* We've decided to try context switching */
 	thread_preempted_in_kernel(urgent_reason);
 }

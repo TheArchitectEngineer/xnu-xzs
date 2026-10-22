@@ -434,6 +434,8 @@ PE_slide_devicetree(vm_offset_t slide)
 	SecureDTInit(PE_state.deviceTreeHead, PE_state.deviceTreeSize);
 }
 
+static uint8_t g_xzs_permanent_adt[65536] __attribute__((aligned(64)));
+
 void
 PE_init_platform(boolean_t vm_initialized, void *args)
 {
@@ -446,8 +448,16 @@ PE_init_platform(boolean_t vm_initialized, void *args)
 		page_protection_type = ml_page_protection_type();
 		PE_state.initialized = TRUE;
 		PE_state.bootArgs = boot_args_ptr;
-		PE_state.deviceTreeHead = boot_args_ptr->deviceTreeP;
 		PE_state.deviceTreeSize = boot_args_ptr->deviceTreeLength;
+		if (boot_args_ptr->deviceTreeP != NULL &&
+		    PE_state.deviceTreeSize > 0 &&
+		    PE_state.deviceTreeSize <= sizeof(g_xzs_permanent_adt)) {
+			bcopy(boot_args_ptr->deviceTreeP, g_xzs_permanent_adt, PE_state.deviceTreeSize);
+			PE_state.deviceTreeHead = g_xzs_permanent_adt;
+			boot_args_ptr->deviceTreeP = g_xzs_permanent_adt;
+		} else {
+			PE_state.deviceTreeHead = boot_args_ptr->deviceTreeP;
+		}
 		PE_state.video.v_baseAddr = boot_args_ptr->Video.v_baseAddr;
 		PE_state.video.v_rowBytes = boot_args_ptr->Video.v_rowBytes;
 		PE_state.video.v_width = boot_args_ptr->Video.v_width;

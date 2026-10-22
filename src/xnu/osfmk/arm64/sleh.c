@@ -185,7 +185,7 @@ static void handle_kernel_abort(arm_saved_state_t *, uint64_t, vm_offset_t, faul
 static void handle_pc_align(arm_saved_state_t *ss) __dead2;
 static void handle_sp_align(arm_saved_state_t *ss) __dead2;
 static void handle_sw_step_debug(arm_saved_state_t *ss) __dead2;
-static void handle_wf_trap(arm_saved_state_t *ss) __dead2;
+static void handle_wf_trap(arm_saved_state_t *ss);
 static void handle_fp_trap(arm_saved_state_t *ss, uint64_t esr) __dead2;
 #if HAS_ARM_FEAT_SME
 static void handle_sme_trap(arm_saved_state_t *state, uint64_t esr);
@@ -1408,7 +1408,7 @@ xzs_d6m5_dispatch_first_svc:
 	case ESR_EC_WFI_WFE:
 		// Use of WFI or WFE instruction when they have been disabled for EL0
 		handle_wf_trap(state);
-		__builtin_unreachable();
+		break;
 
 	case ESR_EC_FLOATING_POINT_64:
 		handle_fp_trap(state, esr);
@@ -1495,6 +1495,39 @@ handle_uncategorized(arm_saved_state_t *state)
 	uint32_t                   instr     = 0;
 
 	COPYIN(get_saved_state_pc(state), (char *)&instr, sizeof(instr));
+
+	if (PSR64_IS_USER64(get_saved_state_cpsr(state))) {
+		uint32_t op = instr & 0xffffffe0U;
+		uint32_t rt = instr & 0x1fU;
+		uint64_t val = 0;
+		bool handled = false;
+
+		if (op == 0xd53be040U || op == 0xd53be0c0U ||
+		    op == 0xd53cfac0U || op == 0xd53cfb60U) {
+			val = __builtin_arm_rsr64("CNTVCT_EL0");
+			handled = true;
+		} else if (op == 0xd53be020U || op == 0xd53be0a0U) {
+			val = __builtin_arm_rsr64("CNTPCT_EL0");
+			handled = true;
+		} else if (op == 0xd53be000U) {
+			val = __builtin_arm_rsr64("CNTFRQ_EL0");
+			handled = true;
+		} else if (op == 0xd53b0020U) {
+			val = __builtin_arm_rsr64("CTR_EL0");
+			handled = true;
+		} else if (op == 0xd53b00e0U) {
+			val = __builtin_arm_rsr64("DCZID_EL0");
+			handled = true;
+		}
+
+		if (handled) {
+			if (rt < 31) {
+				saved_state64(state)->x[rt] = val;
+			}
+			add_saved_state_pc(state, 4);
+			return;
+		}
+	}
 
 #if CONFIG_DTRACE
 
@@ -2056,19 +2089,9 @@ handle_sp_align(arm_saved_state_t *ss)
 static void
 handle_wf_trap(arm_saved_state_t *state)
 {
-	exception_type_t exc;
-	mach_exception_data_type_t codes[2];
-	mach_msg_type_number_t numcodes = 2;
-	uint32_t instr = 0;
-
-	COPYIN(get_saved_state_pc(state), (char *)&instr, sizeof(instr));
-
-	exc = EXC_BAD_INSTRUCTION;
-	codes[0] = EXC_ARM_UNDEFINED;
-	codes[1] = instr;
-
-	exception_triage(exc, codes, numcodes);
-	__builtin_unreachable();
+	uint64_t sctlr = __builtin_arm_rsr64("SCTLR_EL1");
+	__builtin_arm_wsr64("SCTLR_EL1", sctlr | 0x0405c120ULL);
+	add_saved_state_pc(state, 4);
 }
 
 static void
@@ -2825,7 +2848,6 @@ handle_mach_continuous_time_trap(arm_saved_state_t *state)
 }
 
 
-__attribute__((noreturn))
 static void
 handle_msr_trap(arm_saved_state_t *state, uint64_t esr)
 {
@@ -2843,6 +2865,66 @@ handle_msr_trap(arm_saved_state_t *state, uint64_t esr)
 	}
 
 	COPYIN(get_saved_state_pc(state), (char *)&instr, sizeof(instr));
+
+	/*
+	 * Ensure CNTKCTL_EL1 and SCTLR_EL1 EL0 enable bits are active on this core,
+	 * and emulate trapped EL0 reads of architectural/Apple timer & ID registers.
+	 */
+	{
+		uint64_t cntkctl = __builtin_arm_rsr64("CNTKCTL_EL1");
+		if ((cntkctl & 0x3ULL) != 0x3ULL) {
+			__builtin_arm_wsr64("CNTKCTL_EL1", cntkctl | 0x4fULL);
+		}
+		uint64_t sctlr = __builtin_arm_rsr64("SCTLR_EL1");
+		if ((sctlr & 0x0405c000ULL) != 0x0405c000ULL) {
+			__builtin_arm_wsr64("SCTLR_EL1", sctlr | 0x0405c120ULL);
+		}
+
+		uint32_t op = instr & 0xffffffe0U;
+		uint32_t rt = instr & 0x1fU;
+		uint64_t val = 0;
+		bool handled = false;
+
+		if (op == 0xd53be040U || op == 0xd53be0c0U ||
+		    op == 0xd53cfac0U || op == 0xd53cfb60U) {
+			/* CNTVCT_EL0 / CNTVCTSS_EL0 / ACNTVCT_EL0 */
+			val = __builtin_arm_rsr64("CNTVCT_EL0");
+			handled = true;
+		} else if (op == 0xd53be020U || op == 0xd53be0a0U) {
+			/* CNTPCT_EL0 / CNTPCTSS_EL0 */
+			val = __builtin_arm_rsr64("CNTPCT_EL0");
+			handled = true;
+		} else if (op == 0xd53be000U) {
+			/* CNTFRQ_EL0 */
+			val = __builtin_arm_rsr64("CNTFRQ_EL0");
+			handled = true;
+		} else if (op == 0xd53b0020U) {
+			/* CTR_EL0 */
+			val = __builtin_arm_rsr64("CTR_EL0");
+			handled = true;
+		} else if (op == 0xd53b00e0U) {
+			/* DCZID_EL0 */
+			val = __builtin_arm_rsr64("DCZID_EL0");
+			handled = true;
+		} else if (op == 0xd5380000U) {
+			/* MIDR_EL1 */
+			val = __builtin_arm_rsr64("MIDR_EL1");
+			handled = true;
+		} else if (op == 0xd53800a0U) {
+			/* MPIDR_EL1 */
+			val = __builtin_arm_rsr64("MPIDR_EL1");
+			handled = true;
+		}
+
+		if (handled) {
+			if (rt < 31) {
+				saved_state64(state)->x[rt] = val;
+			}
+			add_saved_state_pc(state, 4);
+			return;
+		}
+	}
+
 	codes[1] = instr;
 
 	exception_triage(exception, codes, numcodes);
@@ -3140,7 +3222,7 @@ sleh_irq(arm_saved_state_t *state)
 			}
 		} else {
 			g_xzs_timer_irq_count++;
-			if ((g_xzs_timer_irq_count & 0x3fu) == 0) {
+			if ((g_xzs_timer_irq_count & 0x7u) == 0) {
 				extern void xzs_watchdog_pet(void);
 				xzs_watchdog_pet();
 			}
@@ -3151,11 +3233,13 @@ sleh_irq(arm_saved_state_t *state)
 		rtclock_intr(TRUE);
 		ml_interrupt_masked_debug_end();
 
+#if CONFIG_XZS_SELFTEST
 		// [TEST INSTRUMENTATION]
 		// Reprogram decrementer while running the 100-timer test; quiesce afterward
 		if (core_id == 0 && g_xzs_timer_irq_count < 105) {
 			ml_set_decrementer(96000);
 		}
+#endif
 
 		extern volatile uint32_t g_xzs_preempt_test_active;
 		extern thread_t g_thread_c;

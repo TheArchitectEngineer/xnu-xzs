@@ -98,6 +98,28 @@
 # define KAUTH_DEBUG(fmt, args...)      do { printf("%s:%d: " fmt "\n", __PRETTY_FUNCTION__, __LINE__ , ##args); } while (0)
 #endif
 
+#if defined(ARM64_BOARD_CONFIG_SWEET) || defined(XZS)
+/*
+ * iOS userland has no opendirectoryd/memberd external resolver: disable
+ * CONFIG_EXT_RESOLVER so kauth_cred_uid2guid / gid2guid / guid2uid /
+ * guid2gid / ismember_gid use static _user_compat_prefix translation
+ * instead of sleeping 500ms in kauth_resolver_submit and returning EWOULDBLOCK.
+ */
+#undef CONFIG_EXT_RESOLVER
+#define CONFIG_EXT_RESOLVER 0
+
+int
+identitysvc(__unused struct proc *p, __unused struct identitysvc_args *uap, __unused int32_t *retval)
+{
+	return ENOTSUP;
+}
+
+void
+kauth_resolver_identity_reset(void)
+{
+}
+#endif
+
 #if CONFIG_EXT_RESOLVER
 /*
  * Interface to external identity resolver.

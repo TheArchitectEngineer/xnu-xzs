@@ -1099,8 +1099,8 @@ task_wait_to_return(void)
 		xzs_d6m4_r650_telemetry.marker = 0x20;
 		xzs_d6m4_r650_telemetry.before_bootstrap_ret = 1;
 		__asm__ volatile("dmb ish" ::: "memory");
+		xzs_bringup_console_write("[XZS-TWTR] calling thread_bootstrap_return\n", 43);
 	}
-	xzs_bringup_console_write("[XZS-TWTR] calling thread_bootstrap_return\n", 43);
 #endif
 
 	thread_bootstrap_return();

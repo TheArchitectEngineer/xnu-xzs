@@ -69,44 +69,31 @@ extern const vm_size_t  ipc_kmsg_max_vm_space;
 
 #if IPC_HAS_LEGACY_MACH_MSG_TRAP
 #if DEVELOPMENT || DEBUG
-static TUNABLE(bool, allow_legacy_mach_msg, "allow_legacy_mach_msg", false);
+static TUNABLE(bool, allow_legacy_mach_msg, "allow_legacy_mach_msg", true);
 #endif /* DEVELOPMENT || DEBUG */
 #endif /* IPC_HAS_LEGACY_MACH_MSG_TRAP */
 
 /* a boot-arg to enable/disable OOL port array restrictions */
-#if XNU_TARGET_OS_XR
 TUNABLE(bool, ool_port_array_enforced, "ool_port_array_enforced", false);
-#else
-TUNABLE(bool, ool_port_array_enforced, "ool_port_array_enforced", true);
-#endif /* XNU_TARGET_OS_XR */
 
 /* Note: Consider Developer Mode when changing the default. */
 TUNABLE(ipc_control_port_options_t, ipc_control_port_options,
     "ipc_control_port_options",
-    ICP_OPTIONS_IMMOVABLE_1P_HARD |
-    ICP_OPTIONS_PINNED_1P_HARD |
-#if !XNU_TARGET_OS_OSX
-    ICP_OPTIONS_IMMOVABLE_3P_HARD |
-#endif
-    ICP_OPTIONS_PINNED_3P_SOFT);
+    ICP_OPTIONS_NONE);
 
-TUNABLE(bool, service_port_defense_enabled, "-service_port_defense_enabled", true);
+TUNABLE(bool, service_port_defense_enabled, "-service_port_defense_enabled", false);
 
 /* The bootarg to disable ALL ipc policy violation telemetry */
-TUNABLE(bool, ipcpv_telemetry_enabled, "-ipcpv_telemetry_enabled", true);
+TUNABLE(bool, ipcpv_telemetry_enabled, "-ipcpv_telemetry_enabled", false);
 
 /* boot-arg for provisional reply port enforcement */
-#if XNU_TARGET_OS_OSX || XNU_TARGET_OS_BRIDGE
 TUNABLE(bool, prp_enforcement_enabled, "-prp_enforcement_enabled", false);
-#else
-TUNABLE(bool, prp_enforcement_enabled, "-prp_enforcement_enabled", true);
-#endif /* XNU_TARGET_OS_OSX || XNU_TARGET_OS_BRIDGE */
 
 /*
  * bootargs for reply port semantics on bootstrap ports
  */
-TUNABLE(bool, bootstrap_port_telemetry_enabled, "-bootstrap_port_telemetry_enabled", true);
-TUNABLE(bool, bootstrap_port_enforcement_enabled, "-bootstrap_port_enforcement_enabled", true);
+TUNABLE(bool, bootstrap_port_telemetry_enabled, "-bootstrap_port_telemetry_enabled", false);
+TUNABLE(bool, bootstrap_port_enforcement_enabled, "-bootstrap_port_enforcement_enabled", false);
 
 /* Enables reply port/voucher/persona debugging code */
 TUNABLE(bool, enforce_strict_reply, "-enforce_strict_reply", false);
@@ -162,7 +149,7 @@ ipc_policy_for_task(task_t task)
 	}
 #endif
 
-	return policy;
+	return policy | IPC_SPACE_POLICY_OPTED_OUT;
 }
 
 
@@ -271,26 +258,10 @@ ipc_should_apply_policy(
 	const ipc_space_policy_t current_policy,
 	const ipc_space_policy_t requested_level)
 {
-	/* Do not apply security policies on these binaries to avoid bincompat regression */
-	if ((current_policy & IPC_SPACE_POLICY_SIMULATED) ||
-	    (current_policy & IPC_SPACE_POLICY_OPTED_OUT) ||
-	    (current_policy & IPC_SPACE_POLICY_TRANSLATED)) {
-		return false;
-	}
-
-	/* Check versioning for applying platform restrictions policy */
-	if (requested_level & current_policy & IPC_SPACE_POLICY_ENHANCED) {
-		/* Platform is always opted into platform restrictions */
-		if (current_policy & IPC_SPACE_POLICY_PLATFORM) {
-			return true;
-		}
-
-		const ipc_space_policy_t requested_version = requested_level & IPC_SPACE_POLICY_ENHANCED_VERSION_MASK;
-		const ipc_space_policy_t current_es_version = current_policy & IPC_SPACE_POLICY_ENHANCED_VERSION_MASK;
-		assert(requested_version != 0);
-		return requested_version <= current_es_version;
-	}
-	return current_policy & requested_level;
+	/* iOS 16 (Darwin 22) userland compatibility: disable Darwin 24 enhanced IPC policies */
+	(void)current_policy;
+	(void)requested_level;
+	return false;
 }
 
 #pragma mark legacy trap policies
@@ -380,6 +351,11 @@ ipc_policy_allow_legacy_send_trap(
 	mach_msg_id_t           msgid,
 	mach_msg_option64_t     opts)
 {
+#if DEVELOPMENT || DEBUG
+	if (allow_legacy_mach_msg) {
+		return MACH_MSG_SUCCESS;
+	}
+#endif /* DEVELOPMENT || DEBUG */
 	/* equivalent to ENHANCED_V0 */
 	if ((opts & MACH64_POLICY_ENHANCED) == 0) {
 #if __x86_64__

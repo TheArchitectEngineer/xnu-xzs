@@ -153,6 +153,36 @@ mmioctl(dev_t dev, u_long cmd, __unused caddr_t data,
 	return 0;
 }
 
+#if CONFIG_XZS_BRINGUP || defined(ARM64_BOARD_CONFIG_SWEET)
+static char sweet_null_names[128];
+static int sweet_null_parsed;
+
+static bool
+sweet_null_tee(char *name, size_t len)
+{
+	if (!sweet_null_parsed) {
+		if (!PE_parse_boot_argn("sweetnull", sweet_null_names, sizeof(sweet_null_names))) {
+			strlcpy(sweet_null_names, "backboardd,SpringBoard", sizeof(sweet_null_names));
+		}
+		sweet_null_parsed = 1;
+	}
+	proc_selfname(name, (int)len);
+	size_t n = strlen(name);
+	for (const char *t = sweet_null_names; *t;) {
+		const char *end = strchr(t, ',');
+		size_t tl = end ? (size_t)(end - t) : strlen(t);
+		if (tl == n && n > 0 && strncmp(t, name, n) == 0) {
+			return true;
+		}
+		if (!end) {
+			break;
+		}
+		t = end + 1;
+	}
+	return false;
+}
+#endif
+
 int
 mmrw(dev_t dev, struct uio *uio, enum uio_rw rw)
 {
@@ -216,6 +246,22 @@ mmrw(dev_t dev, struct uio *uio, enum uio_rw rw)
 			if (rw == UIO_READ) {
 				return 0;
 			}
+#if CONFIG_XZS_BRINGUP || defined(ARM64_BOARD_CONFIG_SWEET)
+			{
+				char name[32];
+				if (sweet_null_tee(name, sizeof(name))) {
+					char buf[256];
+					c = MIN(uio_curriovlen(uio), sizeof(buf));
+					error = uiomove(buf, (int)c, uio);
+					if (error) {
+						break;
+					}
+					printf("|%s| %.*s%s", name, (int)c, buf,
+					    (c > 0 && buf[c - 1] == '\n') ? "" : "\n");
+					continue;
+				}
+			}
+#endif
 			c = uio_curriovlen(uio);
 
 			error = 0; /* Always succeeds, always consumes all input */

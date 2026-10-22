@@ -1217,18 +1217,41 @@ panic_trap_to_debugger(const char *panic_format_str, va_list *panic_args, unsign
 {
 #pragma clang diagnostic pop
 
-	extern void xzs_early_puts(const char *s);
-	extern void xzs_early_puthex64(uint64_t val);
+	extern void xzs_bringup_console_write(const void *buf, int len);
 	extern void xzs_panic_hook(const char *str);
 	extern void xzs_spin_halt(void);
-	xzs_early_puts("\n*** XNU KERNEL PANIC: ");
-	if (panic_format_str) {
-		xzs_early_puts(panic_format_str);
+	char xzs_panic_buf[512];
+	int xzs_panic_len = 0;
+	if (panic_format_str && panic_args) {
+		va_list args_copy;
+		va_copy(args_copy, *panic_args);
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wformat-nonliteral"
+		xzs_panic_len = vsnprintf(xzs_panic_buf, sizeof(xzs_panic_buf), panic_format_str, args_copy);
+#pragma clang diagnostic pop
+		va_end(args_copy);
+	} else if (panic_format_str) {
+		xzs_panic_len = snprintf(xzs_panic_buf, sizeof(xzs_panic_buf), "%s", panic_format_str);
+	} else {
+		xzs_panic_len = snprintf(xzs_panic_buf, sizeof(xzs_panic_buf), "kernel panic");
 	}
-	xzs_early_puts(" caller=");
-	xzs_early_puthex64((uint64_t)panic_caller);
-	xzs_early_puts(" ***\n");
-	xzs_panic_hook(panic_format_str ? panic_format_str : "kernel panic");
+	if (xzs_panic_len < 0) {
+		xzs_panic_len = 0;
+		xzs_panic_buf[0] = '\0';
+	} else if ((size_t)xzs_panic_len >= sizeof(xzs_panic_buf)) {
+		xzs_panic_len = (int)sizeof(xzs_panic_buf) - 1;
+		xzs_panic_buf[xzs_panic_len] = '\0';
+	}
+	char caller_buf[80];
+	int caller_len = snprintf(caller_buf, sizeof(caller_buf), "\n*** XNU KERNEL PANIC (caller=%p): ", (void *)panic_caller);
+	if (caller_len > 0) {
+		xzs_bringup_console_write(caller_buf, caller_len);
+	}
+	if (xzs_panic_len > 0) {
+		xzs_bringup_console_write(xzs_panic_buf, xzs_panic_len);
+	}
+	xzs_bringup_console_write(" ***\n", 5);
+	xzs_panic_hook(xzs_panic_buf);
 	xzs_spin_halt();
 
 #if defined(__x86_64__) && (DEVELOPMENT || DEBUG)

@@ -20,11 +20,18 @@ static inline bool __firehose_kernel_configuration_valid(uint8_t chunks, uint8_t
     return (chunks > 0 && io_pages > 0);
 }
 
+extern void __firehose_allocate(vm_offset_t *addr, vm_size_t size);
+
 static inline void *__firehose_buffer_create(size_t *size) {
-    if (size) {
+    vm_offset_t addr = 0;
+    __firehose_allocate(&addr, size ? *size : 0);
+    if (addr != 0) {
+        *(uint64_t *)((uintptr_t)addr + 0x208) =
+            (1ULL << (FIREHOSE_BUFFER_KERNEL_CHUNK_COUNT - 1)) | 1ULL;
+    } else if (size) {
         *size = 0;
     }
-    return (void *)0;
+    return (void *)addr;
 }
 
 static inline bool __firehose_merge_updates(firehose_push_reply_t reply) {
