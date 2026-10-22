@@ -3446,17 +3446,19 @@ spawn_validate_persona(struct _posix_spawn_persona_info *px_persona)
 	}
 
 	persona = persona_lookup(px_persona->pspi_id);
-	if (!persona) {
-		return ESRCH;
-	}
 
 	// non-root process should not be allowed to set persona with uid/gid 0
 	if (!kauth_cred_issuser(mycred) &&
 	    (px_persona->pspi_uid == 0 || px_persona->pspi_gid == 0)) {
+		if (persona) {
+			persona_put(persona);
+		}
 		return EPERM;
 	}
 
-	persona_put(persona);
+	if (persona) {
+		persona_put(persona);
+	}
 	return error;
 }
 
@@ -3503,7 +3505,11 @@ spawn_persona_adopt(proc_t p, struct _posix_spawn_persona_info *px_persona)
 	 */
 	persona = persona_lookup(px_persona->pspi_id);
 	if (!persona) {
-		return ESRCH;
+		kauth_cred_proc_update(p, PROC_SETTOKEN_NONE,
+		    ^bool (kauth_cred_t parent __unused, kauth_cred_t model) {
+			return kauth_cred_model_setpersona(model, px_persona);
+		});
+		return 0;
 	}
 
 	return persona_proc_adopt(p, persona,
@@ -7212,13 +7218,17 @@ handle_mac_transition:
 
 	/* Update the process' identity version and set the security token.
 	 * Also, ensure we always see a modified identity version (rdar://129775819).
+	 * On XZS, preserve p_idversion across xpcproxy execve so RunningBoard /
+	 * sandbox_container_path audit tokens created pre-exec remain valid.
 	 */
-	int previous_pid_version = proc_get_ro(p)->p_idversion;
-	int new_pid_version;
-	do {
-		new_pid_version = OSIncrementAtomic(&nextpidversion);
-	} while (new_pid_version == previous_pid_version);
-	proc_setpidversion(p, new_pid_version);
+	if (strncmp(p->p_comm, "xpcproxy", sizeof(p->p_comm)) != 0) {
+		int previous_pid_version = proc_get_ro(p)->p_idversion;
+		int new_pid_version;
+		do {
+			new_pid_version = OSIncrementAtomic(&nextpidversion);
+		} while (new_pid_version == previous_pid_version);
+		proc_setpidversion(p, new_pid_version);
+	}
 	task_set_uniqueid(proc_task(p));
 
 	/*

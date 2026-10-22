@@ -277,7 +277,7 @@ sweet_amfi_vnode_check_signature(struct vnode *vp, __unused struct label *label,
 	if (mp != NULL && (vfs_flags(mp) & MNT_ROOTFS)) {
 		*cs_flags |= CS_PLATFORM_BINARY;
 	}
-	if (cs_blob != cs_blob->csb_ro_addr && cs_blob->csb_entitlements == NULL) {
+	if (cs_blob != NULL && cs_blob != cs_blob->csb_ro_addr && cs_blob->csb_entitlements == NULL) {
 		sweet_amfi_attach_entitlements(cs_blob);
 	}
 	return 0;
@@ -390,7 +390,7 @@ sweet_sandbox_container_path(user_addr_t arg)
 		return ENOENT;
 	}
 
-	error = ENOENT;
+	error = 0;
 	end = (const char *)(strings + strings_size);
 	for (s = end - argslen; s < end; s += len + 1) {
 		len = strnlen(s, end - s);

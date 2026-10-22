@@ -372,6 +372,12 @@ OSDefineMetaClassAndStructors(AppleM2ScalerCSCDriverUserClient, IOUserClient);
 bool
 AppleM2ScalerCSCDriver::start(IOService *provider)
 {
+	uint32_t enable_m2scaler = 0;
+	PE_parse_boot_argn("xzsgpu_m2scaler", &enable_m2scaler, sizeof(enable_m2scaler));
+	if (!enable_m2scaler) {
+		IOLog("XZS GPU: AppleM2ScalerCSCDriver deferred (CPU vImage/CoreGraphics active; pass xzsgpu_m2scaler=1 to enable)\n");
+		return false;
+	}
 	if (!IOService::start(provider)) {
 		return false;
 	}

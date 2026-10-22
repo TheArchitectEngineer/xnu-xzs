@@ -1724,7 +1724,7 @@ _proc_is_fatal_reason(os_reason_t reason)
 	return true;
 }
 
-static TUNABLE(bool, panic_on_crash_disabled, "panic_on_crash_disabled", false);
+static TUNABLE(bool, panic_on_crash_disabled, "panic_on_crash_disabled", true);
 
 static bool
 proc_should_trigger_panic(proc_t p, int rv)
@@ -1735,7 +1735,10 @@ proc_should_trigger_panic(proc_t p, int rv)
 	}
 
 	if (panic_on_crash_disabled) {
-		printf("panic-on-crash disabled via boot-arg\n");
+		if (p->p_crash_behavior != 0) {
+			printf("[XZS-EXIT] suppressing panic-on-crash for pid=%d (%s) rv=0x%x crash_behavior=0x%x\n",
+			    proc_getpid(p), p->p_comm, rv, p->p_crash_behavior);
+		}
 		return false;
 	}
 

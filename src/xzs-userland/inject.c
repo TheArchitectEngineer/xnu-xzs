@@ -107,7 +107,15 @@ extern char *strrchr(const char *s, int c);
 extern int snprintf(char *str, size_t size, const char *format, ...);
 extern int vsnprintf(char *str, size_t size, const char *format, va_list ap);
 extern int sysctlbyname(const char *name, void *oldp, size_t *oldlenp, void *newp, size_t newlen);
+extern int dup2(int fd1, int fd2);
 extern void _dyld_register_func_for_add_image(void (*func)(const struct mach_header *mh, intptr_t vmaddr_slide));
+
+typedef uint64_t dispatch_time_t;
+#define DISPATCH_TIME_NOW 0ULL
+#define NSEC_PER_SEC 1000000000ULL
+extern struct dispatch_queue_s { uint8_t _opaque[128]; } _dispatch_main_q;
+extern dispatch_time_t dispatch_time(dispatch_time_t when, int64_t delta);
+extern void dispatch_after_f(dispatch_time_t when, void *queue, void *context, void (*work)(void *));
 
 /* libobjc.A.dylib */
 extern Class objc_getClass(const char *name);
@@ -116,6 +124,7 @@ extern const char *object_getClassName(id obj);
 extern SEL sel_registerName(const char *str);
 extern Method class_getInstanceMethod(Class cls, SEL name);
 extern Method class_getClassMethod(Class cls, SEL name);
+extern BOOL class_respondsToSelector(Class cls, SEL sel);
 extern IMP method_getImplementation(Method m);
 extern IMP method_setImplementation(Method m, IMP imp);
 extern void objc_msgSend(void);
@@ -385,10 +394,13 @@ static const char *const k_boot_jobs[] = {
 	"com.apple.fseventsd",
 	"com.apple.containermanagerd",
 	"com.apple.containermanagerd.system",
+	"com.apple.containermanagerd_system",
 	"com.apple.runningboardd",
 	"com.apple.backboardd",
 	"com.apple.mobile.usermanagerd",
+	"com.apple.usermanagerd",
 	"com.apple.mobile.keybagd",
+	"com.apple.keybagd",
 	"com.apple.mobilegestalt.xpc",
 	"com.apple.lsd",
 	"com.apple.powerd",
@@ -397,24 +409,39 @@ static const char *const k_boot_jobs[] = {
 	"com.apple.iconservices.iconservicesagent",
 	"com.apple.pluginkit.pkd",
 	"com.apple.SpringBoard",
-	"com.apple.wifid",
 };
 
 static const char *const k_deny_substrings[] = {
-	"watchdog", "CommCenter", "bluetooth", "BTServer", "cloudpaird",
-	"WirelessRadioManager", "wirelessproxd", "locationd", "softwareupdate",
-	"datamigrator", "backupd", "thermalmonitord", "nfcd", "seld",
-	"biometrickitd", "pearld", "obliterat", "storage_mounter",
-	"com.apple.fud", "sepd", "seputil", "camera", "ReportCrash",
-	"osanalytics", "DumpPanic", "OTACrashCopier", "lockdown",
-	"jetsamproperties", "purplebuddy", "restore", "usb", "accessoryd",
-	"accessoryupdaterd", "mobileassetd", "bird", "homed", "routined",
-	"duetexpertd", "com.apple.dmd", "syncdefaultsd", "photoanalysisd",
-	"avconferenced", "driverkitd", "fairplayd", "nanoprefsyncd",
-	"nanoregistry", "wcd", "atc", "ptpd", "remoted", "IOMFB_FDR_Loader",
-	"passd", "assistantd", "voiced", "siri", "parsec", "remindd",
-	"navd", "healthd", "imagent", "identityservicesd", "sharingd",
-	"rapportd", "searchpartyd", "findmy", "biomed", "contextstored", "dasd"
+	"watchdog", "CommCenter", "wifi", "WiFi", "WirelessRadioManager",
+	"wirelessproxd", "bluetooth", "BTServer", "cloudpaird", "locationd",
+	"softwareupdate", "datamigrator", "backupd", "thermalmonitord",
+	"nfcd", "seld", "biometrickitd", "pearld", "obliterat",
+	"storage_mounter", "com.apple.fud", "sepd", "seputil", "camera",
+	"ReportCrash", "ReportMemoryException", "Spindump", "TailSpin",
+	"osanalytics", "DumpPanic", "OTACrashCopier",
+	"lockdown", "audio", "jetsamproperties", "purplebuddy", "restore",
+	"usb", "accessoryd", "accessoryupdaterd", "Accessories", "BlueTool",
+	"mobileassetd", "bird", "homed", "routined", "duetexpertd",
+	"com.apple.dmd", "syncdefaultsd", "photoanalysisd", "avconferenced",
+	"driverkitd", "fairplayd", "corespeechd", "wifianalyticsd", "carkitd",
+	"awdd", "nanoprefsyncd", "nanoregistry", "nano", "wcd", "atc", "ptpd",
+	"remoted", "IOMFB_FDR_Loader",
+	/* Prevent UserEventAgent & background widget/sync daemons from auto-spawning at boot: */
+	"UserEventAgent", "dasd", "biomed", "biomesyncd", "contextstored",
+	"coreduetd", "rapportd", "sharingd", "assistantd", "voiced",
+	"imagent", "searchd", "spotlight", "parsec", "proactiveeventtrackerd",
+	"UsageTrackingAgent", "ScreenTimeAgent", "SafariBookmarksSyncAgent",
+	"healthd", "chronod", "PosterBoard", "mediaanalysisd", "suggestd",
+	"cloudd", "passd", "identityservicesd", "apsd", "triald", "fmfd",
+	"CallHistorySyncHelper", "amsaccountsd", "amsengagementd",
+	"appleaccountd", "adid", "adprivacyd", "rtcreportingd", "symptomsd",
+	"aggregated", "destinationd", "navd", "geod", "vmd", "sleepd",
+	"sociallayerd", "familycircled", "askpermissiond", "followupd",
+	"cdpd", "coreidvd", "transparencyd", "safetyalertsd",
+	"liveactivitiesd", "donotdisturbd", "financed", "useractivityd",
+	"contactsdonationagent", "ScreenTime", "callservicesd", "GSSCred",
+	"pfd", "deleted", "FTConversationService", "findmydeviced",
+	"searchpartyd", "siri", "Siri", "proactive", "duet", "biome"
 };
 
 static const char *const k_autostart_keys[] = {
@@ -520,14 +547,17 @@ xzs_prune_launchd_plist(void)
 		xzs_dict_remove_key(job, "_LimitLoadToDeviceTree");
 
 		if (xzs_is_boot_job(label)) {
-			if (strcmp(label, "com.apple.lsd") == 0) {
+			if (strcmp(label, "com.apple.lsd") == 0 ||
+			    strcmp(label, "com.apple.iconservices.iconservicesagent") == 0 ||
+			    strcmp(label, "com.apple.pluginkit.pkd") == 0) {
 				xzs_dict_set_bool(job, "RunAtLoad", true);
 			}
 			boot_cnt++;
 			continue;
 		}
 
-		if (xzs_is_denied_job(path, label)) {
+		if (xzs_is_denied_job(path, label) ||
+		    strcmp(label, "com.apple.AggregateDictionary.addaily") == 0) {
 			CFDictionaryRemoveValue(daemons, k_cf);
 			dropped_cnt++;
 			continue;
@@ -559,7 +589,7 @@ xzs_prune_launchd_plist(void)
 static void
 xzs_unlink_matching_recursive(const char *dir_path, int depth)
 {
-	if (depth > 4) {
+	if (depth > 9) {
 		return;
 	}
 	DIR *d = opendir(dir_path);
@@ -572,14 +602,26 @@ xzs_unlink_matching_recursive(const char *dir_path, int depth)
 		    (de->d_name[1] == '\0' || (de->d_name[1] == '.' && de->d_name[2] == '\0'))) {
 			continue;
 		}
+		if (strcmp(de->d_name, "staged_system_apps") == 0 ||
+		    strcmp(de->d_name, "Bins") == 0) {
+			continue;
+		}
 		char child[512];
 		snprintf(child, sizeof(child), "%s/%s", dir_path, de->d_name);
-		if (de->d_type == DT_DIR) {
+		if (de->d_type == DT_DIR || de->d_type == 0) {
 			xzs_unlink_matching_recursive(child, depth + 1);
-		} else if (strstr(de->d_name, "LaunchServices") != NULL ||
-		           strstr(de->d_name, ".csstore") != NULL ||
-		           strstr(de->d_name, "lsdidentifiers") != NULL ||
-		           strstr(de->d_name, "IconsCache") != NULL) {
+		}
+		if (strstr(de->d_name, "LaunchServices") != NULL ||
+		    strstr(de->d_name, ".csstore") != NULL ||
+		    strstr(de->d_name, "lsdidentifiers") != NULL ||
+		    strstr(de->d_name, "IconsCache") != NULL ||
+		    strstr(de->d_name, "SystemAppInstallState.plist") != NULL ||
+		    strstr(de->d_name, "UninstalledApplications.plist") != NULL ||
+		    strstr(de->d_name, "LastLaunchServicesMap.plist") != NULL ||
+		    strstr(de->d_name, "LastBuildInfo.plist") != NULL ||
+		    strstr(de->d_name, "IconState.plist") != NULL ||
+		    strstr(de->d_name, "DesiredIconState.plist") != NULL ||
+		    strstr(de->d_name, "IconSupportState.plist") != NULL) {
 			if (unlink(child) == 0) {
 				xzs_log("[XZS-INJECT] unlinked stale cache: %s\n", child);
 			}
@@ -591,6 +633,34 @@ xzs_unlink_matching_recursive(const char *dir_path, int depth)
 static void
 xzs_setup_preferences_and_apps(void)
 {
+	/* 0. Disable /System/Library/AppPlaceholders, create SAD canary, and disable chronod widget storm */
+	(void)rename("/System/Library/AppPlaceholders", "/System/Library/AppPlaceholders.disabled");
+	uint8_t sad_one = '1';
+	(void)xzs_write_file_bytes("/System/Library/disableSystemAppDeletion", &sad_one, 1, 0644, 0, 0);
+	(void)rename("/System/Library/PrivateFrameworks/DataMigration.framework/XPCServices/com.apple.datamigrator.xpc.disabled",
+	    "/System/Library/PrivateFrameworks/DataMigration.framework/XPCServices/com.apple.datamigrator.xpc");
+	(void)rename("/System/Library/PrivateFrameworks/ChronoCore.framework/Support/chronod",
+	    "/System/Library/PrivateFrameworks/ChronoCore.framework/Support/chronod.disabled");
+
+	/* Restore any entries moved to /private/var/containers/Data/System.old */
+	(void)mkdir("/private/var/containers", 0755);
+	(void)mkdir("/private/var/containers/Data", 0755);
+	(void)mkdir("/private/var/containers/Data/System", 0755);
+	DIR *old_sys = opendir("/private/var/containers/Data/System.old");
+	if (old_sys) {
+		struct dirent *de;
+		while ((de = readdir(old_sys)) != NULL) {
+			if (de->d_name[0] == '.') {
+				continue;
+			}
+			char src[256], dst[256];
+			snprintf(src, sizeof(src), "/private/var/containers/Data/System.old/%s", de->d_name);
+			snprintf(dst, sizeof(dst), "/private/var/containers/Data/System/%s", de->d_name);
+			(void)rename(src, dst);
+		}
+		closedir(old_sys);
+	}
+
 	/* 1. Promote any remaining staged_system_apps to /Applications */
 	uint32_t moved = 0, total_apps = 0;
 	DIR *sd = opendir("/private/var/staged_system_apps");
@@ -621,14 +691,77 @@ xzs_setup_preferences_and_apps(void)
 		closedir(ad);
 	}
 
-	/* 2. Ensure /private/var/mobile/tmp and Preferences exist */
+	/* 2. Ensure /private/var/mobile/tmp, SpringBoard, and Preferences exist */
 	(void)mkdir("/private/var/mobile/tmp", 0700);
 	(void)chown("/private/var/mobile/tmp", 501, 501);
 	(void)mkdir("/private/var/mobile/Library", 0755);
 	(void)chown("/private/var/mobile/Library", 501, 501);
+	(void)mkdir("/private/var/mobile/Library/SpringBoard", 0755);
+	(void)chown("/private/var/mobile/Library/SpringBoard", 501, 501);
 	(void)mkdir("/private/var/mobile/Library/Preferences", 0755);
 	(void)chown("/private/var/mobile/Library/Preferences", 501, 501);
 
+	/* com.apple.migration.plist — prevent datamigrator from running on boot */
+	{
+		static const char *const mig_paths[] = {
+			"/private/var/mobile/Library/Preferences/com.apple.migration.plist",
+			"/private/var/root/Library/Preferences/com.apple.migration.plist",
+			"/Library/Preferences/com.apple.migration.plist"
+		};
+		(void)mkdir("/private/var/root", 0755);
+		(void)mkdir("/private/var/root/Library", 0755);
+		(void)mkdir("/private/var/root/Library/Preferences", 0755);
+		for (size_t mi = 0; mi < sizeof(mig_paths) / sizeof(mig_paths[0]); mi++) {
+			const char *p = mig_paths[mi];
+			uid_t owner = (mi == 0) ? 501 : 0;
+			CFMutableDictionaryRef d = xzs_load_or_create_mutable_dict(p);
+			if (d) {
+				xzs_dict_set_str(d, "LastSystemVersion", "20H392");
+				CFMutableDictionaryRef res = CFDictionaryCreateMutable(kCFAllocatorDefault, 0,
+				    &kCFTypeDictionaryKeyCallBacks, &kCFTypeDictionaryValueCallBacks);
+				if (res) {
+					xzs_dict_set_str(res, "buildVersion", "20H392");
+					xzs_dict_set_bool(res, "success", true);
+					CFStringRef rk = CFStringCreateWithCString(kCFAllocatorDefault,
+					    "DMLastMigrationResults", kCFStringEncodingUTF8);
+					if (rk) {
+						CFDictionarySetValue(d, rk, res);
+						CFRelease(rk);
+					}
+					CFRelease(res);
+				}
+				CFMutableDictionaryRef disp = CFDictionaryCreateMutable(kCFAllocatorDefault, 0,
+				    &kCFTypeDictionaryKeyCallBacks, &kCFTypeDictionaryValueCallBacks);
+				if (disp) {
+					xzs_dict_set_str(disp, "buildVersion", "20H392");
+					xzs_dict_set_bool(disp, "SyntheticDidUpgrade", false);
+					CFStringRef dk = CFStringCreateWithCString(kCFAllocatorDefault,
+					    "DMUserDataDisposition", kCFStringEncodingUTF8);
+					if (dk) {
+						CFDictionarySetValue(d, dk, disp);
+						CFRelease(dk);
+					}
+					CFRelease(disp);
+				}
+				(void)xzs_write_plist_file(p, d, 0644, owner, owner);
+				CFRelease(d);
+			}
+		}
+	}
+	/* com.apple.purplebuddy.plist — mark Setup Assistant complete */
+	{
+		const char *p = "/private/var/mobile/Library/Preferences/com.apple.purplebuddy.plist";
+		CFMutableDictionaryRef d = xzs_load_or_create_mutable_dict(p);
+		if (d) {
+			xzs_dict_set_bool(d, "SetupDone", true);
+			xzs_dict_set_bool(d, "SetupFinishedAllSteps", true);
+			xzs_dict_set_int32(d, "SetupVersion", 11);
+			xzs_dict_set_str(d, "SetupState", "SetupUsingAssistant");
+			xzs_dict_set_bool(d, "ForceNoBuddy", true);
+			(void)xzs_write_plist_file(p, d, 0644, 501, 501);
+			CFRelease(d);
+		}
+	}
 	/* com.apple.springboard.plist */
 	{
 		const char *p = "/private/var/mobile/Library/Preferences/com.apple.springboard.plist";
@@ -639,7 +772,7 @@ xzs_setup_preferences_and_apps(void)
 			xzs_dict_set_f64(d, "FBLaunchWatchdogScale", 20.0);
 			xzs_dict_set_bool(d, "SBShowBatteryPercentage", true);
 			xzs_dict_set_bool(d, "MCForceShowCloudConfigurationUI", false);
-			(void)xzs_write_plist_file(p, d, 0600, 501, 501);
+			(void)xzs_write_plist_file(p, d, 0644, 501, 501);
 			CFRelease(d);
 		}
 	}
@@ -649,7 +782,7 @@ xzs_setup_preferences_and_apps(void)
 		CFMutableDictionaryRef d = xzs_load_or_create_mutable_dict(p);
 		if (d) {
 			xzs_dict_set_f64(d, "FBLaunchWatchdogScale", 20.0);
-			(void)xzs_write_plist_file(p, d, 0600, 501, 501);
+			(void)xzs_write_plist_file(p, d, 0644, 501, 501);
 			CFRelease(d);
 		}
 	}
@@ -660,7 +793,7 @@ xzs_setup_preferences_and_apps(void)
 		if (d) {
 			xzs_dict_set_str(d, "threading", "auto");
 			xzs_dict_set_str(d, "max-threads", "7");
-			(void)xzs_write_plist_file(p, d, 0600, 501, 501);
+			(void)xzs_write_plist_file(p, d, 0644, 501, 501);
 			CFRelease(d);
 		}
 	}
@@ -670,30 +803,29 @@ xzs_setup_preferences_and_apps(void)
 		CFMutableDictionaryRef d = xzs_load_or_create_mutable_dict(p);
 		if (d) {
 			xzs_dict_set_int32(d, "wirelessdisplay_max_count", 0);
-			(void)xzs_write_plist_file(p, d, 0600, 501, 501);
+			(void)xzs_write_plist_file(p, d, 0644, 501, 501);
 			CFRelease(d);
 		}
 	}
 
 	/* 3. One-time reset of stale 1-page IconState.plist & lsd .csstore caches */
-	const char *marker = "/private/var/db/.xzs_userland_v4_done";
+	const char *marker = "/private/var/db/.xzs_userland_v8_done";
 	if (moved > 0 || !xzs_file_exists(marker)) {
 		(void)unlink("/private/var/mobile/Library/SpringBoard/IconState.plist");
 		(void)unlink("/private/var/mobile/Library/SpringBoard/DesiredIconState.plist");
 		(void)unlink("/private/var/mobile/Library/SpringBoard/IconSupportState.plist");
+		(void)unlink("/private/var/mobile/Library/SpringBoard/TodayViewArchive.plist");
 
-		xzs_unlink_matching_recursive("/private/var/db/lsd", 0);
-		xzs_unlink_matching_recursive("/private/var/mobile/Library/Caches", 0);
-		xzs_unlink_matching_recursive("/private/var/containers/Shared/SystemGroup", 0);
-		xzs_unlink_matching_recursive("/private/var/containers/Data/System", 0);
+		xzs_unlink_matching_recursive("/private/var", 0);
 
 		uint8_t one = '1';
 		(void)xzs_write_file_bytes(marker, &one, 1, 0644, 0, 0);
-		(void)xzs_write_file_bytes("/private/var/db/.xzs_sb_rebuild_delay", &one, 1, 0644, 0, 0);
-		xzs_log("[XZS-INJECT] launchd_cache_loader: reset IconState & lsd caches (moved=%u total_apps=%u)\n",
+		(void)xzs_write_file_bytes("/private/var/mobile/Library/SpringBoard/.xzs_sb_rebuild_delay",
+		    &one, 1, 0644, 501, 501);
+		xzs_log("[XZS-INJECT] tzinit: reset IconState, MobileInstallation & lsd caches across /private/var (moved=%u total_apps=%u)\n",
 		    moved, total_apps);
 	} else {
-		xzs_log("[XZS-INJECT] launchd_cache_loader: prefs updated (total_apps=%u)\n", total_apps);
+		xzs_log("[XZS-INJECT] tzinit: prefs updated (total_apps=%u)\n", total_apps);
 	}
 }
 
@@ -753,8 +885,16 @@ xzs_sb_snapshot_output_format(__unused id self, __unused SEL _cmd, id snapshot)
 }
 
 static BOOL
-xzs_sb_poster_switcher_allowed(__unused id self, __unused SEL _cmd, __unused id *explanation)
+xzs_sb_poster_switcher_allowed(__unused id self, __unused SEL _cmd, id *explanation)
 {
+	if (explanation != NULL) {
+		static CFStringRef s_exp = NULL;
+		if (!s_exp) {
+			s_exp = CFStringCreateWithCString(kCFAllocatorDefault,
+			    "PosterSwitcher disabled on XZS SW renderer", kCFStringEncodingUTF8);
+		}
+		*explanation = (id)s_exp;
+	}
 	return NO;
 }
 
@@ -787,15 +927,483 @@ xzs_sb_image_added(__unused const struct mach_header *mh, __unused intptr_t slid
 	}
 }
 
+typedef struct {
+	double x, y;
+} xzs_cgpoint_t;
+
+typedef struct {
+	double width, height;
+} xzs_cgsize_t;
+
+typedef struct {
+	xzs_cgpoint_t origin;
+	xzs_cgsize_t size;
+} xzs_cgrect_t;
+
+static void
+xzs_strip_ca_filters_recursive(id layer, int depth)
+{
+	if (!layer || depth > 8) {
+		return;
+	}
+	SEL sel_set_filters = sel_registerName("setFilters:");
+	SEL sel_set_comp = sel_registerName("setCompositingFilter:");
+	SEL sel_sublayers = sel_registerName("sublayers");
+	if (class_respondsToSelector(object_getClass(layer), sel_set_filters)) {
+		((void (*)(id, SEL, id))objc_msgSend)(layer, sel_set_filters, NULL);
+	}
+	if (class_respondsToSelector(object_getClass(layer), sel_set_comp)) {
+		((void (*)(id, SEL, id))objc_msgSend)(layer, sel_set_comp, NULL);
+	}
+	if (class_respondsToSelector(object_getClass(layer), sel_sublayers)) {
+		id subs = ((id (*)(id, SEL))objc_msgSend)(layer, sel_sublayers);
+		long cnt = subs ? ((long (*)(id, SEL))objc_msgSend)(subs, sel_registerName("count")) : 0;
+		for (long i = 0; i < cnt; i++) {
+			id sub = ((id (*)(id, SEL, long))objc_msgSend)(subs, sel_registerName("objectAtIndex:"), i);
+			xzs_strip_ca_filters_recursive(sub, depth + 1);
+		}
+	}
+}
+
+static id
+xzs_uicolor_rgba(double r, double g, double b, double a)
+{
+	Class cls_color = objc_getClass("UIColor");
+	SEL sel_rgba = sel_registerName("colorWithRed:green:blue:alpha:");
+	if (!cls_color || !class_getClassMethod(cls_color, sel_rgba)) {
+		return NULL;
+	}
+	return ((id (*)(Class, SEL, double, double, double, double))objc_msgSend)(cls_color, sel_rgba, r, g, b, a);
+}
+
+static void *
+xzs_cgcolor_rgba(double r, double g, double b, double a)
+{
+	id uic = xzs_uicolor_rgba(r, g, b, a);
+	if (!uic) {
+		return NULL;
+	}
+	return ((void *(*)(id, SEL))objc_msgSend)(uic, sel_registerName("CGColor"));
+}
+
+static void
+xzs_sb_ensure_wallpaper(void)
+{
+	Class cls_wc = objc_getClass("SBWallpaperController");
+	SEL sel_shared = sel_registerName("sharedInstance");
+	SEL sel_win = sel_registerName("_window");
+	if (!cls_wc || !class_getClassMethod(cls_wc, sel_shared)) {
+		return;
+	}
+	id wc = ((id (*)(Class, SEL))objc_msgSend)(cls_wc, sel_shared);
+	if (!wc || !class_respondsToSelector(object_getClass(wc), sel_win)) {
+		return;
+	}
+	id wp_win = ((id (*)(id, SEL))objc_msgSend)(wc, sel_win);
+	if (!wp_win) {
+		return;
+	}
+
+	const long k_wall_tag = 0x585a5357L; /* 'XZSW' */
+	id existing = ((id (*)(id, SEL, long))objc_msgSend)(wp_win, sel_registerName("viewWithTag:"), k_wall_tag);
+	if (existing) {
+		((void (*)(id, SEL, id))objc_msgSend)(wp_win, sel_registerName("bringSubviewToFront:"), existing);
+		return;
+	}
+
+	xzs_cgrect_t bounds = ((xzs_cgrect_t (*)(id, SEL))objc_msgSend)(wp_win, sel_registerName("bounds"));
+	if (bounds.size.width <= 0.0 || bounds.size.height <= 0.0) {
+		bounds.origin.x = 0.0;
+		bounds.origin.y = 0.0;
+		bounds.size.width = 375.0;
+		bounds.size.height = 812.0;
+	}
+
+	Class cls_view = objc_getClass("UIView");
+	Class cls_grad = objc_getClass("CAGradientLayer");
+	Class cls_arr = objc_getClass("NSMutableArray");
+	if (!cls_view || !cls_grad || !cls_arr) {
+		return;
+	}
+
+	id wall_view = ((id (*)(id, SEL, xzs_cgrect_t))objc_msgSend)(
+	    ((id (*)(Class, SEL))objc_msgSend)(cls_view, sel_registerName("alloc")),
+	    sel_registerName("initWithFrame:"), bounds);
+	if (!wall_view) {
+		return;
+	}
+	((void (*)(id, SEL, long))objc_msgSend)(wall_view, sel_registerName("setTag:"), k_wall_tag);
+	((void (*)(id, SEL, BOOL))objc_msgSend)(wall_view, sel_registerName("setUserInteractionEnabled:"), NO);
+	((void (*)(id, SEL, unsigned long))objc_msgSend)(wall_view, sel_registerName("setAutoresizingMask:"), 18UL);
+
+	id root_layer = ((id (*)(id, SEL))objc_msgSend)(wall_view, sel_registerName("layer"));
+
+	/* 1. Base iOS 16 WWDC 2022 gradient layer (exact CAML colors from 7400.WWDC_2022) */
+	id grad = ((id (*)(Class, SEL))objc_msgSend)(cls_grad, sel_registerName("layer"));
+	if (grad && root_layer) {
+		((void (*)(id, SEL, xzs_cgrect_t))objc_msgSend)(grad, sel_registerName("setFrame:"), bounds);
+		id colors = ((id (*)(Class, SEL))objc_msgSend)(cls_arr, sel_registerName("array"));
+		void *c0 = xzs_cgcolor_rgba(0.005, 0.433, 0.786, 1.0);
+		void *c1 = xzs_cgcolor_rgba(0.060, 0.541, 0.798, 1.0);
+		void *c2 = xzs_cgcolor_rgba(0.016, 0.690, 0.761, 1.0);
+		void *c3 = xzs_cgcolor_rgba(0.096, 0.283, 0.644, 1.0);
+		if (c0) ((void (*)(id, SEL, void *))objc_msgSend)(colors, sel_registerName("addObject:"), c0);
+		if (c1) ((void (*)(id, SEL, void *))objc_msgSend)(colors, sel_registerName("addObject:"), c1);
+		if (c2) ((void (*)(id, SEL, void *))objc_msgSend)(colors, sel_registerName("addObject:"), c2);
+		if (c3) ((void (*)(id, SEL, void *))objc_msgSend)(colors, sel_registerName("addObject:"), c3);
+		((void (*)(id, SEL, id))objc_msgSend)(grad, sel_registerName("setColors:"), colors);
+		xzs_cgpoint_t sp = { 0.0, 0.0 }, ep = { 1.0, 1.0 };
+		((void (*)(id, SEL, xzs_cgpoint_t))objc_msgSend)(grad, sel_registerName("setStartPoint:"), sp);
+		((void (*)(id, SEL, xzs_cgpoint_t))objc_msgSend)(grad, sel_registerName("setEndPoint:"), ep);
+		((void (*)(id, SEL, id))objc_msgSend)(root_layer, sel_registerName("addSublayer:"), grad);
+	}
+
+	/* 2. Soft iOS 16 WWDC 2022 layered wave arches (pure CoreAnimation, no Metal needed) */
+	static const struct {
+		double x, y, w, h, radius;
+		double r0, g0, b0, a0;
+		double r1, g1, b1, a1;
+	} k_arches[] = {
+		{ -90.0, 120.0, 480.0, 480.0, 240.0, 0.04, 0.78, 0.84, 0.85, 0.02, 0.36, 0.75, 0.90 },
+		{  20.0, 290.0, 460.0, 460.0, 230.0, 0.96, 0.78, 0.26, 0.82, 0.04, 0.68, 0.76, 0.88 },
+		{ -60.0, 470.0, 500.0, 500.0, 250.0, 0.08, 0.56, 0.88, 0.90, 0.05, 0.18, 0.52, 0.95 }
+	};
+	for (size_t i = 0; i < sizeof(k_arches) / sizeof(k_arches[0]); i++) {
+		id arch = ((id (*)(Class, SEL))objc_msgSend)(cls_grad, sel_registerName("layer"));
+		if (!arch || !root_layer) {
+			continue;
+		}
+		xzs_cgrect_t af = { { k_arches[i].x, k_arches[i].y }, { k_arches[i].w, k_arches[i].h } };
+		((void (*)(id, SEL, xzs_cgrect_t))objc_msgSend)(arch, sel_registerName("setFrame:"), af);
+		((void (*)(id, SEL, double))objc_msgSend)(arch, sel_registerName("setCornerRadius:"), k_arches[i].radius);
+		((void (*)(id, SEL, BOOL))objc_msgSend)(arch, sel_registerName("setMasksToBounds:"), YES);
+		id acolors = ((id (*)(Class, SEL))objc_msgSend)(cls_arr, sel_registerName("array"));
+		void *ac0 = xzs_cgcolor_rgba(k_arches[i].r0, k_arches[i].g0, k_arches[i].b0, k_arches[i].a0);
+		void *ac1 = xzs_cgcolor_rgba(k_arches[i].r1, k_arches[i].g1, k_arches[i].b1, k_arches[i].a1);
+		if (ac0) ((void (*)(id, SEL, void *))objc_msgSend)(acolors, sel_registerName("addObject:"), ac0);
+		if (ac1) ((void (*)(id, SEL, void *))objc_msgSend)(acolors, sel_registerName("addObject:"), ac1);
+		((void (*)(id, SEL, id))objc_msgSend)(arch, sel_registerName("setColors:"), acolors);
+		xzs_cgpoint_t asp = { 0.2, 0.0 }, aep = { 0.8, 1.0 };
+		((void (*)(id, SEL, xzs_cgpoint_t))objc_msgSend)(arch, sel_registerName("setStartPoint:"), asp);
+		((void (*)(id, SEL, xzs_cgpoint_t))objc_msgSend)(arch, sel_registerName("setEndPoint:"), aep);
+		((void (*)(id, SEL, id))objc_msgSend)(root_layer, sel_registerName("addSublayer:"), arch);
+	}
+
+	/* 3. Also load official 7400.WWDC_2022 .ca packages if HEIC assets decode */
+	Class cls_capkg = objc_getClass("CAPackage");
+	Class cls_url = objc_getClass("NSURL");
+	SEL sel_pkg = sel_registerName("packageWithContentsOfURL:type:options:error:");
+	if (cls_capkg && cls_url && class_getClassMethod(cls_capkg, sel_pkg)) {
+		static const char *const k_ca_paths[] = {
+			"/Library/Wallpaper/Collections/iOS_16~iphone.wallpaperCollection/Wallpapers/7400.WWDC_2022-375w-812h@3x~iphone.wallpaper/7400.WWDC_2022_Background-375w-812h@3x~iphone.ca",
+			"/Library/Wallpaper/Collections/iOS_16~iphone.wallpaperCollection/Wallpapers/7400.WWDC_2022-375w-812h@3x~iphone.wallpaper/7400.WWDC_2022_Floating-375w-812h@3x~iphone.ca",
+			"/Library/Wallpaper/Collections/iOS_16~iphone.wallpaperCollection/Wallpapers/7400.WWDC_2022-375w-812h@3x~iphone.wallpaper/7400.WWDC_2022_Foreground-375w-812h@3x~iphone.ca"
+		};
+		CFStringRef pkg_type = CFStringCreateWithCString(kCFAllocatorDefault,
+		    "com.apple.coreanimation-bundle", kCFStringEncodingUTF8);
+		for (size_t i = 0; i < sizeof(k_ca_paths) / sizeof(k_ca_paths[0]); i++) {
+			CFStringRef p_cf = CFStringCreateWithCString(kCFAllocatorDefault,
+			    k_ca_paths[i], kCFStringEncodingUTF8);
+			if (!p_cf) {
+				continue;
+			}
+			id url = ((id (*)(Class, SEL, id))objc_msgSend)(cls_url,
+			    sel_registerName("fileURLWithPath:"), (id)p_cf);
+			if (url) {
+				id err = NULL;
+				id pkg = ((id (*)(Class, SEL, id, id, id, id *))objc_msgSend)(
+				    cls_capkg, sel_pkg, url, (id)pkg_type, NULL, &err);
+				id rl = pkg ? ((id (*)(id, SEL))objc_msgSend)(pkg, sel_registerName("rootLayer")) : NULL;
+				if (rl && root_layer) {
+					xzs_strip_ca_filters_recursive(rl, 0);
+					((void (*)(id, SEL, BOOL))objc_msgSend)(rl, sel_registerName("setGeometryFlipped:"), YES);
+					((void (*)(id, SEL, id))objc_msgSend)(root_layer, sel_registerName("addSublayer:"), rl);
+				}
+			}
+			CFRelease(p_cf);
+		}
+		if (pkg_type) {
+			CFRelease(pkg_type);
+		}
+	}
+
+	((void (*)(id, SEL, BOOL))objc_msgSend)(wp_win, sel_registerName("setHidden:"), NO);
+	((void (*)(id, SEL, double))objc_msgSend)(wp_win, sel_registerName("setAlpha:"), 1.0);
+	((void (*)(id, SEL, id))objc_msgSend)(wp_win, sel_registerName("addSubview:"), wall_view);
+	((void (*)(id, SEL, id))objc_msgSend)(wp_win, sel_registerName("bringSubviewToFront:"), wall_view);
+	xzs_log("[XZS-INJECT] SpringBoard: installed iOS 16 WWDC22 wallpaper into _SBWallpaperSecureWindow (%.0fx%.0f)\n",
+	    bounds.size.width, bounds.size.height);
+}
+
+static void
+xzs_sb_ensure_all_apps(id model)
+{
+	static const struct {
+		const char *app_dir;
+		const char *bundle_id;
+	} k_promoted_apps[] = {
+		{ "AppleTV.app", "com.apple.tv" },
+		{ "Books.app", "com.apple.iBooks" },
+		{ "Bridge.app", "com.apple.Bridge" },
+		{ "Calculator.app", "com.apple.calculator" },
+		{ "Compass.app", "com.apple.compass" },
+		{ "Contacts.app", "com.apple.MobileAddressBook" },
+		{ "FaceTime.app", "com.apple.facetime" },
+		{ "Files.app", "com.apple.DocumentsApp" },
+		{ "FindMy.app", "com.apple.findmy" },
+		{ "Fitness.app", "com.apple.Fitness" },
+		{ "Freeform.app", "com.apple.freeform" },
+		{ "Home.app", "com.apple.Home" },
+		{ "Magnifier.app", "com.apple.Magnifier" },
+		{ "Maps.app", "com.apple.Maps" },
+		{ "Measure.app", "com.apple.measure" },
+		{ "MobileCal.app", "com.apple.mobilecal" },
+		{ "MobileMail.app", "com.apple.mobilemail" },
+		{ "MobileNotes.app", "com.apple.mobilenotes" },
+		{ "MobileStore.app", "com.apple.MobileStore" },
+		{ "MobileTimer.app", "com.apple.mobiletimer" },
+		{ "Music.app", "com.apple.Music" },
+		{ "News.app", "com.apple.news" },
+		{ "Passbook.app", "com.apple.Passbook" },
+		{ "Podcasts.app", "com.apple.podcasts" },
+		{ "Reminders.app", "com.apple.reminders" },
+		{ "SequoiaTranslator.app", "com.apple.Translate" },
+		{ "Shortcuts.app", "com.apple.shortcuts" },
+		{ "Stocks.app", "com.apple.stocks" },
+		{ "Tips.app", "com.apple.tips" },
+		{ "VoiceMemos.app", "com.apple.VoiceMemos" },
+		{ "Weather.app", "com.apple.weather" }
+	};
+
+	Class cls_ws = objc_getClass("LSApplicationWorkspace");
+	Class cls_proxy = objc_getClass("LSApplicationProxy");
+	Class cls_rec = objc_getClass("LSApplicationRecord");
+	Class cls_appctrl = objc_getClass("SBApplicationController");
+	Class cls_url = objc_getClass("NSURL");
+	Class cls_set = objc_getClass("NSSet");
+	if (!cls_ws || !cls_appctrl || !cls_url) {
+		return;
+	}
+
+	id ws = ((id (*)(Class, SEL))objc_msgSend)(cls_ws, sel_registerName("defaultWorkspace"));
+	id appctrl = ((id (*)(Class, SEL))objc_msgSend)(cls_appctrl, sel_registerName("sharedInstance"));
+	if (!ws || !appctrl) {
+		return;
+	}
+
+	/* Clear any removed/demoted system app identifiers in LaunchServices */
+	SEL sel_set_removed = sel_registerName("_LSPrivateSetRemovedSystemAppIdentifiers:");
+	if (cls_set && class_respondsToSelector(object_getClass(ws), sel_set_removed)) {
+		id empty_set = ((id (*)(Class, SEL))objc_msgSend)(cls_set, sel_registerName("set"));
+		((void (*)(id, SEL, id))objc_msgSend)(ws, sel_set_removed, empty_set);
+	}
+
+	id ws_installed = ((id (*)(id, SEL))objc_msgSend)(ws, sel_registerName("allInstalledApplications"));
+	long ws_cnt = ws_installed ? ((long (*)(id, SEL))objc_msgSend)(ws_installed, sel_registerName("count")) : 0;
+	id sb_apps = ((id (*)(id, SEL))objc_msgSend)(appctrl, sel_registerName("allApplications"));
+	long sb_cnt = sb_apps ? ((long (*)(id, SEL))objc_msgSend)(sb_apps, sel_registerName("count")) : 0;
+	id applib = class_respondsToSelector(object_getClass(appctrl), sel_registerName("_appLibrary")) ?
+	    ((id (*)(id, SEL))objc_msgSend)(appctrl, sel_registerName("_appLibrary")) : NULL;
+
+	SEL sel_app_by_id = sel_registerName("applicationWithBundleIdentifier:");
+	SEL sel_reg_app = sel_registerName("registerApplication:");
+	SEL sel_restore_app = sel_registerName("restoreSystemApplication:");
+	SEL sel_add_proxy = sel_registerName("addApplicationProxy:withOverrideURL:");
+	SEL sel_add_sbapp = sel_registerName("addApplication:");
+
+	uint32_t missing_cnt = 0, registered_cnt = 0, added_proxy_cnt = 0, model_added_cnt = 0;
+	for (size_t i = 0; i < sizeof(k_promoted_apps) / sizeof(k_promoted_apps[0]); i++) {
+		char full_path[256];
+		snprintf(full_path, sizeof(full_path), "/Applications/%s", k_promoted_apps[i].app_dir);
+		if (!xzs_file_exists(full_path)) {
+			continue;
+		}
+		CFStringRef bid_cf = CFStringCreateWithCString(kCFAllocatorDefault,
+		    k_promoted_apps[i].bundle_id, kCFStringEncodingUTF8);
+		CFStringRef path_cf = CFStringCreateWithCString(kCFAllocatorDefault,
+		    full_path, kCFStringEncodingUTF8);
+		if (!bid_cf || !path_cf) {
+			if (bid_cf) CFRelease(bid_cf);
+			if (path_cf) CFRelease(path_cf);
+			continue;
+		}
+
+		id sb_app = ((id (*)(id, SEL, id))objc_msgSend)(appctrl, sel_app_by_id, (id)bid_cf);
+		if (!sb_app) {
+			missing_cnt++;
+			id burl = ((id (*)(Class, SEL, id))objc_msgSend)(cls_url,
+			    sel_registerName("fileURLWithPath:"), (id)path_cf);
+			if (burl) {
+				if (class_respondsToSelector(object_getClass(ws), sel_restore_app)) {
+					((BOOL (*)(id, SEL, id))objc_msgSend)(ws, sel_restore_app, burl);
+				}
+				if (class_respondsToSelector(object_getClass(ws), sel_reg_app)) {
+					if (((BOOL (*)(id, SEL, id))objc_msgSend)(ws, sel_reg_app, burl)) {
+						registered_cnt++;
+					}
+				}
+				id proxy = NULL;
+				if (cls_rec) {
+					id err = NULL;
+					id rec = ((id (*)(id, SEL, id, BOOL, id *))objc_msgSend)(
+					    ((id (*)(Class, SEL))objc_msgSend)(cls_rec, sel_registerName("alloc")),
+					    sel_registerName("initWithURL:allowPlaceholder:error:"),
+					    burl, NO, &err);
+					if (rec && class_respondsToSelector(object_getClass(rec), sel_registerName("compatibilityObject"))) {
+						proxy = ((id (*)(id, SEL))objc_msgSend)(rec, sel_registerName("compatibilityObject"));
+					}
+				}
+				if (!proxy && cls_proxy) {
+					proxy = ((id (*)(Class, SEL, id))objc_msgSend)(cls_proxy,
+					    sel_registerName("applicationProxyForIdentifier:"), (id)bid_cf);
+				}
+				if (proxy && applib && class_respondsToSelector(object_getClass(applib), sel_add_proxy)) {
+					((void (*)(id, SEL, id, id))objc_msgSend)(applib, sel_add_proxy, proxy, burl);
+					added_proxy_cnt++;
+				}
+			}
+			sb_app = ((id (*)(id, SEL, id))objc_msgSend)(appctrl, sel_app_by_id, (id)bid_cf);
+		}
+		if (sb_app && model && class_respondsToSelector(object_getClass(model), sel_add_sbapp)) {
+			((void (*)(id, SEL, id))objc_msgSend)(model, sel_add_sbapp, sb_app);
+			model_added_cnt++;
+		}
+
+		CFRelease(bid_cf);
+		CFRelease(path_cf);
+	}
+
+	xzs_log("[XZS-INJECT] SpringBoard: apps ws=%ld sb=%ld missing_promoted=%u ls_reg=%u applib_added=%u model_added=%u\n",
+	    ws_cnt, sb_cnt, missing_cnt, registered_cnt, added_proxy_cnt, model_added_cnt);
+}
+
+static void
+xzs_sb_post_boot_check(__unused void *ctx)
+{
+	/* 0. Ensure iOS 16 WWDC22 wallpaper is visible in _SBWallpaperSecureWindow */
+	xzs_sb_ensure_wallpaper();
+
+	/* 1. Auto-unlock Lock Screen unless autounlock=0 is set in boot-args */
+	char bootargs[512] = "";
+	size_t bsz = sizeof(bootargs) - 1;
+	bool autounlock = true;
+	if (sysctlbyname("kern.bootargs", bootargs, &bsz, NULL, 0) == 0 &&
+	    strstr(bootargs, "autounlock=0") != NULL) {
+		autounlock = false;
+	}
+	Class cls_lsm = objc_getClass("SBLockScreenManager");
+	SEL sel_shared = sel_registerName("sharedInstance");
+	SEL sel_locked = sel_registerName("isUILocked");
+	SEL sel_unlock = sel_registerName("unlockUIFromSource:withOptions:");
+	if (cls_lsm && class_getClassMethod(cls_lsm, sel_shared)) {
+		id lsm = ((id (*)(Class, SEL))objc_msgSend)(cls_lsm, sel_shared);
+		if (lsm && class_respondsToSelector(object_getClass(lsm), sel_locked)) {
+			BOOL locked = ((BOOL (*)(id, SEL))objc_msgSend)(lsm, sel_locked);
+			if (locked && autounlock && class_respondsToSelector(object_getClass(lsm), sel_unlock)) {
+				BOOL ok = ((BOOL (*)(id, SEL, long, id))objc_msgSend)(lsm, sel_unlock, 24L, NULL);
+				xzs_log("[XZS-INJECT] SpringBoard: SBLockScreenManager unlockUIFromSource:24 -> %d\n", ok ? 1 : 0);
+			} else {
+				xzs_log("[XZS-INJECT] SpringBoard: SBLockScreenManager isUILocked=%d\n", locked ? 1 : 0);
+			}
+		}
+	}
+
+	/* 2. Inspect SBIconController Home Screen pages & ensure all 39 apps are present */
+	Class cls_ic = objc_getClass("SBIconController");
+	if (cls_ic && class_getClassMethod(cls_ic, sel_shared)) {
+		id ic = ((id (*)(Class, SEL))objc_msgSend)(cls_ic, sel_shared);
+		SEL sel_model = sel_registerName("model");
+		SEL sel_rf = sel_registerName("rootFolder");
+		id model = (ic && class_respondsToSelector(object_getClass(ic), sel_model)) ?
+		    ((id (*)(id, SEL))objc_msgSend)(ic, sel_model) : NULL;
+
+		xzs_sb_ensure_all_apps(model);
+		if (model && class_respondsToSelector(object_getClass(model), sel_registerName("layout"))) {
+			((void (*)(id, SEL))objc_msgSend)(model, sel_registerName("layout"));
+		}
+		if (model && class_respondsToSelector(object_getClass(model), sel_registerName("saveIconStateIfNeeded"))) {
+			((void (*)(id, SEL))objc_msgSend)(model, sel_registerName("saveIconStateIfNeeded"));
+		}
+
+		id rf = (ic && class_respondsToSelector(object_getClass(ic), sel_rf)) ?
+		    ((id (*)(id, SEL))objc_msgSend)(ic, sel_rf) :
+		    ((model && class_respondsToSelector(object_getClass(model), sel_rf)) ?
+		     ((id (*)(id, SEL))objc_msgSend)(model, sel_rf) : NULL);
+		if (rf && class_respondsToSelector(object_getClass(rf), sel_registerName("lists"))) {
+			id lists = ((id (*)(id, SEL))objc_msgSend)(rf, sel_registerName("lists"));
+			long page_cnt = lists ? ((long (*)(id, SEL))objc_msgSend)(lists, sel_registerName("count")) : 0;
+			long p0_icons = 0, p1_icons = 0;
+			if (page_cnt >= 1) {
+				id l0 = ((id (*)(id, SEL, long))objc_msgSend)(lists, sel_registerName("objectAtIndex:"), 0);
+				if (l0 && class_respondsToSelector(object_getClass(l0), sel_registerName("numberOfIcons"))) {
+					p0_icons = ((long (*)(id, SEL))objc_msgSend)(l0, sel_registerName("numberOfIcons"));
+				}
+			}
+			if (page_cnt >= 2) {
+				id l1 = ((id (*)(id, SEL, long))objc_msgSend)(lists, sel_registerName("objectAtIndex:"), 1);
+				if (l1 && class_respondsToSelector(object_getClass(l1), sel_registerName("numberOfIcons"))) {
+					p1_icons = ((long (*)(id, SEL))objc_msgSend)(l1, sel_registerName("numberOfIcons"));
+				}
+			}
+			if (page_cnt < 2 && model) {
+				if (class_respondsToSelector(object_getClass(model), sel_registerName("clearDesiredIconStateWithOptions:"))) {
+					((void (*)(id, SEL, unsigned long))objc_msgSend)(model,
+					    sel_registerName("clearDesiredIconStateWithOptions:"), 0UL);
+				}
+				if (class_respondsToSelector(object_getClass(model), sel_registerName("loadAllIcons"))) {
+					((void (*)(id, SEL))objc_msgSend)(model, sel_registerName("loadAllIcons"));
+				}
+				if (class_respondsToSelector(object_getClass(model), sel_registerName("layout"))) {
+					((void (*)(id, SEL))objc_msgSend)(model, sel_registerName("layout"));
+				}
+				lists = ((id (*)(id, SEL))objc_msgSend)(rf, sel_registerName("lists"));
+				page_cnt = lists ? ((long (*)(id, SEL))objc_msgSend)(lists, sel_registerName("count")) : 0;
+				if (page_cnt >= 1) {
+					id l0 = ((id (*)(id, SEL, long))objc_msgSend)(lists, sel_registerName("objectAtIndex:"), 0);
+					if (l0 && class_respondsToSelector(object_getClass(l0), sel_registerName("numberOfIcons"))) {
+						p0_icons = ((long (*)(id, SEL))objc_msgSend)(l0, sel_registerName("numberOfIcons"));
+					}
+				}
+				if (page_cnt >= 2) {
+					id l1 = ((id (*)(id, SEL, long))objc_msgSend)(lists, sel_registerName("objectAtIndex:"), 1);
+					if (l1 && class_respondsToSelector(object_getClass(l1), sel_registerName("numberOfIcons"))) {
+						p1_icons = ((long (*)(id, SEL))objc_msgSend)(l1, sel_registerName("numberOfIcons"));
+					}
+				}
+				xzs_log("[XZS-INJECT] SpringBoard: rebuilt SBIconModel -> pages=%ld (page0=%ld icons, page1=%ld icons)\n",
+				    page_cnt, p0_icons, p1_icons);
+			} else {
+				xzs_log("[XZS-INJECT] SpringBoard: HomeScreen rootFolder pages=%ld (page0=%ld icons, page1=%ld icons)\n",
+				    page_cnt, p0_icons, p1_icons);
+			}
+		}
+	}
+
+	/* 3. Log visible UIWindow count */
+	Class cls_win = objc_getClass("UIWindow");
+	SEL sel_all = sel_registerName("allWindowsIncludingInternalWindows:onlyVisibleWindows:");
+	if (cls_win && class_getClassMethod(cls_win, sel_all)) {
+		id wins = ((id (*)(Class, SEL, BOOL, BOOL))objc_msgSend)(cls_win, sel_all, YES, YES);
+		long wcnt = wins ? ((long (*)(id, SEL))objc_msgSend)(wins, sel_registerName("count")) : 0;
+		xzs_log("[XZS-INJECT] SpringBoard: visible UIWindows=%ld\n", wcnt);
+	}
+}
+
 static void
 xzs_init_springboard(void)
 {
+	/* Point stdout to /dev/console so any framework diagnostics are visible */
+	int cfd = open("/dev/console", O_WRONLY | O_NOCTTY);
+	if (cfd >= 0) {
+		(void)dup2(cfd, 1);
+		close(cfd);
+	}
+
 	/* Force plain white vibrancy on Lock Screen clock (fixes red alpha mask on SW renderer) */
 	CFStringRef key = CFStringCreateWithCString(kCFAllocatorDefault,
 	    "BSUIVibrancyEffectViewDisabled", kCFStringEncodingUTF8);
 	if (key) {
 		CFPreferencesSetAppValue(key, kCFBooleanTrue, kCFPreferencesCurrentApplication);
-		(void)CFPreferencesAppSynchronize(kCFPreferencesCurrentApplication);
 		CFRelease(key);
 	}
 
@@ -837,20 +1445,29 @@ xzs_init_springboard(void)
 	_dyld_register_func_for_add_image(xzs_sb_image_added);
 
 	/*
-	 * Give lsd time to finish registering all 38 /Applications/<app> bundles
+	 * Give lsd time to finish registering all 39 /Applications/<app> bundles
 	 * before SpringBoard builds the 2-page Home Screen icon layout.
 	 */
-	const char *delay_marker = "/private/var/db/.xzs_sb_rebuild_delay";
+	const char *delay_marker = "/private/var/mobile/Library/SpringBoard/.xzs_sb_rebuild_delay";
 	if (xzs_file_exists(delay_marker)) {
 		(void)unlink(delay_marker);
-		xzs_log("[XZS-INJECT] SpringBoard[%d]: hooks active (plain_vibrancy=1, JPEG snapshots=1); waiting 4.0s for lsd rebuild\n",
+		xzs_log("[XZS-INJECT] SpringBoard[%d]: hooks active (plain_vibrancy=1, JPEG snapshots=1); waiting 6.0s for lsd 39-app rebuild\n",
 		    getpid());
-		usleep(4000000);
+		usleep(6000000);
 	} else {
-		xzs_log("[XZS-INJECT] SpringBoard[%d]: hooks active (plain_vibrancy=1, JPEG snapshots=1); waiting 2.0s for lsd\n",
+		xzs_log("[XZS-INJECT] SpringBoard[%d]: hooks active (plain_vibrancy=1, JPEG snapshots=1); waiting 3.0s for lsd\n",
 		    getpid());
-		usleep(2000000);
+		usleep(3000000);
 	}
+
+	dispatch_after_f(dispatch_time(DISPATCH_TIME_NOW, 4ULL * NSEC_PER_SEC),
+	    &_dispatch_main_q, NULL, xzs_sb_post_boot_check);
+	dispatch_after_f(dispatch_time(DISPATCH_TIME_NOW, 10ULL * NSEC_PER_SEC),
+	    &_dispatch_main_q, NULL, xzs_sb_post_boot_check);
+	dispatch_after_f(dispatch_time(DISPATCH_TIME_NOW, 20ULL * NSEC_PER_SEC),
+	    &_dispatch_main_q, NULL, xzs_sb_post_boot_check);
+	dispatch_after_f(dispatch_time(DISPATCH_TIME_NOW, 35ULL * NSEC_PER_SEC),
+	    &_dispatch_main_q, NULL, xzs_sb_post_boot_check);
 }
 
 /* ============================================================================

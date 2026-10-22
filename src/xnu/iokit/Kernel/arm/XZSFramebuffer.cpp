@@ -340,6 +340,7 @@ AppleCLCD::start(IOService *provider)
 void
 AppleCLCD::vsyncFired(OSObject *owner, IOTimerEventSource *sender)
 {
+	xzs_watchdog_pet();
 	AppleCLCD *fb = (AppleCLCD *)owner;
 	uint64_t now = mach_absolute_time();
 	uint64_t count = ++fb->fVsyncCount;

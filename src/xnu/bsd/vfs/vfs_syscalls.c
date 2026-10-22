@@ -10600,6 +10600,17 @@ xzs_promote_staged_system_apps(void)
 		}
 	}
 
+	/*
+	 * Disable /System/Library/AppPlaceholders so LaunchServices (lsd) indexes
+	 * the real promoted bundles in /Applications rather than treating them as
+	 * uninstalled placeholders.
+	 */
+	(void)renameat_internal(ctx, AT_FDCWD,
+	    CAST_USER_ADDR_T("/System/Library/AppPlaceholders"),
+	    AT_FDCWD,
+	    CAST_USER_ADDR_T("/System/Library/AppPlaceholders.disabled"),
+	    UIO_SYSSPACE, 0);
+
 	for (size_t i = 0; i < sizeof(k_staged_apps) / sizeof(k_staged_apps[0]); i++) {
 		char src[128], dst[128];
 		snprintf(src, sizeof(src), "/private/var/staged_system_apps/%s", k_staged_apps[i]);
@@ -10621,18 +10632,6 @@ xzs_promote_staged_system_apps(void)
 		for (size_t i = 0; i < sizeof(k_stale_files) / sizeof(k_stale_files[0]); i++) {
 			(void)unlinkat_internal(ctx, AT_FDCWD, NULLVP,
 			    CAST_USER_ADDR_T(k_stale_files[i]), UIO_SYSSPACE, 0);
-		}
-		if (renameat_internal(ctx, AT_FDCWD,
-		    CAST_USER_ADDR_T("/private/var/containers/Data/System"),
-		    AT_FDCWD,
-		    CAST_USER_ADDR_T("/private/var/containers/Data/System.old"),
-		    UIO_SYSSPACE, 0) == 0) {
-			struct vnode_attr va;
-			VATTR_INIT(&va);
-			VATTR_SET(&va, va_mode, 0755);
-			(void)mkdir1at(ctx,
-			    CAST_USER_ADDR_T("/private/var/containers/Data/System"),
-			    &va, AT_FDCWD, UIO_SYSSPACE);
 		}
 		printf("SWEET APPS: promoted %u stock apps from /private/var/staged_system_apps to /Applications\n",
 		    moved);

@@ -561,7 +561,7 @@ static uint32_t         gDarkWakeFlags = kDarkWakeFlagPromotionEarly;
 #endif /* !defined(XNU_TARGET_OS_OSX) */
 
 static uint32_t         gNoIdleFlag = 0;
-static uint32_t         gSleepDisabledFlag = 0;
+static uint32_t         gSleepDisabledFlag = 1;
 static uint32_t         gSwdPanic = 1;
 static uint32_t         gSwdSleepTimeout = 0;
 static uint32_t         gSwdWakeTimeout = 0;

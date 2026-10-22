@@ -5152,6 +5152,16 @@ memorystatus_on_ledger_footprint_exceeded(boolean_t warning, boolean_t memlimit_
 #endif /* VM_PRESSURE_EVENTS */
 
 	if (memlimit_is_fatal) {
+#if CONFIG_XZS_BRINGUP
+		/*
+		 * On XZS bringup (~3 GB RAM), prevent tight 6 MB per-process InactiveHard
+		 * Jetsam limits from killing iconservicesagent, lsd, SpringBoard, or
+		 * backboardd while rendering icons/surfaces when plenty of system RAM is free.
+		 */
+		if (memorystatus_available_pages > 16384) {
+			return;
+		}
+#endif /* CONFIG_XZS_BRINGUP */
 		/*
 		 * If this process has no high watermark or has a fatal task limit, then we have been invoked because the task
 		 * has violated either the system-wide per-task memory limit OR its own task limit.

@@ -92,16 +92,35 @@ static uint32_t      sweet_surface_next_id = 1;
 static uint32_t      sweet_surface_creates_logged;
 static uint64_t      sweet_surface_wired;       /* bytes of buffer surfaces */
 #define SWEET_SURFACE_WIRED_MAX         (1536ull << 20)
+#define SWEET_SURFACE_MIN_BIG_ALLOC     (1024u * 1024u)
+#define SWEET_SURFACE_NUM_KEPT          4
+static IOBufferMemoryDescriptor *gSurfaceKept[SWEET_SURFACE_NUM_KEPT];
 
 OSDefineMetaClassAndStructors(SweetSurface, OSObject);
 
 void
 SweetSurface::free()
 {
-	if (OSDynamicCast(IOBufferMemoryDescriptor, memory) != NULL) {
-		OSAddAtomic64(-(SInt64)allocSize, (volatile SInt64 *)&sweet_surface_wired);
-	}
 	OSSafeReleaseNULL(kernelMap);
+	IOBufferMemoryDescriptor *buf = OSDynamicCast(IOBufferMemoryDescriptor, memory);
+	if (buf != NULL) {
+		bool kept = false;
+		if (allocSize >= SWEET_SURFACE_MIN_BIG_ALLOC && sweet_surface_lock != NULL) {
+			IOLockLock(sweet_surface_lock);
+			for (unsigned int i = 0; i < SWEET_SURFACE_NUM_KEPT; i++) {
+				if (gSurfaceKept[i] == NULL) {
+					gSurfaceKept[i] = buf;
+					memory = NULL;
+					kept = true;
+					break;
+				}
+			}
+			IOLockUnlock(sweet_surface_lock);
+		}
+		if (!kept) {
+			OSAddAtomic64(-(SInt64)allocSize, (volatile SInt64 *)&sweet_surface_wired);
+		}
+	}
 	OSSafeReleaseNULL(memory);
 	OSSafeReleaseNULL(state);
 	OSSafeReleaseNULL(values);
@@ -234,7 +253,7 @@ sweet_surface_alloc(void)
 	s->valueSeed = 1;
 	uint8_t *stateBytes = (uint8_t *)s->state->getBytesNoCopy();
 	*(uint32_t *)(stateBytes + 0x20) = s->valueSeed;
-	*(uint32_t *)(stateBytes + 0x28) = 256;
+	*(uint32_t *)(stateBytes + 0x28) = 0;
 	return s;
 }
 
@@ -309,34 +328,112 @@ sweet_row_bytes(uint32_t width, uint32_t ew, uint32_t bpe)
 	return (uint32_t)((row + SWEET_SURFACE_ROW_ALIGN - 1) & ~(uint64_t)(SWEET_SURFACE_ROW_ALIGN - 1));
 }
 
+static bool
+sweet_biplanar_layout(uint32_t fmt, uint32_t w, uint32_t h,
+    struct sweet_surface_plane planes[2])
+{
+	uint32_t y_bpe = 1, uv_bpe = 2, sub_w = 2, sub_h = 2;
+
+	switch (fmt) {
+	case '420v':
+	case '420f':
+		break;
+	case '422v':
+	case '422f':
+		sub_h = 1;
+		break;
+	case '444v':
+	case '444f':
+		sub_w = 1;
+		sub_h = 1;
+		break;
+	case 'x420':
+	case 'xf20':
+		y_bpe = 2;
+		uv_bpe = 4;
+		break;
+	default:
+		return false;
+	}
+
+	bzero(planes, sizeof(struct sweet_surface_plane) * 2);
+	planes[0].width = w;
+	planes[0].height = h;
+	planes[0].bytesPerElement = (uint16_t)y_bpe;
+	planes[0].elementWidth = 1;
+	planes[0].elementHeight = 1;
+	planes[0].bytesPerRow = sweet_row_bytes(w, 1, y_bpe);
+	planes[0].offset = 0;
+	planes[0].size = planes[0].bytesPerRow * h;
+
+	planes[1].width = sweet_div_up(w, sub_w);
+	planes[1].height = sweet_div_up(h, sub_h);
+	planes[1].bytesPerElement = (uint16_t)uv_bpe;
+	planes[1].elementWidth = 1;
+	planes[1].elementHeight = 1;
+	planes[1].bytesPerRow = sweet_row_bytes(planes[1].width, 1, uv_bpe);
+	planes[1].offset = planes[0].size;
+	planes[1].size = planes[1].bytesPerRow * planes[1].height;
+	return true;
+}
+
 /* Geometry from the creation properties (IOSurface.h keys). */
 static IOReturn
 sweet_surface_layout(SweetSurface *s, OSDictionary *props)
 {
-	uint64_t end;
+	uint64_t end = 0;
 
 	s->width = sweet_dict_u32(props, "IOSurfaceWidth", 0);
 	s->height = sweet_dict_u32(props, "IOSurfaceHeight", 0);
-	s->bytesPerElement = (uint16_t)sweet_dict_u32(props, "IOSurfaceBytesPerElement", 4);
+	s->pixelFormat = sweet_dict_u32(props, "IOSurfacePixelFormat", 0);
+	/*
+	 * CoreAnimation's software renderer does not support 10-bit wide-gamut
+	 * destination formats ('w30r', 'l10r', 'w30R', 'b3a8') and aborts
+	 * rendering with "SW renderer invalid destination format w30r".
+	 * Remap them to 8-bit 'BGRA' so wallpapers, PosterBoard, and blur layers
+	 * render cleanly on CPU/hybrid paths.
+	 */
+	if (s->pixelFormat == 'w30r' || s->pixelFormat == 'l10r' ||
+	    s->pixelFormat == 'w30R' || s->pixelFormat == 'b3a8') {
+		s->pixelFormat = 'BGRA';
+	}
+	uint32_t defBpe = 4;
+	switch (s->pixelFormat) {
+	case 'L008':
+	case 'A008':
+	case 'R008':
+		defBpe = 1;
+		break;
+	case 'L016':
+	case 'R016':
+	case '2C08':
+	case 'LA08':
+	case '2vuy':
+	case 'yuvs':
+	case 'yuvf':
+	case 'L565':
+	case 'B565':
+		defBpe = 2;
+		break;
+	case 'RGhA':
+		defBpe = 8;
+		break;
+	default:
+		defBpe = 4;
+		break;
+	}
 	s->elementWidth = (uint8_t)sweet_dict_u32(props, "IOSurfaceElementWidth", 1);
 	s->elementHeight = (uint8_t)sweet_dict_u32(props, "IOSurfaceElementHeight", 1);
-	s->pixelFormat = sweet_dict_u32(props, "IOSurfacePixelFormat", 0);
 	s->cacheMode = sweet_dict_u32(props, "IOSurfaceCacheMode", 0);
 	s->offset = sweet_dict_u32(props, "IOSurfaceOffset", 0);
 	if (s->width > SWEET_SURFACE_MAX_DIM || s->height > SWEET_SURFACE_MAX_DIM ||
-	    s->bytesPerElement > 64 || s->elementWidth == 0 || s->elementHeight == 0) {
+	    s->elementWidth == 0 || s->elementHeight == 0) {
 		return kIOReturnBadArgument;
 	}
-	s->bytesPerRow = sweet_dict_u32(props, "IOSurfaceBytesPerRow",
-	    sweet_row_bytes(s->width, s->elementWidth, s->bytesPerElement));
-	if (s->bytesPerRow < (uint64_t)sweet_div_up(s->width, s->elementWidth) * s->bytesPerElement) {
-		return kIOReturnBadArgument;
-	}
-	end = (uint64_t)s->offset + (uint64_t)s->bytesPerRow * sweet_div_up(s->height, s->elementHeight);
 
 	OSArray *planes = OSDynamicCast(OSArray, props->getObject("IOSurfacePlaneInfo"));
 	s->planeCount = 0;
-	if (planes != NULL) {
+	if (planes != NULL && planes->getCount() > 0) {
 		uint64_t next = s->offset;
 		if (planes->getCount() > SWEET_SURFACE_MAX_PLANES) {
 			return kIOReturnBadArgument;
@@ -358,15 +455,41 @@ sweet_surface_layout(SweetSurface *s, OSDictionary *props)
 			}
 			p->bytesPerRow = sweet_dict_u32(pd, "IOSurfacePlaneBytesPerRow",
 			    sweet_row_bytes(p->width, p->elementWidth, p->bytesPerElement));
-			p->offset = sweet_dict_u32(pd, "IOSurfacePlaneOffset", (uint32_t)next);
+			uint32_t poff = sweet_dict_u32(pd, "IOSurfacePlaneOffset", UINT32_MAX);
+			if (poff == UINT32_MAX) {
+				poff = sweet_dict_u32(pd, "IOSurfacePlaneBase", (uint32_t)next);
+			}
+			p->offset = poff;
 			p->size = sweet_dict_u32(pd, "IOSurfacePlaneSize",
 			    p->bytesPerRow * sweet_div_up(p->height, p->elementHeight));
-			next = round_page((uint64_t)p->offset + p->size);
-			if ((uint64_t)p->offset + p->size > end) {
-				end = (uint64_t)p->offset + p->size;
+			next = (uint64_t)p->offset + p->size;
+			if (next > end) {
+				end = next;
 			}
 		}
 		s->planeCount = planes->getCount();
+	} else if (sweet_biplanar_layout(s->pixelFormat, s->width, s->height, s->planes)) {
+		s->planeCount = 2;
+		s->planes[0].offset += s->offset;
+		s->planes[1].offset += s->offset;
+		end = (uint64_t)s->planes[1].offset + s->planes[1].size;
+	}
+
+	if (s->planeCount > 0) {
+		defBpe = s->planes[0].bytesPerElement;
+	}
+	s->bytesPerElement = (uint16_t)sweet_dict_u32(props, "IOSurfaceBytesPerElement", defBpe);
+	if (s->bytesPerElement > 64) {
+		return kIOReturnBadArgument;
+	}
+	uint32_t defBpr = (s->planeCount > 0) ? s->planes[0].bytesPerRow :
+	    sweet_row_bytes(s->width, s->elementWidth, s->bytesPerElement);
+	s->bytesPerRow = sweet_dict_u32(props, "IOSurfaceBytesPerRow", defBpr);
+	if (s->planeCount == 0) {
+		if (s->bytesPerRow < (uint64_t)sweet_div_up(s->width, s->elementWidth) * s->bytesPerElement) {
+			return kIOReturnBadArgument;
+		}
+		end = (uint64_t)s->offset + (uint64_t)s->bytesPerRow * sweet_div_up(s->height, s->elementHeight);
 	}
 
 	uint64_t alloc = sweet_dict_u32(props, "IOSurfaceAllocSize", 0);
@@ -504,7 +627,8 @@ public:
 	    void *reference) APPLE_KEXT_OVERRIDE;
 	IOExternalTrap *getTargetAndTrapForIndex(IOService **targetP, UInt32 index) APPLE_KEXT_OVERRIDE;
 
-	IOReturn trapUseCount(void *id, void *category, void *, void *, void *, void *);
+	IOReturn trapIncrementUse(void *id, void *category, void *, void *, void *, void *);
+	IOReturn trapDecrementUse(void *id, void *category, void *, void *, void *, void *);
 	IOReturn trapLock(void *id, void *options, void *seedOut, void *, void *, void *);
 	IOReturn trapUnlock(void *id, void *options, void *seedOut, void *, void *, void *);
 	IOReturn trapRelease(void *id, void *, void *, void *, void *, void *);
@@ -654,6 +778,39 @@ put64(uint8_t *p, uint32_t off, uint64_t v)
 	memcpy(p + off, &v, 8);
 }
 
+static void
+sweet_fill_plane_components(uint8_t *p, uint32_t fmt)
+{
+	switch (fmt) {
+	case 'BGRA':
+		/* componentBitDepths={8,8,8,8}, componentBitOffsets={16,8,0,24} */
+		p[0x28] = 8;  p[0x29] = 16;
+		p[0x2a] = 8;  p[0x2b] = 8;
+		p[0x2c] = 8;  p[0x2d] = 0;
+		p[0x2e] = 8;  p[0x2f] = 24;
+		p[0x30] = 1;  p[0x31] = 2;  p[0x32] = 3;  p[0x33] = 4;
+		p[0x38] = 1;  p[0x39] = 1;  p[0x3a] = 1;  p[0x3b] = 1;
+		break;
+	case 'RGBA':
+		p[0x28] = 8;  p[0x29] = 0;
+		p[0x2a] = 8;  p[0x2b] = 8;
+		p[0x2c] = 8;  p[0x2d] = 16;
+		p[0x2e] = 8;  p[0x2f] = 24;
+		p[0x30] = 1;  p[0x31] = 2;  p[0x32] = 3;  p[0x33] = 4;
+		p[0x38] = 1;  p[0x39] = 1;  p[0x3a] = 1;  p[0x3b] = 1;
+		break;
+	case 'L008':
+	case 'R008':
+	case 'A008':
+		p[0x28] = 8;  p[0x29] = 0;
+		p[0x30] = 1;
+		p[0x38] = 1;
+		break;
+	default:
+		break;
+	}
+}
+
 /* IOSurface.framework's lock result (copied to IOSurfaceClient + 0x68). */
 static void
 sweet_surface_fill_result(SweetSurface *s, SweetSurfaceRef *ref, uint8_t *out)
@@ -677,17 +834,31 @@ sweet_surface_fill_result(SweetSurface *s, SweetSurfaceRef *ref, uint8_t *out)
 	put32(out, 0x44, s->cacheMode);
 	put32(out, 0x50, s->parentID);
 	put32(out, 0x54, 1);
+	if (s->planeCount == 0) {
+		uint8_t *p = out + 0x68;
+		put32(p, 0x00, s->width);
+		put32(p, 0x04, s->height);
+		put32(p, 0x0c, s->offset);
+		put32(p, 0x10, s->bytesPerRow);
+		put32(p, 0x14, s->allocSize);
+		memcpy(p + 0x18, &s->bytesPerElement, 2);
+		p[0x1a] = s->elementWidth;
+		p[0x1b] = s->elementHeight;
+		put32(p, 0x1c, 1);
+		sweet_fill_plane_components(p, s->pixelFormat);
+	}
 	for (uint32_t i = 0; i < s->planeCount; i++) {
 		uint8_t *p = out + 0x68 + i * 0x80;
 		const struct sweet_surface_plane *pl = &s->planes[i];
 		put32(p, 0x00, pl->width);
 		put32(p, 0x04, pl->height);
-		put32(p, 0x08, pl->bytesPerRow);
 		put32(p, 0x0c, pl->offset);
+		put32(p, 0x10, pl->bytesPerRow);
 		put32(p, 0x14, pl->size);
 		memcpy(p + 0x18, &pl->bytesPerElement, 2);
 		p[0x1a] = pl->elementWidth;
 		p[0x1b] = pl->elementHeight;
+		put32(p, 0x1c, 1);
 	}
 }
 
@@ -698,7 +869,12 @@ sweet_struct_out(IOExternalMethodArguments *args, const void *buf, uint32_t len)
 		if (len > args->structureOutputDescriptor->getLength()) {
 			return kIOReturnNoSpace;
 		}
+		IOReturn kr = args->structureOutputDescriptor->prepare();
+		if (kr != kIOReturnSuccess) {
+			return kr;
+		}
 		args->structureOutputDescriptor->writeBytes(0, buf, len);
+		args->structureOutputDescriptor->complete();
 		args->structureOutputDescriptorSize = len;
 		return kIOReturnSuccess;
 	}
@@ -755,7 +931,12 @@ IOSurfaceRootUserClient::create(IOExternalMethodArguments *args)
 		if (copy == NULL) {
 			return kIOReturnNoMemory;
 		}
+		if (args->structureInputDescriptor->prepare() != kIOReturnSuccess) {
+			IOFreeData(copy, len);
+			return kIOReturnVMError;
+		}
 		args->structureInputDescriptor->readBytes(0, copy, len);
+		args->structureInputDescriptor->complete();
 		buf = copy;
 	}
 	OSObject *obj = (buf != NULL && len > 0) ? OSUnserializeXML(buf, len) : NULL;
@@ -778,13 +959,28 @@ IOSurfaceRootUserClient::create(IOExternalMethodArguments *args)
 	ret = sweet_surface_layout(s, props);
 	if (ret == kIOReturnSuccess) {
 		IOBufferMemoryDescriptor *mem = NULL;
-		if ((uint64_t)OSAddAtomic64(s->allocSize, (volatile SInt64 *)&sweet_surface_wired) +
-		    s->allocSize <= SWEET_SURFACE_WIRED_MAX) {
-			mem = IOBufferMemoryDescriptor::inTaskWithOptions(kernel_task,
-			    kIODirectionInOut | kIOMemoryKernelUserShared, s->allocSize, page_size);
+		if (s->allocSize >= SWEET_SURFACE_MIN_BIG_ALLOC) {
+			IOLockLock(sweet_surface_lock);
+			for (unsigned int i = 0; i < SWEET_SURFACE_NUM_KEPT; i++) {
+				if (gSurfaceKept[i] != NULL && gSurfaceKept[i]->getLength() == s->allocSize) {
+					mem = gSurfaceKept[i];
+					gSurfaceKept[i] = NULL;
+					break;
+				}
+			}
+			IOLockUnlock(sweet_surface_lock);
 		}
 		if (mem == NULL) {
-			OSAddAtomic64(-(SInt64)s->allocSize, (volatile SInt64 *)&sweet_surface_wired);
+			if ((uint64_t)OSAddAtomic64(s->allocSize, (volatile SInt64 *)&sweet_surface_wired) +
+			    s->allocSize <= SWEET_SURFACE_WIRED_MAX) {
+				mem = IOBufferMemoryDescriptor::inTaskWithOptions(kernel_task,
+				    kIODirectionInOut | kIOMemoryKernelUserShared, s->allocSize, page_size);
+			}
+			if (mem == NULL) {
+				OSAddAtomic64(-(SInt64)s->allocSize, (volatile SInt64 *)&sweet_surface_wired);
+			}
+		}
+		if (mem == NULL) {
 			ret = kIOReturnNoMemory;
 		} else {
 			bzero(mem->getBytesNoCopy(), s->allocSize);
@@ -822,16 +1018,15 @@ static void
 sweet_surface_update_value_seed_locked(SweetSurface *s)
 {
 	s->valueSeed = (s->valueSeed + 2) | 1u;
-	uint32_t approxBytes = 256;
-	OSSerialize *ser = OSSerialize::binaryWithCapacity(256);
-	if (ser != NULL) {
-		if (s->values != NULL && s->values->serialize(ser)) {
-			approxBytes = ser->getLength() + 64;
-			if (approxBytes < 256) {
-				approxBytes = 256;
+	uint32_t approxBytes = 0;
+	if (s->values != NULL && s->values->getCount() > 0) {
+		OSSerialize *ser = OSSerialize::binaryWithCapacity(256);
+		if (ser != NULL) {
+			if (s->values->serialize(ser)) {
+				approxBytes = ser->getLength() + 8;
 			}
+			ser->release();
 		}
-		ser->release();
 	}
 	uint8_t *stateBytes = (uint8_t *)s->state->getBytesNoCopy();
 	*(uint32_t *)(stateBytes + 0x20) = s->valueSeed;
@@ -854,7 +1049,12 @@ IOSurfaceRootUserClient::setValue(IOExternalMethodArguments *args)
 		if (copy == NULL) {
 			return kIOReturnNoMemory;
 		}
+		if (args->structureInputDescriptor->prepare() != kIOReturnSuccess) {
+			IOFreeData(copy, len);
+			return kIOReturnVMError;
+		}
 		args->structureInputDescriptor->readBytes(0, copy, len);
+		args->structureInputDescriptor->complete();
 		buf = copy;
 	}
 	if (buf == NULL || len <= 8) {
@@ -910,9 +1110,8 @@ IOSurfaceRootUserClient::setValue(IOExternalMethodArguments *args)
 	obj->release();
 	s->release();
 
-	if (args->structureOutput != NULL && args->structureOutputSize >= 4) {
-		memcpy(args->structureOutput, &newSeed, 4);
-		args->structureOutputSize = 4;
+	if (args->structureOutput != NULL || args->structureOutputDescriptor != NULL) {
+		sweet_struct_out(args, &newSeed, sizeof(newSeed));
 	}
 	return kIOReturnSuccess;
 }
@@ -933,7 +1132,12 @@ IOSurfaceRootUserClient::copyValue(IOExternalMethodArguments *args)
 		if (copy == NULL) {
 			return kIOReturnNoMemory;
 		}
+		if (args->structureInputDescriptor->prepare() != kIOReturnSuccess) {
+			IOFreeData(copy, len);
+			return kIOReturnVMError;
+		}
 		args->structureInputDescriptor->readBytes(0, copy, len);
+		args->structureInputDescriptor->complete();
 		buf = copy;
 	}
 	if (buf == NULL || len < 9) {
@@ -968,7 +1172,7 @@ IOSurfaceRootUserClient::copyValue(IOExternalMethodArguments *args)
 	uint32_t curSeed = 1;
 	IOLockLock(sweet_surface_lock);
 	curSeed = s->valueSeed;
-	if (s->values != NULL) {
+	if (s->values != NULL && s->values->getCount() > 0) {
 		if (keyBuf[0] == '\0') {
 			ok = s->values->serialize(ser);
 		} else {
@@ -983,9 +1187,8 @@ IOSurfaceRootUserClient::copyValue(IOExternalMethodArguments *args)
 
 	if (!ok) {
 		ser->release();
-		if (args->structureOutput != NULL) {
-			args->structureOutputSize = 0;
-		}
+		uint32_t header[2] = { 0, curSeed };
+		sweet_struct_out(args, header, sizeof(header));
 		return kIOReturnSuccess;
 	}
 
@@ -996,8 +1199,8 @@ IOSurfaceRootUserClient::copyValue(IOExternalMethodArguments *args)
 		ser->release();
 		return kIOReturnNoMemory;
 	}
-	put32(outBuf, 0, curSeed);
-	put32(outBuf, 4, 0);
+	put32(outBuf, 0, 0);
+	put32(outBuf, 4, curSeed);
 	memcpy(outBuf + 8, ser->text(), serLen);
 	ser->release();
 
@@ -1014,7 +1217,29 @@ IOSurfaceRootUserClient::removeValue(IOExternalMethodArguments *args)
 {
 	const char *buf = (const char *)args->structureInput;
 	uint32_t len = args->structureInputSize;
+	char *copy = NULL;
+
+	if (args->structureInputDescriptor != NULL) {
+		len = (uint32_t)args->structureInputDescriptor->getLength();
+		if (len < 9 || len > SWEET_SURFACE_MAX_PROPS) {
+			return kIOReturnBadArgument;
+		}
+		copy = (char *)IOMallocData(len);
+		if (copy == NULL) {
+			return kIOReturnNoMemory;
+		}
+		if (args->structureInputDescriptor->prepare() != kIOReturnSuccess) {
+			IOFreeData(copy, len);
+			return kIOReturnVMError;
+		}
+		args->structureInputDescriptor->readBytes(0, copy, len);
+		args->structureInputDescriptor->complete();
+		buf = copy;
+	}
 	if (buf == NULL || len < 9) {
+		if (copy != NULL) {
+			IOFreeData(copy, len);
+		}
 		return kIOReturnBadArgument;
 	}
 	uint32_t surfaceID = 0;
@@ -1023,6 +1248,9 @@ IOSurfaceRootUserClient::removeValue(IOExternalMethodArguments *args)
 	size_t keyMax = len - 8 < sizeof(keyBuf) - 1 ? len - 8 : sizeof(keyBuf) - 1;
 	memcpy(keyBuf, buf + 8, keyMax);
 	keyBuf[keyMax] = '\0';
+	if (copy != NULL) {
+		IOFreeData(copy, len);
+	}
 
 	SweetSurface *s = sweet_surface_copy(surfaceID);
 	if (s == NULL) {
@@ -1043,9 +1271,8 @@ IOSurfaceRootUserClient::removeValue(IOExternalMethodArguments *args)
 	IOLockUnlock(sweet_surface_lock);
 	s->release();
 
-	if (args->structureOutput != NULL && args->structureOutputSize >= 4) {
-		memcpy(args->structureOutput, &newSeed, 4);
-		args->structureOutputSize = 4;
+	if (args->structureOutput != NULL || args->structureOutputDescriptor != NULL) {
+		sweet_struct_out(args, &newSeed, sizeof(newSeed));
 	}
 	return kIOReturnSuccess;
 }
@@ -1055,13 +1282,32 @@ IOSurfaceRootUserClient::setBulkAttachments(IOExternalMethodArguments *args)
 {
 	const uint8_t *buf = (const uint8_t *)args->structureInput;
 	uint32_t len = args->structureInputSize;
+	uint8_t *copy = NULL;
+
+	if (args->structureInputDescriptor != NULL) {
+		len = (uint32_t)args->structureInputDescriptor->getLength();
+		if (len > 0 && len <= SWEET_SURFACE_MAX_PROPS) {
+			copy = (uint8_t *)IOMallocData(len);
+			if (copy != NULL && args->structureInputDescriptor->prepare() == kIOReturnSuccess) {
+				args->structureInputDescriptor->readBytes(0, copy, len);
+				args->structureInputDescriptor->complete();
+				buf = copy;
+			}
+		}
+	}
 	if (buf == NULL || len < 0x84) {
+		if (copy != NULL) {
+			IOFreeData(copy, len);
+		}
 		return kIOReturnSuccess;
 	}
 	uint32_t surfaceID = 0;
 	memcpy(&surfaceID, buf + 0x80, 4);
 	SweetSurface *s = sweet_surface_copy(surfaceID);
 	if (s == NULL) {
+		if (copy != NULL) {
+			IOFreeData(copy, len);
+		}
 		return kIOReturnNotFound;
 	}
 	IOLockLock(sweet_surface_lock);
@@ -1070,6 +1316,9 @@ IOSurfaceRootUserClient::setBulkAttachments(IOExternalMethodArguments *args)
 		memcpy(stateBytes + 0x30, buf, 0x70);
 	}
 	IOLockUnlock(sweet_surface_lock);
+	if (copy != NULL) {
+		IOFreeData(copy, len);
+	}
 	s->release();
 	return kIOReturnSuccess;
 }
@@ -1316,24 +1565,6 @@ IOSurfaceRootUserClient::externalMethod(uint32_t selector, IOExternalMethodArgum
 	}
 }
 
-IOReturn
-IOSurfaceRootUserClient::trapUseCount(__unused void *id, __unused void *category,
-    void *, void *, void *, void *)
-{
-	return kIOReturnSuccess;
-}
-
-static IOReturn
-sweet_surface_seed_out(SweetSurface *s, void *seedOut, bool bump)
-{
-	uint32_t seed = bump ? OSIncrementAtomic((volatile SInt32 *)sweet_surface_seed(s)) + 1 :
-	    *sweet_surface_seed(s);
-	if (seedOut != NULL && copyout(&seed, (user_addr_t)seedOut, sizeof(seed)) != 0) {
-		return kIOReturnBadArgument;
-	}
-	return kIOReturnSuccess;
-}
-
 /* Retained surface this client created or looked up, or NULL. */
 static SweetSurface *
 sweet_surface_held(IOLock *lock, OSArray *refs, uint32_t id)
@@ -1350,6 +1581,45 @@ sweet_surface_held(IOLock *lock, OSArray *refs, uint32_t id)
 	}
 	IOLockUnlock(lock);
 	return s;
+}
+
+IOReturn
+IOSurfaceRootUserClient::trapIncrementUse(void *id, __unused void *category,
+    void *, void *, void *, void *)
+{
+	SweetSurface *s = sweet_surface_held(fLock, fRefs, (uint32_t)(uintptr_t)id);
+	if (s != NULL) {
+		if (s->state != NULL) {
+			OSIncrementAtomic((volatile SInt32 *)((uint8_t *)s->state->getBytesNoCopy() + 0x18));
+		}
+		s->release();
+	}
+	return kIOReturnSuccess;
+}
+
+IOReturn
+IOSurfaceRootUserClient::trapDecrementUse(void *id, __unused void *category,
+    void *, void *, void *, void *)
+{
+	SweetSurface *s = sweet_surface_held(fLock, fRefs, (uint32_t)(uintptr_t)id);
+	if (s != NULL) {
+		if (s->state != NULL) {
+			OSDecrementAtomic((volatile SInt32 *)((uint8_t *)s->state->getBytesNoCopy() + 0x18));
+		}
+		s->release();
+	}
+	return kIOReturnSuccess;
+}
+
+static IOReturn
+sweet_surface_seed_out(SweetSurface *s, void *seedOut, bool bump)
+{
+	uint32_t seed = bump ? OSIncrementAtomic((volatile SInt32 *)sweet_surface_seed(s)) + 1 :
+	    *sweet_surface_seed(s);
+	if (seedOut != NULL && copyout(&seed, (user_addr_t)seedOut, sizeof(seed)) != 0) {
+		return kIOReturnBadArgument;
+	}
+	return kIOReturnSuccess;
 }
 
 IOReturn
@@ -1393,8 +1663,8 @@ IOSurfaceRootUserClient::trapRelease(void *id, void *, void *, void *, void *, v
 }
 
 static IOExternalTrap sweet_surface_traps[] = {
-	[kSweetSurfaceTrapIncrementUse]  = { NULL, (IOTrap) & IOSurfaceRootUserClient::trapUseCount },
-	[kSweetSurfaceTrapDecrementUse]  = { NULL, (IOTrap) & IOSurfaceRootUserClient::trapUseCount },
+	[kSweetSurfaceTrapIncrementUse]  = { NULL, (IOTrap) & IOSurfaceRootUserClient::trapIncrementUse },
+	[kSweetSurfaceTrapDecrementUse]  = { NULL, (IOTrap) & IOSurfaceRootUserClient::trapDecrementUse },
 	[kSweetSurfaceTrapLock]          = { NULL, (IOTrap) & IOSurfaceRootUserClient::trapLock },
 	[kSweetSurfaceTrapUnlock]        = { NULL, (IOTrap) & IOSurfaceRootUserClient::trapUnlock },
 	[kSweetSurfaceTrapRelease]       = { NULL, (IOTrap) & IOSurfaceRootUserClient::trapRelease },

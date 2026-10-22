@@ -5,7 +5,7 @@ install-name:    '/usr/lib/libobjc.A.dylib'
 exports:
   - targets:         [ arm64-ios ]
     symbols:         [ _class_getClassMethod, _class_getInstanceMethod,
-                       _method_getImplementation, _method_setImplementation,
-                       _objc_getClass, _objc_msgSend, _object_getClass,
-                       _object_getClassName, _sel_registerName ]
+                       _class_respondsToSelector, _method_getImplementation,
+                       _method_setImplementation, _objc_getClass, _objc_msgSend,
+                       _object_getClass, _object_getClassName, _sel_registerName ]
 ...
