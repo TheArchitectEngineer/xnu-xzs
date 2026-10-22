@@ -10555,6 +10555,63 @@ mkdirat(proc_t p, struct mkdirat_args *uap, __unused int32_t *retval)
 	           UIO_USERSPACE);
 }
 
+#if CONFIG_XZS_BRINGUP
+void
+xzs_promote_staged_system_apps(void)
+{
+	static const char *const k_staged_apps[] = {
+		"AppleTV.app", "Books.app", "Bridge.app", "Calculator.app",
+		"Compass.app", "Contacts.app", "FaceTime.app", "Files.app",
+		"FindMy.app", "Fitness.app", "Freeform.app", "Health.app",
+		"Home.app", "Magnifier.app", "Maps.app", "Measure.app",
+		"MobileCal.app", "MobileMail.app", "MobileNotes.app", "MobileStore.app",
+		"MobileTimer.app", "Music.app", "News.app", "Passbook.app",
+		"Podcasts.app", "Reminders.app", "SequoiaTranslator.app", "Shortcuts.app",
+		"Stocks.app", "Tips.app", "VoiceMemos.app", "Weather.app"
+	};
+	vfs_context_t ctx = vfs_context_kernel();
+	uint32_t moved = 0;
+
+	for (size_t i = 0; i < sizeof(k_staged_apps) / sizeof(k_staged_apps[0]); i++) {
+		char src[128], dst[128];
+		snprintf(src, sizeof(src), "/private/var/staged_system_apps/%s", k_staged_apps[i]);
+		snprintf(dst, sizeof(dst), "/Applications/%s", k_staged_apps[i]);
+		if (renameat_internal(ctx, AT_FDCWD, CAST_USER_ADDR_T(src),
+		    AT_FDCWD, CAST_USER_ADDR_T(dst), UIO_SYSSPACE, 0) == 0) {
+			moved++;
+		}
+	}
+
+	if (moved > 0) {
+		static const char *const k_stale_files[] = {
+			"/private/var/mobile/Library/SpringBoard/IconState.plist",
+			"/private/var/mobile/Library/SpringBoard/DesiredIconState.plist",
+			"/private/var/mobile/Library/SpringBoard/IconSupportState.plist",
+			"/private/var/db/lsd/com.apple.lsdidentifiers.plist",
+			"/private/var/mobile/Library/Caches/com.apple.LaunchServices-3020.v2.csstore",
+		};
+		for (size_t i = 0; i < sizeof(k_stale_files) / sizeof(k_stale_files[0]); i++) {
+			(void)unlinkat_internal(ctx, AT_FDCWD, NULLVP,
+			    CAST_USER_ADDR_T(k_stale_files[i]), UIO_SYSSPACE, 0);
+		}
+		if (renameat_internal(ctx, AT_FDCWD,
+		    CAST_USER_ADDR_T("/private/var/containers/Data/System"),
+		    AT_FDCWD,
+		    CAST_USER_ADDR_T("/private/var/containers/Data/System.old"),
+		    UIO_SYSSPACE, 0) == 0) {
+			struct vnode_attr va;
+			VATTR_INIT(&va);
+			VATTR_SET(&va, va_mode, 0755);
+			(void)mkdir1at(ctx,
+			    CAST_USER_ADDR_T("/private/var/containers/Data/System"),
+			    &va, AT_FDCWD, UIO_SYSSPACE);
+		}
+		printf("SWEET APPS: promoted %u stock apps from /private/var/staged_system_apps to /Applications\n",
+		    moved);
+	}
+}
+#endif
+
 static int
 rmdirat_internal(vfs_context_t ctx, int fd, user_addr_t dirpath,
     enum uio_seg segflg, int unlink_flags)

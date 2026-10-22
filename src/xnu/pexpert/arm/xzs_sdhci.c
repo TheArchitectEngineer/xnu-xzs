@@ -10186,13 +10186,16 @@ xzs_emmc_write_sector_pio(uint32_t lba, const uint8_t in[512])
 		}
 		if (!bwr_done && (st & 0x00000010U /* SDHCI_INT_SPACE_AVAIL */) != 0) {
 			bwr_done = TRUE;
+			volatile uint32_t *fifo_reg = (volatile uint32_t *)(g_xzs_sdcc1_hc_base + SDHCI_BUFFER);
+			__asm__ volatile ("dsb sy" ::: "memory");
 			for (uint32_t w = 0; w < 128; w++) {
 				uint32_t val32 = ((uint32_t)in[w * 4 + 0]) |
 				                 (((uint32_t)in[w * 4 + 1]) << 8) |
 				                 (((uint32_t)in[w * 4 + 2]) << 16) |
 				                 (((uint32_t)in[w * 4 + 3]) << 24);
-				xzs_sdhci_hc_write32(SDHCI_BUFFER, val32);
+				*fifo_reg = val32;
 			}
+			__asm__ volatile ("dsb sy" ::: "memory");
 			xzs_sdhci_hc_write32(SDHCI_INT_STATUS, 0x00000010U);
 		}
 		if (bwr_done && !tc_done && (st & SDHCI_INT_DATA_END) != 0) {
@@ -11214,6 +11217,69 @@ xzs_sdhci_phase_d4_probe(void)
 			uint32_t crc_8b = (rc_8b == 0) ? crc32(0, g_xzs_d4_scratch_buf, 512) : 0;
 			if (rc_8b == 0 && crc_8b == 0xD3A34BC1) {
 				printf("[XZS-SDHCI] D10: 8-bit eMMC bus width VERIFIED (LBA1 CRC32=0xD3A34BC1, 8x bus speedup)!\n");
+
+				/* Upgrade to High-Speed SDR 51.2 MHz (CMD6 EXT_CSD[185]=1 + GPLL4 CFG_RCGR=0x50E) */
+				xzs_sdhci_hc_write32(SDHCI_INT_STATUS, 0xFFFFFFFFU);
+				xzs_sdhci_hc_write32(SDHCI_ARGUMENT, 0x03B90101U);
+				xzs_sdhci_hc_write16(SDHCI_TRANSFER_MODE, 0x0000U);
+				xzs_sdhci_hc_write16(SDHCI_COMMAND,
+				    SDHCI_MAKE_CMD(6, SDHCI_CMD_RESP_48_BUSY | SDHCI_CMD_CRC | SDHCI_CMD_INDEX));
+				for (uint32_t i = 0; i < 100000; i++) {
+					if ((xzs_sdhci_hc_read32(SDHCI_INT_STATUS) & SDHCI_INT_RESPONSE) != 0) {
+						break;
+					}
+					delay(1);
+				}
+				xzs_sdhci_hc_write32(SDHCI_INT_STATUS, 0xFFFFFFFFU);
+				for (uint32_t i = 0; i < 500000; i++) {
+					uint32_t ps = xzs_sdhci_hc_read32(SDHCI_PRESENT_STATE);
+					if ((ps & (SDHCI_CMD_INHIBIT | SDHCI_DATA_INHIBIT)) == 0 &&
+					    (ps & (1U << 20)) != 0) {
+						break;
+					}
+					delay(1);
+				}
+				xzs_sdhci_hc_write8(SDHCI_HOST_CONTROL, SDHCI_CTRL_8BITBUS | 0x04U);
+				xzs_sdhci_hc_write16(SDHCI_CLOCK_CONTROL, ABOOT_CLOCK_FIRST_WRITE);
+				delay(50);
+				xzs_gcc_write32_local(SDCC1_APPS_CFG_RCGR_OFFSET, 0x0000050EU);
+				xzs_gcc_write32_local(SDCC1_APPS_CMD_RCGR_OFFSET, 0x00000001U);
+				for (uint32_t i = 0; i < 1000; i++) {
+					if ((xzs_gcc_read32_local(SDCC1_APPS_CMD_RCGR_OFFSET) & 0x00000001U) == 0) {
+						break;
+					}
+					delay(1);
+				}
+				xzs_sdhci_hc_write16(SDHCI_CLOCK_CONTROL, ABOOT_CLOCK_FIRST_WRITE);
+				for (uint32_t i = 0; i < 1000; i++) {
+					if ((xzs_sdhci_hc_read16(SDHCI_CLOCK_CONTROL) & SDHCI_CLOCK_INT_STABLE) != 0) {
+						break;
+					}
+					delay(1);
+				}
+				xzs_sdhci_hc_write16(SDHCI_CLOCK_CONTROL, ABOOT_CLOCK_FINAL_VAL);
+				delay(50);
+
+				int rc_52m = xzs_d4_read_via_strategy(dev0, 1, 512, g_xzs_d4_scratch_buf);
+				uint32_t crc_52m = (rc_52m == 0) ? crc32(0, g_xzs_d4_scratch_buf, 512) : 0;
+				if (rc_52m == 0 && crc_52m == 0xD3A34BC1) {
+					printf("[XZS-SDHCI] D10: 51.2 MHz HS-SDR 8-bit VERIFIED (LBA1 CRC32=0xD3A34BC1)!\n");
+				} else {
+					printf("[XZS-SDHCI] D10: 51.2 MHz check failed, falling back to 19.2 MHz...\n");
+					xzs_sdhci_hc_write16(SDHCI_CLOCK_CONTROL, ABOOT_CLOCK_FIRST_WRITE);
+					delay(50);
+					xzs_gcc_write32_local(SDCC1_APPS_CFG_RCGR_OFFSET, 0x00000000U);
+					xzs_gcc_write32_local(SDCC1_APPS_CMD_RCGR_OFFSET, 0x00000001U);
+					for (uint32_t i = 0; i < 1000; i++) {
+						if ((xzs_gcc_read32_local(SDCC1_APPS_CMD_RCGR_OFFSET) & 0x00000001U) == 0) {
+							break;
+						}
+						delay(1);
+					}
+					xzs_sdhci_hc_write8(SDHCI_HOST_CONTROL, SDHCI_CTRL_8BITBUS);
+					xzs_sdhci_hc_write16(SDHCI_CLOCK_CONTROL, ABOOT_CLOCK_FINAL_VAL);
+					delay(50);
+				}
 			} else {
 				printf("[XZS-SDHCI] D10: 8-bit readback mismatch, reverting to 1-bit...\n");
 				xzs_sdhci_hc_write8(SDHCI_HOST_CONTROL, 0x00U);

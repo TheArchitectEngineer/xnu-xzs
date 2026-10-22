@@ -102,21 +102,20 @@ OSDefineMetaClassAndStructors(IOMobileFramebuffer, IOService);
 
 class IOMobileFramebufferUserClient;
 
-#define XZS_FB_WORKER_THREADS           3
+#define XZS_FB_WORKER_THREADS           4
+
+static uint32_t fColumn[1080];
+static uint16_t fColumnWeight[1080];
+static uint32_t fBlendRow[XZS_FB_WORKER_THREADS][SWEET_FB_LOGICAL_W];
 
 struct XZSFBSliceJob {
-	uintptr_t src_base;
-	uint32_t  src_bpr;
-	uint32_t  src_w;
-	uint32_t  src_h;
-	uintptr_t dst_base;
-	uint32_t  dst_bpr;
-	int32_t   px0, px1;
-	int32_t   py0, py1;
-	int32_t   sx, sy;
-	uint32_t  step_x, step_y;
-	bool      use_1to1_map;
-	bool      use_wallpaper;
+	const uint8_t *pixels;
+	uint32_t  stride;
+	int32_t   sx, sy, sw, sh;
+	int32_t   px0, py0, px1, py1;
+	int32_t   cx0, cx1;
+	bool      filter;
+	bool      unscaled;
 	volatile uint32_t gen;
 	volatile uint32_t done_count;
 };
@@ -195,133 +194,42 @@ sweet_draw_apple_logo(uintptr_t base, uint32_t width, uint32_t height, uint32_t 
 	xzs_draw_du_ma_may_banner(base, width, rowBytes, (height > 128u) ? (height - 128u) / 2u : 0u, true);
 }
 
-#define XZS_WP_W 270u
-#define XZS_WP_H 480u
-static uint32_t s_ios16_wallpaper[XZS_WP_W * XZS_WP_H];
-static bool s_ios16_wallpaper_ready = false;
-
-static void
-xzs_init_ios16_wallpaper(void)
+static inline uint32_t
+xzs_fb_blend(uint32_t a, uint32_t b, uint32_t w)
 {
-	if (s_ios16_wallpaper_ready) {
-		return;
-	}
-	for (uint32_t wy = 0; wy < XZS_WP_H; wy++) {
-		int32_t v = (int32_t)((wy * 1000u) / XZS_WP_H); /* 0..1000 */
-		for (uint32_t wx = 0; wx < XZS_WP_W; wx++) {
-			int32_t u = (int32_t)((wx * 1000u) / XZS_WP_W); /* 0..1000 */
+	uint32_t rb = (((a & 0x00ff00ffu) * (256u - w) + (b & 0x00ff00ffu) * w) >> 8) & 0x00ff00ffu;
+	uint32_t ga = (((a >> 8) & 0x00ff00ffu) * (256u - w) + ((b >> 8) & 0x00ff00ffu) * w) & 0xff00ff00u;
+	return rb | ga;
+}
 
-			/* Base vertical sky-to-ocean gradient */
-			int32_t r = 16 + (v * 14) / 1000;
-			int32_t g = 54 + (v < 500 ? (v * 130) / 500 : ((1000 - v) * 130) / 500);
-			int32_t b = 142 + (v < 500 ? (v * 82) / 500 : ((1000 - v) * 62) / 500);
-
-			/* Wave 1: iOS 16 upper Cyan-Azure diagonal arch */
-			int32_t du1 = u - 480;
-			int32_t v1 = 300 - (u * 130) / 1000 + (du1 * du1) / 3200;
-			int32_t d1 = v > v1 ? v - v1 : v1 - v;
-			if (d1 < 250) {
-				int32_t w1 = 250 - d1;
-				w1 = (w1 * w1) / 250; /* smooth quadratic bell 0..250 */
-				r = (r * (250 - w1) + 42 * w1) / 250;
-				g = (g * (250 - w1) + 204 * w1) / 250;
-				b = (b * (250 - w1) + 252 * w1) / 250;
-			}
-
-			/* Wave 2: iOS 16 middle Indigo-Violet silk ribbon */
-			int32_t du2 = u - 420;
-			int32_t v2 = 590 - (u * 115) / 1000 - (du2 * du2) / 3600;
-			int32_t d2 = v > v2 ? v - v2 : v2 - v;
-			if (d2 < 260) {
-				int32_t w2 = 260 - d2;
-				w2 = (w2 * w2) / 260;
-				r = (r * (260 - w2) + 104 * w2) / 260;
-				g = (g * (260 - w2) + 68 * w2) / 260;
-				b = (b * (260 - w2) + 232 * w2) / 260;
-			}
-
-			/* Wave 3: iOS 16 lower Violet-Rose-Cyan accent wave */
-			int32_t du3 = u - 600;
-			int32_t v3 = 820 - (u * 90) / 1000 + (du3 * du3) / 4000;
-			int32_t d3 = v > v3 ? v - v3 : v3 - v;
-			if (d3 < 220) {
-				int32_t w3 = 220 - d3;
-				w3 = (w3 * w3) / 220;
-				r = (r * (220 - w3) + 148 * w3) / 220;
-				g = (g * (220 - w3) + 76 * w3) / 220;
-				b = (b * (220 - w3) + 210 * w3) / 220;
-			}
-
-			if (r < 0) r = 0; else if (r > 255) r = 255;
-			if (g < 0) g = 0; else if (g > 255) g = 255;
-			if (b < 0) b = 0; else if (b > 255) b = 255;
-
-			/* Packed in XZS MDP5 byte order (B0=R, B1=G, B2=B, B3=A) */
-			s_ios16_wallpaper[wy * XZS_WP_W + wx] =
-			    0xff000000u | ((uint32_t)b << 16) | ((uint32_t)g << 8) | (uint32_t)r;
-		}
-	}
-	s_ios16_wallpaper_ready = true;
+static inline uint32_t
+xzs_bgra_to_mdp5(uint32_t p)
+{
+	return (p & 0xff00ff00u) | ((p & 0x00ff0000u) >> 16) | ((p & 0x000000ffu) << 16);
 }
 
 /*
- * Map physical scanline py (0..1919 on 1080x1920 16:9 panel) to logical scanline
- * ly (0..2435 on 1125x2436 19.5:9 canvas) while preserving an exact 1:1 square
- * pixel aspect ratio (step_y = step_x = 25/24) across all active UI content bands
- * (Status Bar, Lock Screen Clock, all 5 Home Screen App Icon rows, and the Dock)
- * and compressing only the empty vertical safe-area gaps.
+ * Where the center of the i-th of `out` pixels falls among `in` source pixels,
+ * in 256ths of a pixel, clamped to [0, (in - 1) * 256].
  */
+static inline int64_t
+xzs_sample_at(int64_t i, int64_t in, int64_t out)
+{
+	int64_t at = ((2 * i + 1) * in - out) * 128 / out;
+	return at < 0 ? 0 : (at > (in - 1) * 256 ? (in - 1) * 256 : at);
+}
+
 extern "C" uint32_t
 xzs_fb_py_to_ly(uint32_t py)
 {
 	if (py >= 1920u) {
 		py = 1919u;
 	}
-	uint32_t ly;
-	if (py < 108u) {
-		/* Band 0: Status bar (108 physical px -> 112 logical px at 1:1 25/24 scale) */
-		ly = (py * 25u) / 24u;
-	} else if (py < 144u) {
-		/* Band 1: Top safe-area gap below status bar (36 physical px -> 150 logical px) */
-		ly = 112u + ((py - 108u) * 150u) / 36u;
-	} else if (py < 1548u) {
-		/* Band 2: Main UI content — Lock Screen Clock & Home Screen Icon Rows 1..5
-		 * (1404 physical px -> 1462 logical px at exact 1:1 25/24 scale) */
-		ly = 262u + ((py - 144u) * 25u) / 24u;
-	} else if (py < 1620u) {
-		/* Band 3: Empty margin above Dock (72 physical px -> 388 logical px) */
-		ly = 1724u + ((py - 1548u) * 388u) / 72u;
-	} else {
-		/* Band 4: Bottom Dock & Home Bar (300 physical px -> 312 logical px at 1:1 25/24 scale) */
-		ly = 2112u + ((py - 1620u) * 25u) / 24u;
-	}
+	uint32_t ly = (py * SWEET_FB_LOGICAL_H) / 1920u;
 	if (ly >= SWEET_FB_LOGICAL_H) {
 		ly = SWEET_FB_LOGICAL_H - 1u;
 	}
 	return ly;
-}
-
-static uint16_t s_py_to_ly_lut[1920];
-static uint16_t s_px_to_lx_lut[1080];
-static bool s_luts_ready = false;
-
-static void
-xzs_init_scale_luts(void)
-{
-	if (s_luts_ready) {
-		return;
-	}
-	for (uint32_t py = 0; py < 1920u; py++) {
-		s_py_to_ly_lut[py] = (uint16_t)xzs_fb_py_to_ly(py);
-	}
-	for (uint32_t px = 0; px < 1080u; px++) {
-		uint32_t lx = (px * SWEET_FB_LOGICAL_W) / 1080u;
-		if (lx >= SWEET_FB_LOGICAL_W) {
-			lx = SWEET_FB_LOGICAL_W - 1u;
-		}
-		s_px_to_lx_lut[px] = (uint16_t)lx;
-	}
-	s_luts_ready = true;
 }
 
 bool
@@ -359,8 +267,6 @@ AppleCLCD::start(IOService *provider)
 	}
 	fOffX = (int32_t)(fLogicalW - fWidth) / 2;
 	fOffY = (int32_t)(fLogicalH - fHeight) / 2;
-	xzs_init_ios16_wallpaper();
-	xzs_init_scale_luts();
 	fLock = IOLockAlloc();
 	fClients = OSArray::withCapacity(4);
 	fSurface = sweet_surface_create_physical(fPhys, fWidth, fHeight, fRowBytes, SWEET_FB_FORMAT_BGRA);
@@ -380,7 +286,7 @@ AppleCLCD::start(IOService *provider)
 		IOLog("SWEET FB: no vsync timer\n");
 		return false;
 	}
-	uint32_t hz = 60;
+	uint32_t hz = 30;
 	PE_parse_boot_argn("sweetfb_hz", &hz, sizeof(hz));
 	fFlushTicks = (hz == 0 || hz >= 60) ? 1 : 60 / hz;
 
@@ -496,89 +402,79 @@ void
 AppleCLCD::renderSlice(uint32_t worker_id, uint32_t total_workers)
 {
 	const XZSFBSliceJob &job = fJob;
-	int32_t total_h = job.py1 - job.py0;
-	int32_t slice_y0 = job.py0 + (total_h * (int32_t)worker_id) / (int32_t)total_workers;
-	int32_t slice_y1 = (worker_id + 1u == total_workers) ?
-	    job.py1 : (job.py0 + (total_h * (int32_t)(worker_id + 1u)) / (int32_t)total_workers);
-	if (slice_y0 >= slice_y1) {
+	const uint8_t *pixels = job.pixels;
+	uint32_t stride = job.stride;
+	int32_t sx = job.sx, sy = job.sy, sw = job.sw, sh = job.sh;
+	int32_t py0 = job.py0, py1 = job.py1, cx0 = job.cx0, cx1 = job.cx1;
+	bool filter = job.filter;
+	uint32_t *blendRow = fBlendRow[worker_id < XZS_FB_WORKER_THREADS ? worker_id : 0];
+
+	int32_t total_h = py1 - py0;
+	int32_t y0 = py0 + (total_h * (int32_t)worker_id) / (int32_t)total_workers;
+	int32_t y1 = (worker_id + 1u == total_workers) ?
+	    py1 : (py0 + (total_h * (int32_t)(worker_id + 1u)) / (int32_t)total_workers);
+	if (y0 >= y1 || cx0 >= cx1) {
 		return;
 	}
 
-	uint32_t s_w_max = job.src_w > 0 ? job.src_w - 1u : 0u;
-	uint32_t acc_y = ((uint32_t)job.sy << 16) + (uint32_t)(slice_y0 - job.py0) * job.step_y;
-	bool full_row_lut = job.use_1to1_map && job.px0 == 0 && job.px1 == 1080;
+	int32_t map_py0 = (sy == 0 && sh == (int32_t)fLogicalH) ? 0 : py0;
+	int32_t map_ph  = (sy == 0 && sh == (int32_t)fLogicalH) ? (int32_t)fHeight : (py1 - py0);
 
-	for (int32_t py = slice_y0; py < slice_y1; py++) {
-		uint32_t src_y;
-		if (job.use_1to1_map) {
-			src_y = s_py_to_ly_lut[(uint32_t)py < 1920u ? (uint32_t)py : 1919u];
-		} else {
-			src_y = acc_y >> 16;
-			acc_y += job.step_y;
+	for (int32_t y = y0; y < y1; y++) {
+		if (y < 0 || (uint32_t)y >= fHeight) {
+			continue;
 		}
-		if (src_y >= job.src_h) {
-			src_y = job.src_h - 1u;
-		}
-		const uint32_t *src_row = (const uint32_t *)(job.src_base + (uint64_t)src_y * job.src_bpr);
-		uint32_t *dst_row = (uint32_t *)(job.dst_base + (uint64_t)py * job.dst_bpr);
-		const uint32_t *wp_row = job.use_wallpaper ?
-		    &s_ios16_wallpaper[((uint32_t)py >> 2) * XZS_WP_W] : NULL;
-		uint32_t acc_x = (uint32_t)job.sx << 16;
-
-		if (wp_row == NULL && full_row_lut) {
-			for (int32_t px = 0; px < 1080; px++) {
-				uint32_t p = src_row[s_px_to_lx_lut[(uint32_t)px]];
-				dst_row[px] = (p & 0xff00ff00u) | ((p & 0x00ff0000u) >> 16) | ((p & 0x000000ffu) << 16);
+		uint32_t *to = (uint32_t *)(fPixels + (size_t)y * fRowBytes);
+		if (job.unscaled) {
+			const uint32_t *src_row = (const uint32_t *)(pixels + (size_t)(sy + y - py0) * stride) + sx;
+			for (int32_t x = cx0; x < cx1; x++) {
+				to[x] = xzs_bgra_to_mdp5(src_row[x - cx0]);
 			}
 			continue;
 		}
 
-		for (int32_t px = job.px0; px < job.px1; px++) {
-			uint32_t lx;
-			if (full_row_lut) {
-				lx = s_px_to_lx_lut[(uint32_t)px];
+		const uint32_t *from;
+		if (filter) {
+			int64_t at = xzs_sample_at(y - map_py0, sh, map_ph);
+			uint32_t row = (uint32_t)(at >> 8);
+			uint32_t weight = (uint32_t)(at & 255);
+			const uint32_t *upper = (const uint32_t *)(pixels + (size_t)(sy + row) * stride) + sx;
+
+			if (weight == 0 || row + 1u >= (uint32_t)sh) {
+				from = upper;
 			} else {
-				lx = acc_x >> 16;
-				acc_x += job.step_x;
-			}
-			uint32_t p = src_row[lx];
-			if (wp_row != NULL) {
-				uint32_t rgb = p & 0x00ffffffu;
-				if (__builtin_expect(rgb == 0u, 1)) {
-					/* Fast path for pure-black wallpaper background pixels */
-					uint32_t nl = src_row[lx > 14u ? lx - 14u : 0u];
-					uint32_t nr = src_row[lx + 14u <= s_w_max ? lx + 14u : s_w_max];
-					if (((nl & nr) & 0x00c0c0c0u) != 0x00c0c0c0u) {
-						dst_row[px] = wp_row[(uint32_t)px >> 2];
-						continue;
-					}
-				} else if (__builtin_expect((rgb & 0x00e0e0e0u) == 0u, 0)) {
-					/* Smooth edge anti-aliasing blend for dark pixels (max_c < 32) */
-					uint32_t nl = src_row[lx > 14u ? lx - 14u : 0u];
-					uint32_t nr = src_row[lx + 14u <= s_w_max ? lx + 14u : s_w_max];
-					if (((nl & nr) & 0x00c0c0c0u) != 0x00c0c0c0u) {
-						uint32_t b = rgb & 0xffu;
-						uint32_t g = (rgb >> 8) & 0xffu;
-						uint32_t r = (rgb >> 16) & 0xffu;
-						uint32_t max_c = r > g ? (r > b ? r : b) : (g > b ? g : b);
-						if (max_c < 28u) {
-							uint32_t wp = wp_row[(uint32_t)px >> 2];
-							uint32_t wf = max_c * 9u;
-							uint32_t ww = 256u - wf;
-							uint32_t wr = wp & 0xffu;
-							uint32_t wg = (wp >> 8) & 0xffu;
-							uint32_t wb = (wp >> 16) & 0xffu;
-							uint32_t or_c = (wr * ww + r * wf) >> 8;
-							uint32_t og_c = (wg * ww + g * wf) >> 8;
-							uint32_t ob_c = (wb * ww + b * wf) >> 8;
-							dst_row[px] = 0xff000000u | (ob_c << 16) | (og_c << 8) | or_c;
-							continue;
-						}
-					}
+				const uint32_t *lower = (const uint32_t *)(pixels + (size_t)(sy + row + 1u) * stride) + sx;
+				uint32_t first = fColumn[cx0];
+				uint32_t last = fColumn[cx1 - 1];
+				if (last + 1u < (uint32_t)sw) {
+					last++;
 				}
+				for (uint32_t c = first; c <= last; c++) {
+					uint32_t a = upper[c], b = lower[c];
+					blendRow[c] = (a == b) ? a : xzs_fb_blend(a, b, weight);
+				}
+				from = blendRow;
 			}
-			/* Convert iOS BGRA (B0=B, B1=G, B2=R, B3=A) to XZS MDP5 unpack (B0=R, B1=G, B2=B, B3=A) */
-			dst_row[px] = (p & 0xff00ff00u) | ((p & 0x00ff0000u) >> 16) | ((p & 0x000000ffu) << 16);
+		} else {
+			uint32_t row = (uint32_t)((int64_t)(y - map_py0) * sh / map_ph);
+			if (row >= (uint32_t)sh) {
+				row = (uint32_t)sh - 1u;
+			}
+			from = (const uint32_t *)(pixels + (size_t)(sy + row) * stride) + sx;
+		}
+
+		if (filter) {
+			for (int32_t x = cx0; x < cx1; x++) {
+				uint32_t c = fColumn[x];
+				uint32_t w = fColumnWeight[x];
+				uint32_t a = from[c];
+				uint32_t p = (w == 0 || a == from[c + 1u]) ? a : xzs_fb_blend(a, from[c + 1u], w);
+				to[x] = xzs_bgra_to_mdp5(p);
+			}
+		} else {
+			for (int32_t x = cx0; x < cx1; x++) {
+				to[x] = xzs_bgra_to_mdp5(from[fColumn[x]]);
+			}
 		}
 	}
 }
@@ -613,15 +509,13 @@ get32(const uint8_t *p, uint32_t off)
 static uint32_t sweet_fb_swaps_logged;
 static uint64_t sweet_fb_swap_count;
 
-/* Queue the swap and wake the async presenter thread immediately. */
+/* Queue the swap for presentation on the next vsync tick. */
 void
 AppleCLCD::swap(const uint8_t *rec)
 {
 	IOLockLock(fLock);
 	memcpy(fPending, rec, SWEET_FB_SWAP_REC_SIZE);
 	fDirty = true;
-	fPresentReady = true;
-	IOLockWakeup(fLock, &fPresentReady, true);
 	IOLockUnlock(fLock);
 	if ((++sweet_fb_swap_count % 1000) == 0) {
 		IOLog("XZS FB: %llu swaps\n", sweet_fb_swap_count);
@@ -663,12 +557,14 @@ AppleCLCD::present(const uint8_t *rec)
 		uintptr_t src = s->kernelAddress();
 		uint32_t bpe = s->bytesPerElement ? s->bytesPerElement : 4;
 		if (w <= 0 || h <= 0) {
-			w = (int32_t)s->width;
-			h = (int32_t)s->height;
+			dx = dy = 0;
+			w = (int32_t)fLogicalW;
+			h = (int32_t)fLogicalH;
 		}
 		if (sw <= 0 || sh <= 0) {
-			sw = w;
-			sh = h;
+			sx = sy = 0;
+			sw = (int32_t)s->width;
+			sh = (int32_t)s->height;
 		}
 		if (sx < 0) sx = 0;
 		if (sy < 0) sy = 0;
@@ -696,11 +592,23 @@ AppleCLCD::present(const uint8_t *rec)
 		if (h > (int32_t)fLogicalH - dy) {
 			h = (int32_t)fLogicalH - dy;
 		}
+
+		bool full_surface_coords = (sx == dx && sy == dy && sw == w && sh == h &&
+		    s->width == fLogicalW && s->height == fLogicalH);
+
 		/* Scale logical (fLogicalW x fLogicalH) rect onto physical panel (fWidth x fHeight) */
 		int32_t px0 = (int32_t)(((int64_t)dx * fWidth) / fLogicalW);
 		int32_t py0 = (int32_t)(((int64_t)dy * fHeight) / fLogicalH);
-		int32_t px1 = (int32_t)(((int64_t)(dx + w) * fWidth) / fLogicalW);
-		int32_t py1 = (int32_t)(((int64_t)(dy + h) * fHeight) / fLogicalH);
+		int32_t px1 = full_surface_coords ?
+		    (int32_t)(((int64_t)(dx + w) * fWidth + fLogicalW - 1) / fLogicalW) :
+		    (int32_t)(((int64_t)(dx + w) * fWidth) / fLogicalW);
+		int32_t py1 = full_surface_coords ?
+		    (int32_t)(((int64_t)(dy + h) * fHeight + fLogicalH - 1) / fLogicalH) :
+		    (int32_t)(((int64_t)(dy + h) * fHeight) / fLogicalH);
+		if (px0 < 0) px0 = 0;
+		if (py0 < 0) py0 = 0;
+		if ((uint32_t)px1 > fWidth) px1 = (int32_t)fWidth;
+		if ((uint32_t)py1 > fHeight) py1 = (int32_t)fHeight;
 		int32_t pw = px1 - px0;
 		int32_t ph = py1 - py0;
 
@@ -712,40 +620,29 @@ AppleCLCD::present(const uint8_t *rec)
 			src = 0;
 		}
 		if (src != 0 && bpe == 4) {
-			uint32_t non_black_samples = 0;
-			uint32_t black_samples = 0;
-			uint32_t total_samples = 0;
-			uint32_t max_rgb = 0;
-			uint32_t sample_rgb = 0;
-			uint32_t step_check_y = g_xzs_gui_presented ?
-			    (sh > 16 ? (uint32_t)(sh / 16) : 1u) :
-			    (sh > 64 ? (uint32_t)(sh / 64) : 1u);
-			int32_t step_check_x = g_xzs_gui_presented ? 32 : 8;
-			for (int32_t cy = sy; cy < sy + sh; cy += (int32_t)step_check_y) {
-				const uint32_t *crow = (const uint32_t *)(src + s->offset + (uint64_t)cy * s->bytesPerRow);
-				for (int32_t cx = sx; cx < sx + sw; cx += step_check_x) {
-					uint32_t rgb = crow[cx] & 0x00ffffffu;
-					total_samples++;
-					if (rgb != 0) {
-						non_black_samples++;
-						if (sample_rgb == 0) {
-							sample_rgb = rgb;
+			if (!fConsolePaused) {
+				uint32_t non_black_samples = 0;
+				uint32_t max_rgb = 0;
+				uint32_t sample_rgb = 0;
+				uint32_t step_check_y = (sh > 64) ? (uint32_t)(sh / 64) : 1u;
+				for (int32_t cy = sy; cy < sy + sh; cy += (int32_t)step_check_y) {
+					const uint32_t *crow = (const uint32_t *)(src + s->offset + (uint64_t)cy * s->bytesPerRow);
+					for (int32_t cx = sx; cx < sx + sw; cx += 8) {
+						uint32_t rgb = crow[cx] & 0x00ffffffu;
+						if (rgb != 0) {
+							non_black_samples++;
+							if (sample_rgb == 0) {
+								sample_rgb = rgb;
+							}
+							uint32_t c0 = rgb & 0xffu;
+							uint32_t c1 = (rgb >> 8) & 0xffu;
+							uint32_t c2 = (rgb >> 16) & 0xffu;
+							if (c0 > max_rgb) max_rgb = c0;
+							if (c1 > max_rgb) max_rgb = c1;
+							if (c2 > max_rgb) max_rgb = c2;
 						}
-						uint32_t c0 = rgb & 0xffu;
-						uint32_t c1 = (rgb >> 8) & 0xffu;
-						uint32_t c2 = (rgb >> 16) & 0xffu;
-						if (c0 > max_rgb) max_rgb = c0;
-						if (c1 > max_rgb) max_rgb = c1;
-						if (c2 > max_rgb) max_rgb = c2;
-					} else {
-						black_samples++;
 					}
 				}
-			}
-
-			/* If fbcon is still active, wait until SpringBoard has created its UI surfaces
-			 * and presented a non-black frame before detaching the boot console. */
-			if (!fConsolePaused) {
 				if (g_xzs_springboard_surface_ready && non_black_samples > 0 && max_rgb >= 0x20u) {
 					int keep_console = 0;
 					fConsolePaused = true;
@@ -757,57 +654,48 @@ AppleCLCD::present(const uint8_t *rec)
 						xzs_fbcon_detach();
 					}
 				} else if (xzs_fbcon_is_active()) {
-					if (sweet_fb_swaps_logged <= 64) {
-						IOLog("SWEET FB: swap %u keeping boot console active (sb_ready=%d non_black=%u max_rgb=0x%02x)\n",
-						    get32(rec, 0x50), g_xzs_springboard_surface_ready ? 1 : 0, non_black_samples, max_rgb);
-					}
 					s->release();
 					continue;
 				}
-			} else {
-				/* Never overwrite the rendered iOS GUI on the physical LCD with an all-black or dimming fade-out frame */
-				if (non_black_samples == 0 || max_rgb < 0x20u) {
-					if (sweet_fb_swaps_logged <= 64) {
-						IOLog("SWEET FB: swap %u skipping dim/black surface %u (non_black=%u max_rgb=0x%02x) to preserve GUI on LCD\n",
-						    get32(rec, 0x50), s->id, non_black_samples, max_rgb);
-					}
-					s->release();
-					continue;
-				}
-				if (g_xzs_springboard_surface_ready && !g_xzs_gui_presented) {
-					g_xzs_gui_presented = true;
-					IOLog("SWEET FB: first visible SpringBoard GUI frame presented (swap %u surface %u %ux%u -> %ux%u non_black=%u max_rgb=0x%02x sample=0x%06x), switching LCD to iOS GUI\n",
-					    get32(rec, 0x50), s->id, s->width, s->height, fWidth, fHeight,
-					    non_black_samples, max_rgb, sample_rgb);
-				} else if (sweet_fb_swaps_logged <= 8) {
-					IOLog("SWEET FB: swap %u presented surface %u (non_black=%u max_rgb=0x%02x sample=0x%06x)\n",
-					    get32(rec, 0x50), s->id, non_black_samples, max_rgb, sample_rgb);
+			} else if (g_xzs_springboard_surface_ready && !g_xzs_gui_presented) {
+				g_xzs_gui_presented = true;
+			}
+
+			int32_t job_sx = full_surface_coords ? 0 : sx;
+			int32_t job_sy = full_surface_coords ? 0 : sy;
+			int32_t job_sw = full_surface_coords ? (int32_t)fLogicalW : sw;
+			int32_t job_sh = full_surface_coords ? (int32_t)fLogicalH : sh;
+			int32_t map_px0 = full_surface_coords ? 0 : px0;
+			int32_t map_pw  = full_surface_coords ? (int32_t)fWidth : pw;
+			bool filter = (job_sw <= (int32_t)SWEET_FB_LOGICAL_W);
+
+			for (int32_t x = px0; x < px1; x++) {
+				if (filter) {
+					int64_t at = xzs_sample_at(x - map_px0, job_sw, map_pw);
+					uint32_t col = (uint32_t)(at >> 8);
+					fColumn[x] = col;
+					fColumnWeight[x] = (uint16_t)(col + 1u < (uint32_t)job_sw ? (at & 255) : 0);
+				} else {
+					fColumn[x] = (uint32_t)((int64_t)(x - map_px0) * job_sw / map_pw);
 				}
 			}
 
-			fJob.src_base = src + s->offset;
-			fJob.src_bpr  = s->bytesPerRow;
-			fJob.src_w    = s->width;
-			fJob.src_h    = s->height;
-			fJob.dst_base = fPixels;
-			fJob.dst_bpr  = fRowBytes;
+			fJob.pixels   = (const uint8_t *)(src + s->offset);
+			fJob.stride   = s->bytesPerRow;
+			fJob.sx       = job_sx;
+			fJob.sy       = job_sy;
+			fJob.sw       = job_sw;
+			fJob.sh       = job_sh;
 			fJob.px0      = px0;
-			fJob.px1      = px1;
 			fJob.py0      = py0;
+			fJob.px1      = px1;
 			fJob.py1      = py1;
-			fJob.sx       = sx;
-			fJob.sy       = sy;
-			fJob.step_x   = ((uint32_t)sw << 16) / (uint32_t)pw;
-			fJob.step_y   = ((uint32_t)sh << 16) / (uint32_t)ph;
-			fJob.use_1to1_map = (fWidth == 1080u && fHeight == 1920u &&
-			    fLogicalW == SWEET_FB_LOGICAL_W && fLogicalH == SWEET_FB_LOGICAL_H &&
-			    sy == 0 && sh == (int32_t)SWEET_FB_LOGICAL_H &&
-			    py0 == 0 && py1 == 1920);
-			fJob.use_wallpaper = s_ios16_wallpaper_ready &&
-			    g_xzs_springboard_surface_ready &&
-			    total_samples > 0 && (black_samples * 3u > total_samples);
+			fJob.cx0      = px0;
+			fJob.cx1      = px1;
+			fJob.filter   = filter;
+			fJob.unscaled = (pw == sw && ph == sh && !full_surface_coords);
 
-			if (ph >= 192 && XZS_FB_WORKER_THREADS > 1) {
+			if (ph >= 120 && XZS_FB_WORKER_THREADS > 1) {
 				__atomic_store_n(&fJob.done_count, 0u, __ATOMIC_RELAXED);
 				__atomic_add_fetch(&fJob.gen, 1u, __ATOMIC_RELEASE);
 				thread_wakeup((event_t)&fJob.gen);

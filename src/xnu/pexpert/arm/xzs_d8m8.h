@@ -3537,6 +3537,10 @@ xzs_d8m8_kickoff(void)
  * in MDP_INTR_STATUS and DSI_STATUS command-mode engines idle) before
  * clearing PP0_DONE / CMD_MDP_DONE for the next kickoff.
  */
+extern bool g_xzs_gui_presented;
+extern void delay_for_interval(uint32_t interval, uint32_t scale_factor);
+extern boolean_t ml_get_interrupts_enabled(void);
+
 static bool
 xzs_d8m8_wait_frame_idle(uint32_t timeout_us)
 {
@@ -3549,6 +3553,7 @@ xzs_d8m8_wait_frame_idle(uint32_t timeout_us)
 	uint64_t start = xzs_d8m5_read_cntvct();
 	uint64_t limit = ((uint64_t)timeout_us * frq) / 1000000ULL;
 	uint32_t polls = 0;
+	bool can_sleep = g_xzs_gui_presented && ml_get_interrupts_enabled();
 	while (1) {
 		uint32_t intr = d8p1_read32(0x00901014u);
 		uint32_t dsi_st = d8p1_read32(0x00994008u);
@@ -3565,7 +3570,11 @@ xzs_d8m8_wait_frame_idle(uint32_t timeout_us)
 		if ((++polls & 0x3fu) == 0u) {
 			xzs_watchdog_pet();
 		}
-		xzs_d8p2_delay_us(50u);
+		if (can_sleep) {
+			delay_for_interval(500u, 1000u);
+		} else {
+			xzs_d8p2_delay_us(50u);
+		}
 		uint64_t now = xzs_d8m5_read_cntvct();
 		if ((now - start) >= limit) {
 			return false;

@@ -1630,6 +1630,8 @@ bsdinit_task(void)
 		xzs_watchdog_pet();
 		delay(1000);
 	}
+	extern void xzs_promote_staged_system_apps(void);
+	xzs_promote_staged_system_apps();
 	xzs_bringup_console_write("[XZS-BOOT] [D10] bsdinit_task: calling load_init_program(/sbin/launchd)\n", 72);
 #endif
 	load_init_program(p);

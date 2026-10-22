@@ -36,6 +36,8 @@ xzs_spmi_delay_us(uint32_t usec)
 static vm_offset_t g_xzs_spmi_core_base = 0;
 static vm_offset_t s_obs_channel_map[SPMI_MAX_APID] = { 0 };
 static vm_offset_t s_wr_channel_map[SPMI_MAX_APID] = { 0 };
+static int16_t s_ppid_to_apid[4096];
+static bool s_ppid_cache_ready = false;
 
 /*
  * Helper: Read 32-bit register from SPMI Core
@@ -76,6 +78,20 @@ xzs_spmi_init(void)
 		xzs_early_puts("[XZS-SPMI] WARNING: Unexpected SPMI Arbiter HW Version!\n");
 	}
 
+	for (uint32_t i = 0; i < 4096; i++) {
+		s_ppid_to_apid[i] = -1;
+	}
+	for (uint16_t apid = 0; apid < SPMI_MAX_APID; apid++) {
+		uint32_t regval = spmi_core_read32(SPMI_REG_APID_MAP(apid));
+		if (regval != 0) {
+			uint16_t ppid = (uint16_t)((regval >> 8) & SPMI_PPID_MASK);
+			if (s_ppid_to_apid[ppid] < 0) {
+				s_ppid_to_apid[ppid] = (int16_t)apid;
+			}
+		}
+	}
+	s_ppid_cache_ready = true;
+
 	return 0;
 }
 
@@ -108,6 +124,16 @@ xzs_spmi_find_apid(uint8_t sid, uint16_t addr, uint16_t *out_apid)
 	}
 
 	uint16_t target_ppid = (uint16_t)(((uint16_t)sid << 8) | ((addr >> 8) & 0xFFU));
+	if (s_ppid_cache_ready) {
+		int16_t cached = s_ppid_to_apid[target_ppid & SPMI_PPID_MASK];
+		if (cached >= 0) {
+			if (out_apid != NULL) {
+				*out_apid = (uint16_t)cached;
+			}
+			return 0;
+		}
+		return -1;
+	}
 
 	for (uint16_t apid = 0; apid < SPMI_MAX_APID; apid++) {
 		uint32_t regval = spmi_core_read32(SPMI_REG_APID_MAP(apid));

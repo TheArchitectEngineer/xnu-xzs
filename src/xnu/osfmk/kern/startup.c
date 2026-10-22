@@ -1214,7 +1214,7 @@ xzs_bringup_secondary_cpu(uint32_t cpu_id, uint64_t target_mpidr, vm_offset_t se
 	cdp->cpu_number = (unsigned short)cpu_id;
 	cdp->cpu_id = (cpu_id_t)(uintptr_t)cpu_id;
 	cdp->cpu_phys_id = (uint32_t)target_mpidr;
-	cdp->cpu_cluster_id = (cpu_id >= 2) ? 1 : 0;
+	cdp->cpu_cluster_id = 0;
 	cdp->cpu_tpidr_el0 = (((uint64_t)cpu_id) & 0xfffULL) |
 	    (((uint64_t)cdp->cpu_cluster_id << 12) & 0xff000ULL);
 	cdp->cpu_type = CPU_TYPE_ARM64;

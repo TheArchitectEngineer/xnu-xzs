@@ -2594,7 +2594,22 @@ proc_exit(proc_t p)
 	     strncmp(p->p_comm, "pearld", sizeof(p->p_comm)) == 0 ||
 	     strncmp(p->p_comm, "nfcd", sizeof(p->p_comm)) == 0 ||
 	     strncmp(p->p_comm, "wirelessproxd", sizeof(p->p_comm)) == 0 ||
-	     strncmp(p->p_comm, "syncdefaultsd", sizeof(p->p_comm)) == 0)) {
+	     strncmp(p->p_comm, "syncdefaultsd", sizeof(p->p_comm)) == 0 ||
+	     strncmp(p->p_comm, "driverkitd", sizeof(p->p_comm)) == 0 ||
+	     strncmp(p->p_comm, "duetexpertd", sizeof(p->p_comm)) == 0 ||
+	     strncmp(p->p_comm, "siriinferenced", sizeof(p->p_comm)) == 0 ||
+	     strncmp(p->p_comm, "parsec-fbf", sizeof(p->p_comm)) == 0 ||
+	     strncmp(p->p_comm, "backupd", sizeof(p->p_comm)) == 0 ||
+	     strncmp(p->p_comm, "CommCenterMobile", sizeof(p->p_comm)) == 0 ||
+	     strncmp(p->p_comm, "amsengagementd", sizeof(p->p_comm)) == 0 ||
+	     strncmp(p->p_comm, "coreidvd", sizeof(p->p_comm)) == 0 ||
+	     strncmp(p->p_comm, "SafariBookmarksS", sizeof(p->p_comm)) == 0 ||
+	     strncmp(p->p_comm, "watchlistd", sizeof(p->p_comm)) == 0 ||
+	     strncmp(p->p_comm, "carkitd", sizeof(p->p_comm)) == 0 ||
+	     strncmp(p->p_comm, "fmflocatord", sizeof(p->p_comm)) == 0 ||
+	     strncmp(p->p_comm, "ProtectedCloudKe", sizeof(p->p_comm)) == 0 ||
+	     strncmp(p->p_comm, "IMDPersistenceAg", sizeof(p->p_comm)) == 0 ||
+	     strncmp(p->p_comm, "findmydeviced", sizeof(p->p_comm)) == 0)) {
 		printf("SWEET EXIT: parking %s[%d] after task/vm/fd teardown to prevent launchd respawn storm\n",
 		    p->p_comm, pid);
 		delay_for_interval(3600, NSEC_PER_SEC);

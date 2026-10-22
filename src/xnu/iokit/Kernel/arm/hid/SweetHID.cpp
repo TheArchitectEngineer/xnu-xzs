@@ -417,6 +417,8 @@ SweetHIDButtons::key(UInt32 usage, bool down)
 	}
 }
 
+static volatile bool s_real_touch_seen = false;
+
 void
 SweetHIDButtons::testFired(OSObject *owner, IOTimerEventSource *sender)
 {
@@ -429,14 +431,14 @@ SweetHIDButtons::testFired(OSObject *owner, IOTimerEventSource *sender)
 
 	/*
 	 * Once SpringBoard has presented its first frame on the LCD:
-	 * - On steps 2..6 (and 10..14), perform a bottom-edge swipe-up gesture
-	 *   (y=1910 -> 1550 -> 1150 -> 700 -> release) to unlock CoverSheet to the Home Screen.
-	 * - After step 14, stop synthetic input unless boot-arg sweethidtest=N was explicitly set.
+	 * - On steps 2..6 (unless real user touch already occurred), perform a single
+	 *   bottom-edge swipe-up gesture to unlock CoverSheet to the Home Screen.
+	 * - After step 6, stop synthetic input unless boot-arg sweethidtest=N was explicitly set.
 	 */
 	UInt32 step = self->fTestCount++;
-	if (step < 15) {
-		if ((step >= 2 && step <= 6) || (step >= 10 && step <= 14)) {
-			UInt32 sub = (step >= 10) ? (step - 10) : (step - 2);
+	if (step < 7 && !s_real_touch_seen) {
+		if (step >= 2 && step <= 6) {
+			UInt32 sub = step - 2;
 			static const int swipe_y[5] = { 1910, 1550, 1150, 700, 700 };
 			if (gSweetTouch) {
 				gSweetTouch->touch(0, sub < 4, 540, swipe_y[sub]);
@@ -489,9 +491,8 @@ SweetHIDTouch::touch(int finger, bool down, int x, int y)
 
 	IOLockLock(fLock);
 	bool was = fDown[finger];
-	uint32_t ly = xzs_fb_py_to_ly((uint32_t)y);
 	IOFixed nx = (IOFixed)(((int64_t)x << 16) / 1080);
-	IOFixed ny = (IOFixed)(((int64_t)ly << 16) / 2436);
+	IOFixed ny = (IOFixed)(((int64_t)y << 16) / 1920);
 	bool moved = down && (nx != fX[finger] || ny != fY[finger]);
 	if (was == down && !moved) {
 		IOLockUnlock(fLock);
@@ -679,7 +680,7 @@ xzs_keys_thread(void *arg __unused, wait_result_t wr __unused)
 				}
 			}
 		}
-		IOSleep(20);
+		IOSleep(10);
 	}
 }
 
@@ -1065,16 +1066,17 @@ xzs_touch_thread(void *arg __unused, wait_result_t wr __unused)
 	int last_y[SWEET_TOUCH_FINGERS] = { 0 };
 	uint32_t poll_tick = 0;
 	uint32_t irq_events_logged = 0;
+	uint32_t fail_streak = 0;
 
 	for (;;) {
 		uint32_t irq_pin = xzs_tlmm_rd(XZS_GPIO_IN_OUT(XZS_TOUCH_IRQ_PIN)) & 1u;
 		poll_tick++;
 		uint8_t st[2] = { 0 };
-		if (irq_pin == 0u || active_mask != 0u || (poll_tick & 3u) == 0u) {
+		if (irq_pin == 0u || (poll_tick & 7u) == 0u) {
 			if (f01_data != 0) {
 				(void)xzs_rmi4_read(slave, f01_data, st, 2);
 				/* If device reset/unconfigured bit 7 set, re-assert F01 Configured */
-				if ((st[0] & 0x80u) != 0u && f01_ctrl != 0) {
+				if ((st[0] & 0x80u) != 0u && (st[0] & 0x70u) == 0u && f01_ctrl != 0) {
 					uint8_t ctrl[2] = { 0x80u, 0xffu };
 					(void)xzs_rmi4_write(slave, f01_ctrl, ctrl, 2);
 				}
@@ -1086,7 +1088,7 @@ xzs_touch_thread(void *arg __unused, wait_result_t wr __unused)
 				if (f12_page != 0) {
 					(void)xzs_rmi4_write(slave, 0xffu, &f12_page, 1);
 				}
-				uint8_t raw[24] = { 0 }; /* 3 fingers * 8 bytes */
+				uint8_t raw[16] = { 0 }; /* 2 fingers * 8 bytes */
 				bool ok = xzs_rmi4_read(slave, (uint8_t)(f12_data + f12_data1_off), raw, sizeof(raw));
 				if ((irq_pin == 0u || st[1] != 0u) && irq_events_logged < 32) {
 					irq_events_logged++;
@@ -1095,12 +1097,16 @@ xzs_touch_thread(void *arg __unused, wait_result_t wr __unused)
 					    raw[0], raw[1], raw[2], raw[3], raw[4], raw[5], raw[6], raw[7]);
 				}
 				if (ok) {
-					for (int i = 0; i < 3; i++) {
+					fail_streak = 0;
+					for (int i = 0; i < 2; i++) {
 						const uint8_t *fo = &raw[i * 8];
-						uint8_t type = fo[0] & 0x0fu;
-						bool down = (type == 1u || type == 3u);
+						uint8_t type = fo[0];
+						bool down = (type == 0x01u || type == 0x03u);
 						int rx = (int)(fo[1] | ((uint16_t)fo[2] << 8));
 						int ry = (int)(fo[3] | ((uint16_t)fo[4] << 8));
+						if (rx < 0 || rx > sensor_max_x || ry < 0 || ry > sensor_max_y) {
+							down = false;
+						}
 						int x = (sensor_max_x > 0 && sensor_max_x != 1079) ?
 						    (rx * 1079) / sensor_max_x : rx;
 						int y = (sensor_max_y > 0 && sensor_max_y != 1919) ?
@@ -1109,7 +1115,8 @@ xzs_touch_thread(void *arg __unused, wait_result_t wr __unused)
 						if (down && !(active_mask & (1u << i)) && (x < 12 || x > 1067)) {
 							down = false;
 						}
-						if (down && x >= 0 && x <= 1200 && y >= 0 && y <= 2000) {
+						if (down && x >= 0 && x <= 1079 && y >= 0 && y <= 1919) {
+							s_real_touch_seen = true;
 							next_mask |= (1u << i);
 							last_x[i] = x;
 							last_y[i] = y;
@@ -1119,6 +1126,16 @@ xzs_touch_thread(void *arg __unused, wait_result_t wr __unused)
 						}
 					}
 					active_mask = next_mask;
+				} else if (active_mask != 0u) {
+					if (++fail_streak >= 2u) {
+						for (int i = 0; i < 2; i++) {
+							if (active_mask & (1u << i)) {
+								sweet_hid_touch(i, 0, last_x[i], last_y[i]);
+							}
+						}
+						active_mask = 0;
+						fail_streak = 0;
+					}
 				}
 				if (f12_page != 0) {
 					(void)xzs_rmi4_write(slave, 0xffu, &page0, 1);
