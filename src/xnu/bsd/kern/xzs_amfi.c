@@ -273,6 +273,7 @@ sweet_amfi_vnode_check_signature(struct vnode *vp, __unused struct label *label,
 {
 	mount_t mp = vnode_mount(vp);
 	*cs_flags |= CS_SIGNED;
+	*cs_flags &= ~(CS_RESTRICT | CS_REQUIRE_LV | CS_FORCED_LV);
 	if (mp != NULL && (vfs_flags(mp) & MNT_ROOTFS)) {
 		*cs_flags |= CS_PLATFORM_BINARY;
 	}

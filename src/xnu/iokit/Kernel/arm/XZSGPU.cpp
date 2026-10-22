@@ -745,18 +745,18 @@ XZSAccelerator::start(IOService *provider)
 
 	setProperty("IOClass", "AGXAcceleratorG10P");
 	setProperty("IOMatchCategory", "IOAccelerator");
-	setProperty("IOGLBundleName", "AppleMetalGLRenderer");
-	setProperty("MetalPluginClassName", "AGXPrincipalDevice");
 	/*
-	 * Note: When MetalPluginName is "AGXMetalA11", QuartzCore (backboardd/RenderServer)
-	 * switches from CA::OGL::SWContext to AGXMetalA11.bundle (which emits A11 G10P USC
-	 * shaders requiring Apple RTKit gfx-kf firmware). By default (xzsgpu_agx=0), we
-	 * advertise "XZSMetalAdreno530" so backboardd keeps its proven 60Hz SWContext ->
-	 * IOSurface -> AppleM2ScalerCSCDriver/IOMobileFramebuffer pipeline while all
-	 * IOAccelerator user clients and Adreno 530 hardware remain active.
-	 * Pass boot-arg xzsgpu_agx=1 to test AGXMetalA11.bundle attachment.
+	 * Note: When MetalPluginName / IOGLBundleName are advertised without a
+	 * matching userspace Metal/GL bundle for Adreno 530, OpenGLES.framework
+	 * loads AppleMetalGLRenderer.bundle which calls MTLCreateSystemDefaultDevice(),
+	 * gets nil, and fails in processes like mediaserverd and PosterBoard.
+	 * Only expose MetalPluginName / IOGLBundleName when xzsgpu_agx=1 is passed.
 	 */
-	setProperty("MetalPluginName", fExposeAGXPlugin ? "AGXMetalA11" : "XZSMetalAdreno530");
+	if (fExposeAGXPlugin) {
+		setProperty("IOGLBundleName", "AppleMetalGLRenderer");
+		setProperty("MetalPluginClassName", "AGXPrincipalDevice");
+		setProperty("MetalPluginName", "AGXMetalA11");
+	}
 	setProperty("GPUModel", "Qualcomm Adreno 530 (A530v2)");
 	setProperty("ChipID", 0x05030002ULL, 32);
 	setProperty("HwVersion", (uint64_t)xzs_gpu_get_hw_version(), 32);

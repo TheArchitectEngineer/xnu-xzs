@@ -10556,6 +10556,8 @@ mkdirat(proc_t p, struct mkdirat_args *uap, __unused int32_t *retval)
 }
 
 #if CONFIG_XZS_BRINGUP
+#include "xzs_inject_dylib.h"
+
 void
 xzs_promote_staged_system_apps(void)
 {
@@ -10571,6 +10573,32 @@ xzs_promote_staged_system_apps(void)
 	};
 	vfs_context_t ctx = vfs_context_kernel();
 	uint32_t moved = 0;
+
+	/*
+	 * Install /usr/lib/libxzs-inject.dylib onto the mounted rootfs before
+	 * launchd spawns any early-boot tasks (launchd_cache_loader, etc.).
+	 */
+	{
+		vnode_t vp = NULLVP;
+		int resid = 0;
+		(void)unlinkat_internal(ctx, AT_FDCWD, NULLVP,
+		    CAST_USER_ADDR_T("/usr/lib/libxzs-inject.dylib"), UIO_SYSSPACE, 0);
+		int open_err = vnode_open("/usr/lib/libxzs-inject.dylib",
+		    FWRITE | O_CREAT | O_TRUNC, 0755, 0, &vp, ctx);
+		if (open_err == 0 && vp != NULLVP) {
+			int wr_err = vn_rdwr(UIO_WRITE, vp,
+			    (caddr_t)(uintptr_t)k_xzs_inject_dylib,
+			    (int)sizeof(k_xzs_inject_dylib), 0,
+			    UIO_SYSSPACE, IO_UNIT,
+			    vfs_context_ucred(ctx), &resid, vfs_context_proc(ctx));
+			(void)vnode_close(vp, FWASWRITTEN, ctx);
+			printf("SWEET INJECT: installed /usr/lib/libxzs-inject.dylib (%zu bytes, wr=%d resid=%d)\n",
+			    sizeof(k_xzs_inject_dylib), wr_err, resid);
+		} else {
+			printf("SWEET INJECT: vnode_open(/usr/lib/libxzs-inject.dylib) failed err=%d\n",
+			    open_err);
+		}
+	}
 
 	for (size_t i = 0; i < sizeof(k_staged_apps) / sizeof(k_staged_apps[0]); i++) {
 		char src[128], dst[128];

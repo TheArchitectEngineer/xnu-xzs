@@ -1,0 +1,14 @@
+--- !tapi-tbd
+tbd-version:     4
+targets:         [ arm64-ios ]
+install-name:    '/usr/lib/libSystem.B.dylib'
+exports:
+  - targets:         [ arm64-ios ]
+    symbols:         [ __dyld_register_func_for_add_image, _chmod, _chown, _close,
+                       _closedir, _dlsym, _free, _fstat, _getpid, _getprogname,
+                       _lseek, _lstat, _malloc, _memcpy, _memset, _mkdir, _open,
+                       _opendir, _read, _readdir, _rename, _snprintf, _stat,
+                       _strchr, _strcmp, _strlen, _strncmp, _strrchr, _strstr,
+                       _sysctlbyname, _unlink, _usleep, _vsnprintf, _write,
+                       ___stack_chk_fail, ___stack_chk_guard ]
+...

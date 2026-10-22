@@ -25,7 +25,7 @@ D13-M1..M4 = PASS (Adreno 530 A530v2 bring-up, AppleM2ScalerCSCDriver, IOSurface
 * **GPU**: Qualcomm Adreno 530 (`A530v2`, `0x00b00000`, `chipid = 0x05030002`, 1 MB GMEM, 32 KB CP Ringbuffer at `0x90f00000`)
 * **Storage Device**: Samsung `BJNB4R` 32 GB eMMC 5.1 (`19.2 MHz` 8-bit `CMD18`/`CMD24`/`CMD25`, `/dev/disk0s54` mounted R/W as `/`)
 * **Display Panel**: 5.2" `1080x1920` Sharp/Synaptics command-mode MIPI DSI LCD (`somc,sharp_synaptics_cmd_9_panel`)
-* **Active Branch**: `xzs-d13-gpu-adreno-metal`
+* **Active Branch**: `main`
 
 ---
 

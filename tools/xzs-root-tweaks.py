@@ -78,6 +78,150 @@ def merge_pref(root, name, values):
     print('  [PREF] updated', name, sorted(values))
 
 
+LAUNCHD_ALLOW = {
+    'com.apple.SpringBoard',
+    'com.apple.backboardd',
+    'com.apple.cfprefsd.xpc.daemon',
+    'com.apple.configd',
+    'com.apple.containermanagerd',
+    'com.apple.containermanagerd_system',
+    'com.apple.coreservices.appleid.authentication',
+    'com.apple.distnoted.xpc.daemon',
+    'com.apple.fairplayd.A2',
+    'com.apple.frontboard.systemappservices',
+    'com.apple.IOMobileFramebufferUserServer',
+    'com.apple.iohideventsystem',
+    'com.apple.keybagd',
+    'com.apple.logd',
+    'com.apple.lsd',
+    'com.apple.mobile.keybagd',
+    'com.apple.mobileactivationd',
+    'com.apple.mobilegestalt.xpc',
+    'com.apple.notifyd',
+    'com.apple.powerd',
+    'com.apple.runningboardd',
+    'com.apple.securityd',
+    'com.apple.tccd',
+    'com.apple.usermanagerd',
+}
+
+LAUNCHD_DENY = {
+    'com.apple.Accessories',
+    'com.apple.BlueTool',
+    'com.apple.CommCenter',
+    'com.apple.MobileSMS',
+    'com.apple.ReportCrash',
+    'com.apple.ReportMemoryException',
+    'com.apple.Spindump',
+    'com.apple.TailSpin',
+    'com.apple. thermalmonitord',
+    'com.apple.WirelessCoexManager',
+    'com.apple.accessoryd',
+    'com.apple.aneuserd',
+    'com.apple.applecamerad',
+    'com.apple.apsd',
+    'com.apple.asd',
+    'com.apple.audio.AudioComponentRegistrar',
+    'com.apple.audiomxd',
+    'com.apple.awdd',
+    'com.apple.biomed',
+    'com.apple.biomesyncd',
+    'com.apple.bluetoothd',
+    'com.apple.cameracaptured',
+    'com.apple.cdpd',
+    'com.apple.cloudd',
+    'com.apple.companion_proxy',
+    'com.apple.contextstored',
+    'com.apple.corecaptured',
+    'com.apple.coreduetd',
+    'com.apple.corespeechd',
+    'com.apple.dasd',
+    'com.apple. diagnosticd',
+    'com.apple.duetexpertd',
+    'com.apple.fseventsd',
+    'com.apple.gamecontrollerd',
+    'com.apple.gpsd',
+    'com.apple.healthd',
+    'com.apple.homed',
+    'com.apple.iapd',
+    'com.apple.icloud.findmydeviced',
+    'com.apple.identityservicesd',
+    'com.apple.imagent',
+    'com.apple.itunesstored',
+    'com.apple.locationd',
+    'com.apple.lockdownd',
+    'com.apple.mDNSResponder',
+    'com.apple.mDNSResponderHelper',
+    'com.apple.mediaremoted',
+    'com.apple.Metal',
+    'com.apple.milod',
+    'com.apple.mobile.NRDUpdated',
+    'com.apple.mobile.installation_proxy',
+    'com.apple.mobile.obliteration',
+    'com.apple.mobile.softwareupdated',
+    'com.apple.mobileassetd',
+    'com.apple.mobilebackupd',
+    'com.apple.MobileInternetSharing',
+    'com.apple.nand_task_scheduler',
+    'com.apple.nano',
+    'com.apple.nanoregistryd',
+    'com.apple.navd',
+    'com.apple.ndoagent',
+    'com.apple.nehelper',
+    'com.apple.nesessionmanager',
+    'com.apple.networkserviceproxy',
+    'com.apple.nfcd',
+    'com.apple. OSLog',
+    'com.apple.passd',
+    'com.apple.parsec-fbf',
+    'com.apple.parsecd',
+    'com.apple.PerfPowerServices',
+    'com.apple.peopled',
+    'com.apple.photoanalysisd',
+    'com.apple.powerlogHelperd',
+    'com.apple.proactiveeventtrackerd',
+    'com.apple.rapportd',
+    'com.apple.relatived',
+    'com.apple.remindd',
+    'com.apple.routined',
+    'com.apple.rtcreportingd',
+    'com.apple.searchd',
+    'com.apple.seld',
+    'com.apple.SensorKit',
+    'com.apple.sharingd',
+    'com.apple.siri.acousticsignature',
+    'com.apple.siriactionsd',
+    'com.apple.siriknowledged',
+    'com.apple.siriinferenced',
+    'com.apple.softwareupdateservicesd',
+    'com.apple.spotlight',
+    'com.apple.StatusKitAgent',
+    'com.apple.suggestd',
+    'com.apple.symptomsd',
+    'com.apple.symptomsd-helper',
+    'com.apple.syncdefaultsd',
+    'com.apple.syslogd',
+    'com.apple.telephonyutilities.callservicesd',
+    'com.apple.thermalmonitord',
+    'com.apple.timed',
+    'com.apple.triald',
+    'com.apple.tzlinkd',
+    'com.apple.usb.networking.addNetworkInterface',
+    'com.apple.UserEventAgent-System',
+    'com.apple.videosubscriptionsd',
+    'com.apple.VoiceOverTouch',
+    'com.apple.voicemaild',
+    'com.apple.watchdogd',
+    'com.apple.weatherd',
+    'com.apple.WebSheet',
+    'com.apple.wifid',
+    'com.apple. wifid',
+    'com.apple.wifiFirmwareLoader',
+    'com.apple.wifip2pd',
+    'com.apple.wirelessproxd',
+}
+
+
 def tweak_launchd(root, orig_owners=None):
     rel = 'System/Library/xpc/launchd.plist'
     path = os.path.join(root, rel)
@@ -90,15 +234,36 @@ def tweak_launchd(root, orig_owners=None):
     plist = load(path)
     jobs = plist['LaunchDaemons']
     renamed = 0
-    for job in jobs.values():
+    removed = []
+    ondemand = 0
+    kept = 0
+    for k, job in list(jobs.items()):
+        if not isinstance(job, dict):
+            continue
         if '_PanicOnCrash' in job:
             job['_PanicOnCrasX'] = job.pop('_PanicOnCrash')
             renamed += 1
-    removed = [k for k, j in jobs.items() if j.get('Label') == 'com.apple.CommCenter']
-    for k in removed:
-        del jobs[k]
+        label = job.get('Label', '')
+        if label in LAUNCHD_DENY:
+            removed.append(k)
+            del jobs[k]
+            continue
+        if label in LAUNCHD_ALLOW:
+            if label == 'com.apple.lsd':
+                job['RunAtLoad'] = True
+            kept += 1
+            continue
+        if 'MachServices' in job:
+            for trigger in ('RunAtLoad', 'KeepAlive', 'LaunchEvents',
+                            'StartInterval', 'StartCalendarInterval',
+                            'WatchPaths', 'QueueDirectories'):
+                job.pop(trigger, None)
+            ondemand += 1
+        else:
+            removed.append(k)
+            del jobs[k]
     save(root, path, plist, uid, gid, mode)
-    print(f'  [LAUNCHD] {renamed} _PanicOnCrash renamed, {len(removed)} CommCenter jobs removed')
+    print(f'  [LAUNCHD] {renamed} _PanicOnCrash renamed, {kept} boot jobs, {ondemand} on-demand, {len(removed)} removed')
 
 
 def create_containers(root):
@@ -188,7 +353,12 @@ def apply_all_tweaks(root, orig_owners=None):
     merge_pref(root, 'com.apple.springboard', {
         'BKNoWatchdogs': True,
         'FBLaunchWatchdogExceptions': {'com.apple.purplebuddy': 100.0},
-        'MCForceShowCloudConfigurationUI': False
+        'MCForceShowCloudConfigurationUI': False,
+        'BSUIVibrancyEffectViewDisabled': True,
+        'SBDisableHomeButton': False,
+    })
+    merge_pref(root, '.GlobalPreferences', {
+        'BSUIVibrancyEffectViewDisabled': True,
     })
     merge_pref(root, 'com.apple.purplebuddy', {
         'SetupDone': True,

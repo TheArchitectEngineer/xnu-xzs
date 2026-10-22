@@ -183,3 +183,18 @@ On physical Sony Xperia XZs (`BH905SX976`) running iOS 16.7.16 (`20H392`), the `
 - `A5XX_VBIF_VERSION = 0x20040001` (live read from `0x00b0c000`)
 - `A5XX_RBBM_STATUS = 0x00000001` (live read from `0x00b00850`)
 
+---
+
+## 8. In-Kernel Userland Runtime Optimization (`src/xzs-userland/inject.c` & `/usr/lib/libxzs-inject.dylib`)
+
+To ensure zero-reflashing compatibility with the live 14 GB HFS+ iOS 16.7.16 (`20H392`) rootfs on `/dev/disk0s54`, the XNU kernel automatically writes `/usr/lib/libxzs-inject.dylib` (`57,520` bytes, `PAC=0`) during `mount_common()` (`xzs_promote_staged_system_apps` in `src/xnu/bsd/vfs/vfs_syscalls.c`) and injects `DYLD_INSERT_LIBRARIES=/usr/lib/libxzs-inject.dylib` in `exec_extract_strings()` (`src/xnu/bsd/kern/kern_exec.c`) for targeted system processes (`tzinit`, `containermanagerd`, `containermanagerd_system`, `backboardd`, `SpringBoard`, and `mediaserverd`).
+
+| Target Process | Runtime Optimization / Objective-C Swizzle | Technical Effect on `BH905SX976` |
+| :--- | :--- | :--- |
+| **`tzinit` (`pid=17`)** | `xzs_prune_launchd_plist()` + `xzs_configure_preferences_and_rebuild_lsd()` | Executes 1 second before `launchd` opens `/System/Library/xpc/launchd.plist` to size its `xpc_shmem` region for `launchd_cache_loader` (`pid=22`). Keeps only `23` essential boot daemons (`RunAtLoad = true` for `com.apple.lsd`), converts `354` MachService daemons to strictly on-demand (`RunAtLoad = false`, `KeepAlive = false`), drops `153` hardware-absent/telemetry daemons, sets `BSUIVibrancyEffectViewDisabled = true` on disk, and unlinks stale `com.apple.LaunchServices-*.csstore` / `com.apple.lsdidentifiers.plist` inside `/private/var/containers/Shared/SystemGroup/*/Library/Caches/` whenever `/Applications` app count (`173` bundles) changes. |
+| **`containermanagerd` (`pid=32`)** | `+[MCMUserIdentityCache personasAreSupported]` -> `NO` | Eliminates the 20-second `personasAreSupported` kernel persona lookup retry loop during container initialization, allowing Settings (`Preferences.app`) and stock apps to open immediately. |
+| **`backboardd` (`pid=30`)** | `-[EAGLContext initWithAPI:properties:]` -> `nil` | Fast-fails legacy OpenGL ES context initialization without gating `MTLCreateSystemDefaultDevice` when `fExposeAGXPlugin` (`xzsgpu_agx=0`) hides `IOGLBundleName`. |
+| **`SpringBoard` (`pid=26`)** | `BSUIVibrancyEffectView.isDisabled` -> `YES`, `SBApplicationSnapshotImageGenerator` -> JPEG/PNG, `SBFluidSwitcherViewController` & `SBFWallpaperView` wash removal | Replaces the red Lock Screen clock alpha-mask tint on the software compositor with clean white `plain_vibrancy` typography; replaces 10-second CPU ASTC (`ATX`) app switcher snapshot encoding with instant JPEG/PNG snapshots; disables the black Poster Switcher and magenta App Switcher wallpaper wash; waits `4.0s` on first boot after an `lsd` cache reset so all `2` Home Screen pages of apps are indexed before `IconState.plist` is created. |
+| **`mediaserverd` (`pid=48`)** | `+[BWCoreImageFilterRenderer prewarmPortraitFilterVersion:semanticStyleFilters:]` -> no-op | Prevents `CMCapture` portrait OpenGL shader prewarm from aborting `mediaserverd`, keeping `VideoToolbox` (`VCPHEVC.videocodec`) alive so `PosterBoard` decodes all 4 `.heic` layers of the stock iOS 16 wallpaper instead of falling back to a black background. |
+
+

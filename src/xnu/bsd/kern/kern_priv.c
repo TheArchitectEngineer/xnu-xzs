@@ -122,6 +122,11 @@ priv_check_cred(kauth_cred_t cred, int priv, int flags)
 	 * The default is deny, so if no policies have granted it, reject
 	 * with a privilege error here.
 	 */
+	if (priv == PRIV_NET_PRIVILEGED_SOCKET_DELEGATE ||
+	    priv == PRIV_VM_FOOTPRINT_LIMIT) {
+		error = 0;
+		goto out;
+	}
 	error = EPERM;
 out:
 	return error;

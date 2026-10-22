@@ -6305,6 +6305,29 @@ exec_extract_strings(struct image_params *imgp)
 		imgp->ip_envc++;
 	}
 
+#if CONFIG_XZS_BRINGUP
+	if (imgp->ip_strings != NULL) {
+		const char *exec_str = imgp->ip_strings;
+		const char *base = strrchr(exec_str, '/');
+		base = (base != NULL) ? (base + 1) : exec_str;
+		if (strcmp(base, "tzinit") == 0 ||
+		    strcmp(base, "containermanagerd") == 0 ||
+		    strcmp(base, "containermanagerd_system") == 0 ||
+		    strcmp(base, "backboardd") == 0 ||
+		    strcmp(base, "SpringBoard") == 0 ||
+		    strcmp(base, "mediaserverd") == 0) {
+			static const char k_xzs_inject_env[] =
+			    "DYLD_INSERT_LIBRARIES=/usr/lib/libxzs-inject.dylib";
+			if (imgp->ip_argspace >= new_ptr_size &&
+			    exec_add_user_string(imgp, CAST_USER_ADDR_T(k_xzs_inject_env),
+			    UIO_SYSSPACE, TRUE) == 0) {
+				imgp->ip_argspace -= new_ptr_size;
+				imgp->ip_envc++;
+			}
+		}
+	}
+#endif
+
 	/* Save space for envv[] NULL terminator */
 	if (imgp->ip_argspace < new_ptr_size) {
 		error = E2BIG;
