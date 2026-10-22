@@ -1,159 +1,71 @@
 # Sony Xperia XZs (MSM8996) — Port Status
 
-Current sealed display milestones are D8-M1..M6, D8-P1, D8-P2, D8-M8, D8-M8.5, and D8-M10. Milestone D8-M10 (Early Boot Framebuffer Console & Interactive Shell Display on Physical LCD) is **COMPLETE / SEALED / HARDWARE PROVEN** on physical silicon (`BH905SX976`, reports `docs/XZS_D8_M10_HARDWARE_EVALUATION.md` and `docs/DISPLAY_REGRESSION_BISECT_RESULT.md`). Phase D9 (Apple Compatibility Services Layer & Kernel Subsystems) and Phase D10-M1 (14 GB HFS+ iOS 16.7.16 RootFS Creation, Flash & Live Hardware Mount on `/dev/disk0s54`) are **COMPLETE & VERIFIED** under the hybrid architecture blueprint (`docs/XZS_IOS_HYBRID_ARCHITECTURE.md`).
+All bring-up, display, storage, `XZSAppleCompat` services, iOS 16.7.16 RootFS, multi-touch/button HID, and 60 Hz compositor milestones (`Phase A` through `Phase D12`) are **COMPLETE, SEALED, AND HARDWARE PROVEN** on physical Sony Xperia XZs silicon (`BH905SX976`).
 
 ```text
-D7-T1   = PASS (USB transport)
-D7-T2   = PASS (generic native Mach-O execution; DEBT-001 RESOLVED)
-D8-M1   = PASS (display topology audit)
-D8-M2   = PASS (display power & core clocks)
-D8-M3   = PASS (DSI PLL / clocks / 14nm PHY Stage B; COMPLETE & SEALED)
-D8-M4   = PASS (DSI0 host controller in command mode; COMPLETE & SEALED)
-D8-P1   = PASS (TLMM GPIO prerequisite; COMPLETE & SEALED)
-D8-P2   = PASS (SPMI + LAB/IBB display bias rails; COMPLETE & SEALED)
-D8-M5   = PASS (Panel power & reset lifecycle; COMPLETE & SEALED)
-D8-M6   = PASS (Panel vendor/DCS initialization sequence; COMPLETE & SEALED)
-D8-M8   = PASS (MDP scanout / command transport; COMPLETE & SEALED)
-D8-M8.5 = PASS (First Visible Display: WLED Backlight + Visible Frame; COMPLETE & SEALED)
-D8-M10  = PASS (1080x1920 Physical LCD Console Log + 8 Color Bars Visible & Verified across 2/2 RAM boots; COMPLETE & SEALED)
-D9-M1   = COMPLETE (AppleCLCD & IOCoreSurfaceRoot / XZSFramebuffer & XZSSurface + SweetHID + SweetBattery integrated)
-D9-M2   = COMPLETE (xzs_amfi.c permissive Sandbox & AMFI MAC policies + sweet_libpthread + sweet_bearssl integrated)
-D9-M3   = COMPLETE (XZSKeyStore.cpp AppleKeyStore stub + sweet_hfs Case-Sensitive Journaled HFS+ VFS integrated)
-D10-M1  = PASS (14 GB HFS+ iOS 16.7.16 RootFS flashed to userdata /dev/disk0s54, mounted as /, /dev mounted, PID 1 created on BH905SX976)
-D10-M2  = PASS (Full-screen 1080x1920 135x120 console log, 8-color bars disabled, SDCC1 19.2 MHz 8-bit CMD18 multi-block PIO verified on BH905SX976)
-D10-M3  = PASS (4-core SMP virtual timer PPI 27, per-CPU pmap init, logd firehose fix, keybagd AppleKeyStore checkin, kern_exec old_proc cleanup verified on BH905SX976)
-D10-M4  = PASS (First visible iOS 16 GUI frames 1125x2436->1080x1920 presented by backboardd & SpringBoard on physical LCD panel on BH905SX976)
-D10-M5  = PASS (lsd UDID/MAC ADT fix (<5s DB load), Skywalk skmem_cache ncpu fix, DKIOCISSOLIDSTATE HFS_SSD + hfs_clonefile 64-bit fix verified on BH905SX976)
-D10-M6  = PASS (Full SpringBoard Lock Screen -> Home Screen unlock via SweetHID edge swipe-up & persistent 1080x1920 GUI on physical LCD verified on BH905SX976)
+Phase A..C = PASS (EL1 bootshim, 16KB MMU, High KVA, GICv3, 4-core Kryo SMP, 19.2MHz timers)
+D1..D4     = PASS (BSD/VFS bootstrap, SDCC1 eMMC 5.1 driver, GPT discovery, 55 slices /dev/disk0s1..s55)
+D5..D7     = PASS (RAMDisk XZSFS, PID 1 EL0, DWC3 USB console, generic Mach-O demand paging)
+D8-M1..M6  = PASS (MDSS clocks, 14nm DSI0 PLL/PHY, Command-Mode Host, TLMM GPIO, PMI8996 LAB/IBB, Panel 9 DCS)
+D8-M8..M10 = PASS (MDP5 RGB0+LM0+PP0 scanout, WLED backlight, 1080x1920 boot console & custom splash banner)
+D9-M1..M3  = PASS (XZSFramebuffer, XZSSurface, XZSKeyStore, SweetHID, SweetBattery, sweet_hfs, xzs_amfi)
+D10-M1..M6 = PASS (14 GB HFS+ iOS 16.7.16 RootFS on /dev/disk0s54, launchd, backboardd, SpringBoard Home Screen)
+D11-M1..M3 = PASS (Synaptics RMI4 F12 125Hz multi-touch, 2.5D grip filter, edge gestures, PON/GPIO keys, WLED sleep/wake)
+D12-M1..M4 = PASS (60Hz 4-core 1:1 LUT compositor, TTBR1 MDSS MMIO, non-blocking USB console, stock iOS 16 apps & widgets)
 ```
 
-D8-M3 hardware verification summary:
-- DSI0 PLL lock and ready: `0x009948cc = 0x0000002f` (`pll_locked=1, pll_ready=1`).
-- BYTE0 clock branch unhalted: `BYTE0_CFG_RCGR = 0x00000100` (`src_sel=1:DSI0_BYTE`), `BYTE0_CBCR = 0x00000001` (`halt=0, enable=1`).
-- PCLK0 clock branch unhalted: `PCLK0_CFG_RCGR = 0x00000100` (`src_sel=1:DSI0_PIXEL`), `PCLK0_CBCR = 0x00000001` (`halt=0, enable=1`).
-- ESC0 clock branch unhalted: `ESC0_CFG_RCGR = 0x00000000` (`src_sel=0:XO`), `ESC0_CBCR = 0x00000001` (`halt=0, enable=1`).
-- 14nm PHY Stage B: All 5 lane regulator biases verified (`0x1d`), drive strengths calibrated (`0x0ff`), full acceptance readback verified.
-- 2 independent fresh-boot runs: 100% pass on physical silicon (`BH905SX976`).
-- Zero panel GPIO writes, zero LAB/IBB writes, zero WLED writes, zero DCS packets sent.
-- `PANIC = 0`, `RESET = 0`, `BUS_ABORT = 0`, USB console shell alive. Full report: `docs/XZS_D8_M3_SEAL_REPORT.md`.
+---
+
+## Target Device Summary
+
+* **Target Device**: Sony Xperia XZs (`Model G8231` / `Platform Tone` / `Board Keyaki`)
+* **SoC**: Qualcomm Snapdragon 820 (`MSM8996 Pro`)
+* **CPU Architecture**: Quad-core Qualcomm Kryo `ARMv8.0-A` (2x Silver + 2x Gold, `PAC=0`)
+* **Storage Device**: Samsung `BJNB4R` 32 GB eMMC 5.1 (`19.2 MHz` 8-bit `CMD18`/`CMD24`/`CMD25`, `/dev/disk0s54` mounted R/W as `/`)
+* **Display Panel**: 5.2" `1080x1920` Sharp/Synaptics command-mode MIPI DSI LCD (`somc,sharp_synaptics_cmd_9_panel`)
+* **Active Branch**: `main`
 
 ---
 
-## Current Milestone
+## Hardware-Verified Subsystems Checklist
 
-```text
-Phase D4 acceptance gate completed & sealed:
-Read-only BSD block storage, whole disk devfs /dev/disk0, 55 partition slices /dev/disk0s1..s55, C++ IOKit storage nub with registry discovery, and real bdevvp block vnode acquisition verified on physical silicon.
-100% byte-for-byte parity against independent host TWRP oracles for LBA 1, LBA 2..33, and test partition ('boot') FirstLBA and LastLBA.
-Dynamic major allocated (1), read-only open/strategy policy enforced, zero storage writes.
-PERSISTENT_EMMC_RUNTIME_VERIFIED = yes.
-BSD_BLOCK_STRATEGY_VERIFIED = yes.
-DEVFS_DISK0_PUBLISHED = yes.
-PARTITION_SLICES_PUBLISHED = yes.
-D4_RUNTIME_GPT_MAP_INITIALIZED = yes.
-IOKIT_STORAGE_NUB_PUBLISHED = yes.
-IOKIT_BSD_IDENTITY_DISCOVERABLE = yes.
-BDEVVP_ACQUISITION_VERIFIED = yes.
-BDEVVP_LBA1_BYTE_MATCH = yes.
-ZERO_STORAGE_WRITES = yes.
-D4_COMPLETE = yes.
+### 1. Core Kernel, SMP & Platform (`XZSPlatform`)
+- [x] **Sony S1 Bootloader Handoff & `xzs-bootshim`**: Android boot image loading via `fastboot boot`, Qualcomm DTB parsing, `D22AP` (`iPhone10,3`) Apple Device Tree generation at `0x81810000`, and `1,368 MB` XPU-safe contiguous DRAM layout.
+- [x] **Low-Level ARM64 MMU**: 16 KB page tables, High KVA (`0xfffffe0000000000`), and permanent TTBR1 MDSS MMIO mapping (`g_xzs_mdss_virt_base`).
+- [x] **ARM GICv3 & Generic Timers**: Distributor (`0x09bc0000`) and 4 per-core Redistributors (`0x09c00000..0x09c60000`) in system-register mode; 19.2 MHz virtual (`PPI 27`) and physical (`PPI 30`) timers across all 4 cores.
+- [x] **4-Core Kryo Mach SMP**: All 4 cores booted via `PSCI CPU_ON` (`0xC4000003`), servicing SGI 1 reschedule IPIs, preserving per-CPU `pmap` and `TPIDR_EL0` user TLS.
+- [x] **Non-Blocking Telemetry**: Qualcomm BLSP2 UARTDM (`0x075b0000`) and non-blocking DWC3 High-Speed USB bulk console (`xzs_usb_console_write`).
 
-Phase D5-M1 (RootFS Tooling & XZSFS Format Freeze) is COMPLETE:
-XZSFS v1 on-disk format defined & frozen (docs/XZSFS_FORMAT_V1.md).
-Deterministic image generator (scripts/mkxzsfs.py) and independent verifier (scripts/verify_xzsfs.py) operational.
-Static ARM64 Mach-O binaries (/sbin/launchd, /bin/sh) format-verified.
-Deterministic rootfs image generated (artifacts/builds/xzs-rootfs.img, 35.0 KiB).
-All 12 negative corruption tests rejected. Host-side only; zero silicon writes; no kernel VFS implementation yet.
-XZSFS_FORMAT_V1_FROZEN = yes.
-XZSFS_DETERMINISTIC_BUILD = yes.
-XZSFS_HOST_STRUCTURAL_VERIFY = yes.
-XZSFS_HOST_PAYLOAD_VERIFY = yes.
-D5-M1_COMPLETE = yes.
-D5_COMPLETE = no.
-Phase D5-M2 (RAMDisk Block Transport) is NEXT.
-```
+### 2. Storage & File Systems
+- [x] **High-Speed SDCC1 eMMC 5.1 Driver (`xzs_sdhci.c`)**: 19.2 MHz clock, 8-bit bus width (`CMD6`), `CMD18` multi-block PIO reads, `CMD24`/`CMD25` writes, and `DKIOCISSOLIDSTATE = 1`.
+- [x] **GPT Discovery & Slice Publication**: Whole-disk `/dev/disk0` and 55 partition slices (`/dev/disk0s1..s55`) published to `devfs` and IOKit (`IOMedia`).
+- [x] **Case-Sensitive Journaled HFS+ (`sweet_hfs`)**: 14 GB iOS 16.7.16 RootFS mounted read-write from `/dev/disk0s54` (`userdata`), supporting `FSIOC_CAS_BSDFLAGS`, `FSIOC_KERNEL_ROOTAUTH`, 64-bit `hfs_clonefile`, and volume quota attributes (`ATTR_VOL_QUOTA_SIZE`, `ATTR_VOL_RESERVED_SIZE`).
 
-* **Target Device**: Sony Xperia XZs (Model G8231 / Platform Tone / Board Keyaki)
-* **SoC**: Qualcomm Snapdragon 820 (MSM8996 Pro)
-* **CPU Architecture**: Quad-core Qualcomm Kryo ARMv8.0-A (2x Silver + 2x Gold)
-* **Storage Device**: Samsung BJNB4R 32GB eMMC 5.1 (`CID: 150100424a4e4234520fdac7c0381400`)
-* **Active Branches**: `main` (integrated), `xzs-port` (synchronized), `xzs-d4-block` (active D4 milestone)
-* **Milestone Tag**: `xzs-d3-gpt-complete` (D3 sealed; `xzs-d4-block-storage-complete` pending merge)
+### 3. Display Engine & 60 Hz Multi-Threaded Compositor
+- [x] **Bare-Metal MDSS MDP5 + DSI0 Command Mode (`xzs_d8m8.h`)**: Full 1080x1920 physical scanout (`CTL0` + `SSPP RGB0` + `LM0` + `PP0` + 4-lane `DSI0` + `PMI8996 LAB/IBB ±5.6V` + `WLED`).
+- [x] **Live Boot Console & Custom Splash (`xzs_fbcon.h`)**: Full-screen `1080x1920` boot log console with 16-row jump scrolling and custom `"ĐU MA MAY"` banner (`xzs_draw_du_ma_may_banner`), automatically handing over to the iOS GUI on the first visible `SpringBoard` surface swap.
+- [x] **`XZSFramebuffer` (`AppleCLCD`) & `XZSSurface` (`IOCoreSurfaceRoot`)**:
+  - Wired multi-plane `IOSurface` allocation and zero-copy user mapping.
+  - Precomputed **1:1 square-pixel aspect ratio LUT** (`s_px_to_lx_lut`, `s_py_to_ly_lut`) mapping `1125x2436` (`@3x`) onto `1080x1920` without vertical distortion.
+  - **4-Core Parallel 60 Hz Presenter**: `3` worker threads + `1` flush thread (`renderSlice`) blitting into `VM_WIMG_WCOMB` framebuffer memory at 60 Hz (`fFlushTicks = 1`).
+  - Procedural iOS 16 wallpaper fallback and `PosterBoard` wallpaper rendering.
 
----
+### 4. Multi-Touch, Gestures & Physical Buttons (`SweetHID`)
+- [x] **Synaptics ClearPad RMI4 F12 Multi-Touch (`SweetHIDTouch`)**:
+  - Bit-banged I2C over `GPIO 87` (SDA) / `GPIO 88` (SCL) (`BLSP12 QUP5`) with `GPIO 125` attention interrupt and `GPIO 89` hardware reset.
+  - **125 Hz (`8 ms`) active touch polling**, strict `type == 1 || type == 3` finger detection, and **2.5D curved-bezel grip rejection** (`x < 12 || x > 1067` on initial touch-down).
+  - **Widened Edge-Gesture Zones** (`96 px` top/bottom, `60 px` left/right with `kIOHIDDigitizerEventFromEdgeTip`) enabling Home Bar swipe-up (unlock & home), swipe-up-and-hold (App Switcher), top-right swipe-down (Control Center), top swipe-down (Notification Center), Home Screen swipe-down (Spotlight), and left/right edge swipe (back navigation).
+- [x] **Physical Hardware Buttons (`SweetHIDButtons`)**:
+  - **Power Button** (`PM8996 PON KPDPWR_N`): Screen sleep/wake (`0x30`) coupled with `kSweetFBRequestPowerChange` and physical PMI8996 WLED backlight control (`xzs_fb_set_backlight`).
+  - **Volume Up (`TLMM GPIO 85`) & Volume Down (`PM8996 PON RESIN_N`)**: Volume control (`0xE9` / `0xEA`) with iOS volume HUD.
+  - **Camera Focus (`TLMM GPIO 103`) & Shutter (`PM8996 GPIO2`)**: Dual-stage physical camera key mapped to Home / Menu (`0x40`).
 
-## Highest Hardware-Verified Checkpoint
-
-```text
-[BREADCRUMB] CP=0x000000000000d410 ERR=0x0000000000000000 (Enter Phase D4)
-[BREADCRUMB] CP=0x000000000000d410 ERR=0x0000000000000021 (Dynamic Major Allocated: 1)
-[BREADCRUMB] CP=0x000000000000d410 ERR=0x0000000000000031 (bdevsw Switch Registered)
-[BREADCRUMB] CP=0x000000000000d410 ERR=0x0000000000000052 (Strategy LBA1 512B Oracle Pass)
-[BREADCRUMB] CP=0x000000000000d410 ERR=0x0000000000000062 (Strategy 1024B Oracle Pass)
-[BREADCRUMB] CP=0x000000000000d410 ERR=0x0000000000000090 (Phase D4-M2 Complete)
-[BREADCRUMB] CP=0x000000000000d410 ERR=0x00000000000000a0 (Phase D4-M3: Whole-Disk /dev/disk0 Published)
-[BREADCRUMB] CP=0x000000000000d410 ERR=0x00000000000000b0 (Phase D4-M4: Runtime GPT Loaded via Block Layer)
-[BREADCRUMB] CP=0x000000000000d410 ERR=0x00000000000000b1 (Phase D4-M4: 55 Partition Slices Published)
-[BREADCRUMB] CP=0x000000000000d410 ERR=0x00000000000000b2 (Phase D4-M4: Slice First/Last Sector Oracle Pass)
-[BREADCRUMB] CP=0x000000000000d410 ERR=0x00000000000000b3 (Phase D4-M4: One-Past-End Rejection Pass: EINVAL)
-[BREADCRUMB] CP=0x000000000000d410 ERR=0x00000000000000c0 (Phase D4-M5: IOKit Storage Nub Published)
-[BREADCRUMB] CP=0x000000000000d410 ERR=0x00000000000000c1 (Phase D4-M5: IOKit BSD Discovery Verified)
-[BREADCRUMB] CP=0x000000000000d410 ERR=0x00000000000000d0 (Phase D4-M6: bdevvp Block Vnode Acquired)
-[BREADCRUMB] CP=0x000000000000d410 ERR=0x00000000000000d1 (Phase D4-M6: buf_bread LBA1 Byte Match Pass)
-[BREADCRUMB] CP=0x000000000000d410 ERR=0x00000000000000d2 (Phase D4-M6: vnode_close Clean Release)
-[BREADCRUMB] CP=0x000000000000d410 ERR=0x0000000000000100 (Phase D4 Complete)
-[BREADCRUMB] CP=0x000000000000d410 ERR=0x0000000000000001 (Terminal Warm Reset to Fastboot)
-```
-
-The kernel confirms that Mach SMP, BSD initialization, IOKit autoconfiguration, physical eMMC persistent runtime lifecycle, dynamic `bdevsw` registration, mutex serialization, devfs disk and slice publication, C++ IOKit storage nub registry discovery, and real `bdevvp` block vnode acquisition operate genuinely on physical silicon. The block driver (`bdevsw[1]`) processes buffer transfers directly to eMMC CMD17 with 100% byte parity against independent physical oracles.
-
----
-
-## What Works (Hardware Verified)
-
-- [x] **Sony S1 Bootloader Handoff**: Android boot image loading via fastboot.
-- [x] **xzs-bootshim**: Qualcomm DTB parsing, Apple Device Tree (ADT) creation at `0x81810000`, `boot_args` population at `0x81800000`.
-- [x] **Low-Level ARM64 MMU**: TCR/MAIR configuration, 16KB granule, transition to High KVA (`0xfffffe0000000000`).
-- [x] **Qualcomm BLSP2 UARTDM**: Serial logging at 115200 8N1 at `0x075b0000`.
-- [x] **Persistent RAM / Pstore Ramoops**: Historical console path at `0xa7fbe000`. Later recovery pulls did not preserve an XNU marker, so D8 does not depend on it. Display audit is `docs/XZS_DISPLAY_BRINGUP.md`.
-- [x] **ARM GICv3**: Distributor (`0x09bc0000`) and per-core Redistributors (`0x09c00000` array) in native system register mode.
-- [x] **ARM Generic Timers**: PPI 27 (Virtual) & PPI 30 (Physical) firing reliably across all cores at 19.2 MHz.
-- [x] **ARM PSCI v1.0 Multi-Core**: SMC `CPU_ON` (`0xC4000003`) bringing all 4 Kryo cores online.
-- [x] **Mach SMP Scheduler**: All 4 cores in processor set `pset0`, running `idle_thread`, servicing reschedule IPIs via SGI 1, handling AST urgent preemption.
-- [x] **Multi-Core Cache Coherency**: Inner Shareable WBWA memory, 40,000-op atomic lock contention verified (`0x9c40`).
-- [x] **BSD Subsystem Bootstrap**: Process 0 (`kernproc`), credentials, zones, domains, sysctl tree.
-- [x] **VFS Core Framework**: Mount lists, vnode pools (`vnodes=263168`), devfs bootstrap.
-- [x] **IOKit Autoconfiguration**: `IOKitBSDInit` publishing `IOBSD` plane to BSD.
-- [x] **Physical eMMC Storage Bring-up (D2)**: SDCC1 clock (400 kHz), controlled reset, power-up, CMD0..CMD17, 512-byte PIO sector read, TWRP oracle byte-for-byte match.
-- [x] **GUID Partition Table Discovery & Seal (D3)**: Primary & Backup GPT Header CRC32 verified, 16-KiB entry array verified, 55 partitions enumerated, reciprocal links confirmed, 100% byte-for-byte and map-for-map match. `AUTHORITATIVE_GPT_PARTITION_MAP_VERIFIED = yes`.
-- [x] **Persistent eMMC Runtime Context & Multi-Sector Pipeline (D4-M1)**: `xzs_emmc_context_t` lifecycle, idempotent initialization (`INIT_CALL_COUNT=2`, `INITIALIZATION_COUNT=1`, `INITIALIZATION_REUSE_COUNT=1`, `CONTROLLER_RESET_COUNT=1`), 64-bit multi-sector pipeline (`xzs_emmc_read_blocks_sync`), checked request ranges, zero resets between reads, 100% byte-for-byte oracle match on 4 non-contiguous sectors.
-- [x] **BSD `bdevsw` Read-Only Block Device Layer (D4-M2)**: Dynamic major registration via `bdevsw_add()`, controller mutex serialization (`lck_mtx_t`), `d_open`/`d_close`/`d_strategy`/`d_ioctl`/`d_psize` handlers, genuine `buf_t` mapping and biowait completion, 512B and 1024B strategy reads matching physical oracles with 100% parity, synthetic error rejection (out-of-range, misaligned, write) issuing zero physical commands.
-- [x] **Whole-Disk BSD devfs Publication (D4-M3)**: Created `/dev/disk0`, verified read-only identity, whole-disk geometry (61,071,360 512-byte blocks), write open rejected with `EROFS`, stored devfs handle.
-- [x] **Runtime GPT & Partition Slices (D4-M4)**: Runtime GPT loaded via block layer (`d_strategy`), Header CRC and Array CRC dynamically verified, 55 partition slice devices published (`/dev/disk0s1`..`disk0s55`), derived minor mapping, independent TWRP oracle verification of first and last sectors of test partition (`boot`), one-past-end rejection with 0 physical commands.
-- [x] **IOKit BSD Root Discovery Bridge (D4-M5)**: C++ `XZSeMMCStorageNub : public IOService` published to IOKit registry with canonical properties (`kIOBSDNameKey = "disk0"`, `kIOBSDMajorKey = 1`, `kIOBSDMinorKey = 0`), discovery verified via `IOBSDNameMatching("disk0")`, global `rootdev` NOT mutated.
-- [x] **Real Block Vnode Acquisition & Read Parity (D4-M6)**: Real block vnode acquired via `bdevvp(makedev(1, 0), &vp)`, `VNOP_OPEN(FREAD)` succeeded, controlled `buf_bread` read of LBA 1 verified with 100% byte match (`0xD3A34BC1`), clean release via `vnode_close()`.
-- [x] **Automated Recovery**: Warm reboot back to Fastboot within +5 seconds via Qualcomm APCS watchdog bite upon reaching diagnostic terminal state.
-
----
-
-## What Is Deferred (Temporary Bring-up Workarounds)
-
-The following non-essential subsystems are temporarily deferred to eliminate allocator and lock contention before the storage boundary:
-* **Skywalk** (`skywalk_init`): Userspace networking memory arenas deferred.
-* **Loopback & Tunnels** (`lo0` / `gif0`): Virtual network interfaces deferred.
-* **Ethernet Family** (`ether_family_init`): DLIL ethernet registration deferred.
-* **TCP Fast Open** (`tcp_fastopen = 0`): Deferred pending CoreCrypto AES registration.
-* **DTrace Providers** (`fbt_init`, `profile_init`, `dtrace_postinit`): Tracing probes deferred.
-* **Polled Corefiles** (`IOPOLLED_COREFILE`): Crashdump allocation deferred until storage exists.
-
-*(Full matrix: see [`docs/XZS_WORKAROUNDS.md`](XZS_WORKAROUNDS.md))*
-
----
-
-## What Does Not Exist Yet
-
-- [ ] **Root Filesystem (D5)**: No APFS, HFS+, or ramdisk mounted at `/`.
-- [ ] **Userspace Process (Phase E)**: No PID 1 (`launchd`), shell, or `/dev/console` interactive session.
+### 5. Authentic iOS 16.7.16 Userland, Security & Applications
+- [x] **AMFI, Sandbox & Container Path Support (`xzs_amfi.c`)**: Dual `"Sandbox"` and `"AMFI"` MAC policies, syscalls `0x5a` & `0x60`, container path resolution (`call == 4` -> `CFFIXED_USER_HOME=` or `ENOENT`), and entitlement synthesis.
+- [x] **Daemon Respawn Storm Prevention (`kern_exit.c`)**: Parks exiting unsupported hardware daemons after full VM/FD teardown so `launchd` never wastes CPU respawning them.
+- [x] **Verified Stock iOS 16 Apps & Widgets**:
+  - Lock Screen, Home Screen (two icon pages + Today View & App Library), Control Center, Notification Center, Spotlight Search, App Switcher.
+  - **Settings (`Preferences.app`)**, **Clock**, **Calendar**, **Photos (`MobileSlideShow` + `assetsd`)**, **Notes**, **Safari (`MobileSafari` + `WebKit`)**, **Calculator**, **Contacts**, **Reminders**, **Files**, **Voice Memos**, **Stocks**, and **Weather / Calendar Widgets (`chronod` + `pkd`)**.
 
 ---
 
@@ -173,26 +85,7 @@ make -C src/xnu \
 ./scripts/package-boot.sh
 ```
 
-### 2. Hardware Deployment & Telemetry Verification
+### 2. Boot on Sony Xperia XZs
 ```bash
-./scripts/run-and-extract.sh
-python3 scripts/verify_d4_acceptance.py artifacts/logs/console-ramoops.log
+fastboot boot artifacts/builds/boot.img
 ```
-
-### 3. Cold-Reset Note
-> [!IMPORTANT]
-> **Cold-Reset Procedure Required for Determinism**:
-> To guarantee reproducible D1 terminal execution, always cold-reset the phone before testing:
-> 1. Hold `Power + Volume Up` until the phone vibrates 3 times (full power cut).
-> 2. Hold `Volume Down` and insert USB cable to enter Fastboot (blue LED).
-> 3. Run `./scripts/run-and-extract.sh`.
-
----
-
-## Next Technical Boundary
-
-```text
-Phase D5: Real Root Filesystem Mount
-```
-Mount an actual read-only root filesystem partition (ramdisk, unencrypted HFS+, or APFS container) into the VFS root vnode (`/`) and verify directory lookup.
-

@@ -1,402 +1,223 @@
-# xnu-xzs
+# xnu-xzs — Native Apple XNU & iOS 16.7.16 on Sony Xperia XZs (Qualcomm MSM8996)
 
-> Native Apple XNU Kernel on Sony Xperia XZs (Qualcomm MSM8996)
+**xnu-xzs** brings the **Apple XNU kernel** (`xnu-12377.1.9` / Darwin 24.0.0) and an authentic **Apple iOS 16.7.16 (`20H392`)** graphical userland up natively on the **Sony Xperia XZs** (`G8231` / `keyaki`, powered by the **Qualcomm Snapdragon 820 / MSM8996 Pro** SoC).
 
----
-
-## Mission
-
-**xnu-xzs** is primarily a hardware and platform porting project.
-
-Its long-term research goal is to determine how far an older authentic **Apple iOS userland** can be brought up on **Sony Xperia XZs** hardware by combining:
-- **Native XNU**: Canonical Darwin/XNU kernel running bare-metal on Qualcomm silicon.
-- **Xperia/MSM8996 Platform Support**: Clocks, power management, interrupts, MMIO, and bus infrastructure.
-- **Native Hardware Drivers**: IOKit drivers for storage, display, touch, USB, and power subsystems.
-- **Apple-Facing Compatibility Services (`XZSAppleCompat`)**: IOKit contracts, platform properties, and device topology expected by Apple userland.
-- **Darwin/iOS Userland Compatibility**: Mach traps, BSD syscalls, Mach IPC, dyld, launchd, and core frameworks.
-
-> [!IMPORTANT]
-> **Mission Clarity**:
-> This project is explicitly **NOT** attempting to build an unrelated new mobile operating system.
-> The custom userspace components (PID1 skeleton, `/bin/sh` interactive shell) exist strictly as:
-> - Bring-up infrastructure
-> - Low-level debugging environment
-> - Driver-development environment
-> - Hardware-validation environment
->
-> The ultimate research objective is authentic old-iOS userland execution on Xperia hardware.
+All phases from bare-metal EL1 kernel entry, 4-core Kryo SMP, eMMC 5.1 storage, and MIPI DSI command-mode display scanout through `launchd`, `backboardd`, `SpringBoard`, multi-touch gestures, physical buttons, and stock iOS 16 applications are **hardware-proven on physical Sony Xperia XZs silicon (`BH905SX976`)**.
 
 ---
 
-## Target Hardware
+## 1. Hardware-Verified Capabilities Overview
 
-| Component | Hardware Specification |
+### 1.1 Graphical iOS 16.7.16 User Experience on Physical Hardware
+* **Boot Console & Custom Splash Handover**:
+  * Full-screen `1080x1920` hardware framebuffer console (`xzs_fbcon`, `135x120` 8x16 glyphs with 16-row jump scrolling) displays live kernel & daemon logs during early boot, overlaid with the custom `"ĐU MA MAY"` vector banner (`xzs_draw_du_ma_may_banner`).
+  * Automatically detaches the boot console and switches to pure GUI scanout the moment `SpringBoard` presents its first visible surface.
+* **Lock Screen, Home Screen & Wallpapers**:
+  * **iOS 16 Lock Screen**: Live time/date rendering, lock indicator, notifications area, and smooth bottom-edge swipe-up to unlock.
+  * **Home Screen (Two Icon Pages + Today View & App Library)**: Full `@3x` Retina icon grid, Dock, status bar, page dots, and folder navigation.
+  * **Wallpapers**: Stock iOS 16 wallpapers rendered via `PosterBoard` alongside an in-kernel procedural iOS 16 gradient fallback wallpaper so the desktop never displays a black background.
+  * **1:1 Square-Pixel Aspect Ratio**: Precomputed horizontal and vertical lookup tables (`s_px_to_lx_lut`, `s_py_to_ly_lut`) map the logical `1125x2436` (`@3x` iPhone X canvas) onto the physical `1080x1920` (16:9) LCD using uniform 1:1 scaling (`1080/1125 = 0.96`, centered `2070`-pixel vertical window) with zero vertical distortion.
+* **System Gestures & Multi-Touch (`SweetHIDTouch`)**:
+  * Native **Synaptics ClearPad RMI4 F12** I2C multi-touch driver (`BLSP12 QUP5`, `GPIO 87/88`, `INT GPIO 125`, `RST GPIO 89`) polling at **125 Hz (`8 ms`)** during active touch.
+  * **2.5D Curved-Bezel Palm/Grip Rejection**: Filters unintended edge contact (`x < 12` or `x > 1067` on initial touch-down) while preserving full swipe travel across the screen.
+  * **Widened Edge-Gesture Zones** (`96 px` top/bottom, `60 px` left/right with `kIOHIDDigitizerEventFromEdgeTip` + `kIOHIDDigitizerEventPosition` flags) enabling all system gestures:
+    * **Swipe up from bottom Home Bar**: Unlock from Lock Screen & return to Home Screen from any app.
+    * **Swipe up and pause**: Open the **App Switcher** and swipe cards up to close apps.
+    * **Swipe down from top-right / top edge**: Open **Control Center** and **Notification Center**.
+    * **Swipe down on Home Screen**: Open **Spotlight Search**.
+    * **Left/right edge swipe**: System back gesture inside navigation controllers and horizontal page switching.
+* **Physical Hardware Buttons (`SweetHIDButtons`)**:
+  * **Power Button** (`PM8996 PON KPDPWR_N`): Dispatches `kHIDUsage_Csmr_Power` (`0x30`) for screen lock/unlock and sleep/wake, synchronized with `IOMobileFramebuffer` selector `18` (`kSweetFBRequestPowerChange`) to physically toggle the PMI8996 WLED backlight (`xzs_fb_set_backlight`).
+  * **Volume Up (`TLMM GPIO 85`) & Volume Down (`PM8996 PON RESIN_N`)**: Dispatches `kHIDUsage_Csmr_VolumeIncrement` (`0xE9`) and `kHIDUsage_Csmr_VolumeDecrement` (`0xEA`) with native iOS volume HUD feedback.
+  * **Camera Shutter & Focus Key (`TLMM GPIO 103` half-press / `PM8996 GPIO2` full-press)**: Dual-stage physical camera button mapped to `kHIDUsage_Csmr_Menu` (`0x40`, Home / Menu action).
+* **Verified Stock iOS 16 Applications, Widgets & System Services**:
+  * **Settings (`Preferences.app`)**, **Clock (`MobileTimer.app`)**, **Calendar (`MobileCal.app`)**, **Photos (`MobileSlideShow.app` + `assetsd`)**, **Notes (`MobileNotes.app`)**, **Safari (`MobileSafari.app` + `com.apple.WebKit.WebContent` + `com.apple.WebKit.GPU`)**, **Calculator**, **Contacts**, **Reminders**, **Files**, **Voice Memos**, and **Stocks**.
+  * **Home Screen & Today View Widgets** (`Weather`, `Calendar`, `Clock`, `Batteries`) powered by `chronod` and `PlugInKit` (`pkd`) extension discovery.
+
+---
+
+## 2. Target Hardware Specifications
+
+| Attribute | Specification |
 | :--- | :--- |
-| **Device** | Sony Xperia XZs (Model G8231, Platform Tone, Board Keyaki) |
-| **SoC** | Qualcomm Snapdragon 820 (MSM8996SG / MSM8996 Pro) |
-| **CPU Cores** | Quad-core Qualcomm Kryo ARMv8.0-A (2x Silver @ 1.59 GHz + 2x Gold @ 2.15 GHz) |
-| **DRAM** | 4 GB LPDDR4 (Base physical address `0x80000000`) |
-| **Interrupt Controller** | ARM GICv3 (Distributor `0x09bc0000`, Redistributors `0x09c00000`) |
-| **Hardware Timer** | ARM Generic Timer (19.200 MHz, PPI 27 virtual / PPI 30 physical) |
-| **Serial Console** | Qualcomm BLSP2 UARTDM UART2 (`0x075b0000`, 115200 8N1) |
-| **Internal Storage** | Samsung BJNB4R 32GB eMMC 5.1 on Qualcomm SDCC1 / SDHCI (`0x07464900`) |
-| **Display** | 5.2" 1080x1920 IPS LCD (DSI / MDP5) |
-| **Boot Mechanism** | Sony S1 ABOOT Fastboot (`fastboot boot boot.img`) |
+| **Device** | Sony Xperia XZs (`G8231`, platform `tone`, board `keyaki`) |
+| **SoC** | Qualcomm Snapdragon 820 (`MSM8996 Pro` / `MSM8996SG`) |
+| **CPU** | 4-core 64-bit Qualcomm Kryo (`ARMv8.0-A`, no PAC): 2x Kryo Silver (Cluster 0) + 2x Kryo Gold (Cluster 1) |
+| **Memory** | 4 GB LPDDR4 (`0x80000000` physical base; `1,368 MB` XPU-safe contiguous DRAM mapped into XNU) |
+| **Storage** | 32 GB Samsung `BJNB4R` eMMC 5.1 on Qualcomm `SDCC1` (`0x07464900`, 55 GPT slices `/dev/disk0s1..s55`) |
+| **Root Filesystem** | 14 GB Case-Sensitive Journaled HFS+ iOS 16.7.16 RootFS on `userdata` (`/dev/disk0s54`) |
+| **Display Panel** | 5.2" 1080x1920 Sharp/Synaptics in-cell command-mode MIPI DSI LCD (`somc,sharp_synaptics_cmd_9_panel`) |
+| **Display Engine** | Qualcomm MDSS MDP5 v1.7 (`0x00900000`) + 4-lane DSI0 Host (`0x00994000`) + 14nm DSI PHY + PMI8996 LAB/IBB (`±5.6V`) & WLED |
+| **Touch Controller** | Synaptics ClearPad S3330 / RMI4 F12 over BLSP12 QUP5 I2C (`0x075B7000`, `GPIO 87/88`, `INT GPIO 125`, `RST GPIO 89`) |
+| **Interrupt Controller** | ARM GICv3 Distributor (`0x09BC0000`) + 4 Per-Core Redistributors (`0x09C00000..0x09C60000`) |
+| **Boot Mechanism** | Sony S1 Fastboot (`fastboot boot boot.img`) -> `xzs-bootshim` -> `kernel.development.vmapple` |
 
 ---
 
-## Safety constraints
+## 3. System Architecture & Kernel Subsystems
 
 ```text
-NO FLASH
-fastboot boot only
-manual Sony force shutdown for recovery
-do not use xzs# reboot
-no invasive hardware modification
++-----------------------------------------------------------------------------------+
+|                      AUTHENTIC APPLE iOS 16.7.16 USERLAND                         |
+|                                                                                   |
+|   SpringBoard.app    Preferences.app    MobileSafari.app    MobileSlideShow.app   |
+|   PosterBoard.app    MobileTimer.app    MobileNotes.app     chronod / pkd         |
+|         |                   |                  |                     |            |
+|         +-------------------+------------------+---------------------+            |
+|                             | (Mach IPC / UIKit / QuartzCore / RenderServer)      |
+|                             v                                                     |
+|                  backboardd (iOS Window & HID Server)                             |
+|                  - Matches IOMobileFramebuffer (AppleCLCD)                        |
+|                  - Matches IOCoreSurfaceRoot (IOSurface)                          |
+|                  - Matches IOHIDEventService (SweetHIDTouch & SweetHIDButtons)    |
++-----------------------------------------------------------------------------------+
+                                      |
+================================ IOKit / BSD Boundary ===============================
+                                      |
++-----------------------------------------------------------------------------------+
+|                        XZSAppleCompat KERNEL LAYER                                |
+|                                                                                   |
+|   +-----------------------+  +----------------------+  +----------------------+   |
+|   |    XZSFramebuffer     |  |      XZSSurface      |  |      XZSKeyStore     |   |
+|   |  (: IOMobileFrame-    |  |  (: IOCoreSurface-   |  |  (: AppleKeyStore /  |   |
+|   |      buffer)          |  |       Root)          |  |     AppleSEPManager) |   |
+|   |  - 1125x2436 @3x      |  |  - Wired IOSurfaces  |  |  - Keybag & SEP stub |   |
+|   |  - 1:1 LUT scaler     |  |  - Zero-copy maps    |  |  - Unlocks Home &    |   |
+|   |  - 4-core 60Hz blit   |  |  - Plane stride sync |  |    DataMigration     |   |
+|   +-----------------------+  +----------------------+  +----------------------+   |
+|                                                                                   |
+|   +-----------------------+  +----------------------+  +----------------------+   |
+|   |      xzs_amfi.c       |  |       SweetHID       |  |      sweet_hfs       |   |
+|   |  - AMFI + Sandbox MAC |  |  - IOHIDFamily-1915  |  |  - Journaled HFS+    |   |
+|   |  - Syscalls 0x5a/0x60 |  |  - 125Hz RMI4 touch  |  |  - 64-bit clonefile  |   |
+|   |  - Container paths    |  |  - PON & GPIO keys   |  |  - Quota/Reserve vol |   |
+|   |  - Entitlement synth  |  |  - WLED sleep/wake   |  |  - HFS_SSD solidstate|   |
+|   +-----------------------+  +----------------------+  +----------------------+   |
++-----------------------------------------------------------------------------------+
+                                      |
+================================ Hardware Boundary ==================================
+                                      |
++-----------------------------------------------------------------------------------+
+|                        XZSPlatform SILICON LAYER (MSM8996)                        |
+|                                                                                   |
+|   - MDSS MDP5 v1.7 + DSI0 Command-Mode DMA Scanout (PA 0x98000000, TTBR1 MMIO)    |
+|   - Synaptics ClearPad RMI4 F12 Bit-Banged I2C + PM8996 SPMI PON & TLMM Buttons   |
+|   - Samsung BJNB4R 32GB eMMC 5.1 Driver (SDCC1 19.2MHz 8-bit CMD18/CMD24/CMD25)   |
+|   - Kryo Quad-Core SMP (PSCI v1.0) + ARM GICv3 + 19.2MHz Architectural Timers     |
+|   - DWC3 High-Speed USB Bulk Console + BLSP2 UARTDM + Ramoops Telemetry           |
++-----------------------------------------------------------------------------------+
 ```
 
-Recovery is power-off by holding the Sony keys, then fastboot, then `fastboot boot`. The shell command `xzs# reboot` is not a recovery path.
+### 3.1 Bootloader Bridge & Apple Device Tree (`src/xzs-bootshim/`)
+* **DTB-to-ADT Translation**: Parses the Qualcomm Flattened Device Tree provided by Sony S1 `aboot`, discovers memory banks, and constructs an Apple Device Tree (`ADT`) at `0x81810000` and `boot_args` at `0x81800000` ([`src/xzs-bootshim/main.c`](file:///Users/lechaukha12/Desktop/xnu-xzs/src/xzs-bootshim/main.c), [`src/xzs-bootshim/adt.c`](file:///Users/lechaukha12/Desktop/xnu-xzs/src/xzs-bootshim/adt.c)).
+* **`D22AP` (`iPhone10,3`) Identity & MobileGestalt Contract**: Populates `/product` (`udid-version = 2`), `/chosen` (`display-scale = 3`, `certificate-production-status = 0`, `unique-chip-id`, `mac-address-wifi0`, `mac-address-bluetooth0`, `mlb-serial-number`), `/buttons` (`home-button-type = 2`), and `/arm-io/disp0` (`canvas-width = 1125`, `canvas-height = 2436`) so `MobileGestalt`, `launchservicesd` (`lsd`), `backboardd`, and `SpringBoard` initialize without timeouts.
+* **XPU-Safe Contiguous Memory Map**: Maps `1,368 MB` of physical LPDDR4 (`0x80000000..0x85900000` + `0x8ac00000..0xdac00000`) while isolating Qualcomm TrustZone, modem/adsp pil regions, and XPU-protected carveouts ([`src/xnu/osfmk/arm64/arm_vm_init.c`](file:///Users/lechaukha12/Desktop/xnu-xzs/src/xnu/osfmk/arm64/arm_vm_init.c)).
 
-## Current milestones
+### 3.2 CPU, MMU & 4-Core Kryo SMP (`src/xnu/osfmk/arm64/`)
+* **ARMv8.0-A Pure Code Generation**: Built with `-mno-ptrauth` and verified with [`scripts/check-no-pac.sh`](file:///Users/lechaukha12/Desktop/xnu-xzs/scripts/check-no-pac.sh) to guarantee zero `arm64e` Pointer Authentication instructions execute on Qualcomm Kryo cores.
+* **Quad-Core SMP via PSCI & GICv3**: Boots all 4 Kryo cores (`MPIDR 0x0, 0x1, 0x100, 0x101`) via `PSCI CPU_ON` (`0xC4000003`), initializes per-core GICv3 Redistributors (`0x09C00000..0x09C60000`) in system-register mode (`ICC_SRE_EL1.SRE = 1`), enables 19.2 MHz virtual/physical timer PPIs (`INTID 27` / `INTID 30`) and SGI 1 reschedule IPIs, and preserves `TPIDR_EL0` user TLS across context switches ([`src/xnu/osfmk/arm64/locore.s`](file:///Users/lechaukha12/Desktop/xnu-xzs/src/xnu/osfmk/arm64/locore.s), [`src/xnu/pexpert/arm/pe_fiq.c`](file:///Users/lechaukha12/Desktop/xnu-xzs/src/xnu/pexpert/arm/pe_fiq.c)).
 
-```text
-Phase      Area                              Status
--------------------------------------------------------
-Phase A    Native XNU entry                  COMPLETE
-Phase B    Platform bring-up                 COMPLETE
-Phase C    SMP                               COMPLETE
-D1         BSD/VFS                           COMPLETE
-D2         eMMC                              COMPLETE
-D3         GPT                               COMPLETE
-D4         block/bdev                        COMPLETE
-D5         XZSFS                             COMPLETE
-D6         PID1 / EL0                        COMPLETE
-D7         Interactive shell / external exec COMPLETE
+### 3.3 Display Engine & 60 Hz Multi-Threaded Compositor
+* **Bare-Metal Qualcomm MDSS MDP5 + DSI0 Command Mode**:
+  * Configures MMCC clocks, 14nm DSI0 PLL & PHY, PMI8996 `LAB` (`0xDE00`) & `IBB` (`0xDC00`) `±5.6V` LCD bias rails, `WLED` (`0xD800`) backlight, and Sharp/Synaptics Panel 9 DCS initialization ([`src/xnu/pexpert/arm/xzs_d8m8.h`](file:///Users/lechaukha12/Desktop/xnu-xzs/src/xnu/pexpert/arm/xzs_d8m8.h), [`src/xnu/pexpert/arm/xzs_d8p1.h`](file:///Users/lechaukha12/Desktop/xnu-xzs/src/xnu/pexpert/arm/xzs_d8p1.h), [`src/xnu/pexpert/arm/xzs_d8p2.h`](file:///Users/lechaukha12/Desktop/xnu-xzs/src/xnu/pexpert/arm/xzs_d8p2.h)).
+  * Uses a permanent TTBR1 kernel virtual mapping (`g_xzs_mdss_virt_base` in [`src/xnu/pexpert/arm/xzs_diag.c`](file:///Users/lechaukha12/Desktop/xnu-xzs/src/xnu/pexpert/arm/xzs_diag.c)) for zero-overhead MMIO access during 60 Hz frame kicks (`CTL_FLUSH = 0x40022048` + `CTL_START`).
+* **`XZSFramebuffer` (`AppleCLCD` / `IOMobileFramebuffer`) & `XZSSurface` (`IOCoreSurfaceRoot`)**:
+  * Implements wired multi-plane `IOSurface` management ([`src/xnu/iokit/Kernel/arm/XZSSurface.cpp`](file:///Users/lechaukha12/Desktop/xnu-xzs/src/xnu/iokit/Kernel/arm/XZSSurface.cpp)) and `IOMobileFramebuffer` swap notifications ([`src/xnu/iokit/Kernel/arm/XZSFramebuffer.cpp`](file:///Users/lechaukha12/Desktop/xnu-xzs/src/xnu/iokit/Kernel/arm/XZSFramebuffer.cpp)).
+  * **Multi-Threaded 60 Hz LUT Presenter**: Splits the `1080x1920` output across **4 parallel CPU threads** (`3` worker threads + `1` flush thread, 480 rows each) using branchless 4x-unrolled 1:1 LUT loops (`renderSlice`) directly into write-combining (`VM_WIMG_WCOMB`) physical scanout memory at `0x98000000`.
 
-D8-M1      Display topology/MMIO             COMPLETE
-D8-M2      Display power/core clocks         COMPLETE
-D8-A0..A3  Display audit/tooling             COMPLETE
-D8-M3      DSI PLL/clocks/14nm PHY           COMPLETE
-D8-M4      DSI host/controller               COMPLETE
-D8-P1      TLMM GPIO prerequisite            COMPLETE
-D8-P2      SPMI + LAB/IBB power rails        COMPLETE
-D8-M5      Panel power/reset sequence        COMPLETE
-D8-M6      Panel vendor/DCS init sequence    COMPLETE
-D8-M8      MDP command-mode scanout          BLOCKED / INCOMPLETE
-D8-M8.5    WLED, panel DCS, framebuffer RAM  COMPLETE (NOT pixel scanout)
-D8-M9      First Visible Pixels              BLOCKED
-D8-M10     Framebuffer Text Console / Shell  BLOCKED ON D8-M8
+### 3.4 Human Interface Devices: Multi-Touch & Physical Keys (`SweetHID`)
+* **`SweetHIDTouch` (`AppleHydroTouch` / `IOHIDEventService`)**:
+  * Drives the Synaptics ClearPad S3330 RMI4 controller over BLSP12 I2C (`GPIO 87` SDA, `GPIO 88` SCL, `GPIO 125` IRQ, `GPIO 89` Reset) in [`src/xnu/iokit/Kernel/arm/hid/SweetHID.cpp`](file:///Users/lechaukha12/Desktop/xnu-xzs/src/xnu/iokit/Kernel/arm/hid/SweetHID.cpp).
+  * Parses RMI4 Function `$12` (`F12_2D_DATA01`) 8-byte finger records at 125 Hz (`8 ms`), enforces strict `type == 1 || type == 3` finger state validation, filters 2.5D curved-edge grip touches (`x < 12 || x > 1067` on initial touch-down), and synthesizes `IOHIDEvent` digitizer packets with `kIOHIDDigitizerEventFromEdgeTip` for system edge gestures.
+* **`SweetHIDButtons` (`AppleEmbeddedButton` / `IOHIDEventService`)**:
+  * Polls `PM8996` SPMI `PON_RT_STS` (`0x0810`), `PM8996 GPIO2` (`0xC110`), and `TLMM` GPIOs (`85`, `103`) at 50 Hz (`20 ms`) to deliver Power (`0x30`), Volume Up (`0xE9`), Volume Down (`0xEA`), and Camera Focus/Shutter (`0x40`) events to `backboardd`.
 
-Phase D9   Apple Compatibility Services      ACTIVE / IN PROGRESS
-Phase D10  Authentic iOS RootFS & Storage    PLANNED
-Phase D11  Apple Device Tree (iPhone X)      PLANNED
-Phase D12  Full iOS Userland GUI Boot        TARGET
-```
-
-Tags that name durable milestones: `xzs-d7t1-complete`, `xzs-d7t2-full-complete`, `xzs-d8-m1-complete`, `xzs-d8-m2-complete`, `xzs-d8m3-display-pll-phy-complete`, `xzs-d8m4-dsi-host-complete`, `xzs-d8p1-gpio-complete`, `xzs-d8p2-power-rails-complete`, `xzs-d8m5-panel-power-reset-complete`, `xzs-d8m6-panel-dcs-complete`, `xzs-d8-m8.5-complete`.
-Reference blueprint: [`docs/XZS_IOS_HYBRID_ARCHITECTURE.md`](docs/XZS_IOS_HYBRID_ARCHITECTURE.md).
-
-## Generic Native Mach-O Execution (Phase D7-T2)
-
-Phase D7-T2 established and hardware-sealed native file-backed Mach-O execution directly from the XZSFS root filesystem on Sony Xperia XZs:
-
-* **Hardware-Verified Binaries**:
-  - `/bin/hello`: Minimal Darwin userspace reference executable (`SYS_write`, `SYS_exit(0)`).
-  - `/bin/args`: Generic diagnostic binary validating user stack argument unpacking (`argc`, `argv[0..N]`, NULL termination).
-* **Architectural Execution Pipeline**:
-  - `VREG` + Unified Buffer Cache (UBC) attachment via `ubc_info_init()`
-  - File-backed Mach-O segment mapping via `vm_map_enter_mem_object_control()`
-  - Read-only XZSFS `VNOP_PAGEIN` demand paging using `DIRECT_UPL` zero-copy I/O and EOF zero-fill
-  - Return to EL0 via `task_wait_to_return` / `thread_bootstrap_return`
-  - Canonical Darwin 64-bit syscall path (`svc #0x80`)
-  - Asynchronous old exec-thread teardown via `AST_APC` (`thread_terminate_self()`), preventing task-switch hangs and duplicate process exit races
-  - Parent PID 1 synchronous child reaping via `wait4()` and clean prompt return
-  - Carry flag explicitly cleared on successful syscall returns in both ARM32 and ARM64 paths
-  - Interactive shell demand-page faults and generic SVC dispatch permitted in `sleh.c`
-* **Hardware Verification Proof**:
-  - **14 total external exec cycles** validated on physical silicon across fresh boots
-  - **2 independent fresh-boot mixed sequences** (`pwd` → `/bin/hello` → `/bin/args a b c` → `/bin/hello` → `/bin/args x y` → `/bin/hello` → `pwd`)
-  - Zero panics (`PANIC=0`), Zero watchdog resets (`RESET=0`)
-  - Full reports: [`artifacts/reports/D7_T2N5_SEAL_REPORT.md`](artifacts/reports/D7_T2N5_SEAL_REPORT.md), [`artifacts/reports/D7_T2N6_SEAL_REPORT.md`](artifacts/reports/D7_T2N6_SEAL_REPORT.md)
-
-### What is NOT Supported Yet (Userspace Boundary)
-
-Phase D7-T2 establishes minimal static Mach-O execution. It does **NOT** yet prove or claim:
-- `dyld` (dynamic linker)
-- Dynamic libraries / shared caches
-- `libSystem` / C runtime library
-- `launchd` service runtime / daemons
-- Full POSIX API compliance
-- Multithreaded userspace processes
-- GPU acceleration / Metal
-- Touchscreen input
-- Cellular / Wi-Fi / Bluetooth networking
-- Audio subsystem
-- Complete platform power management / sleep states
-- Apple proprietary frameworks (CoreFoundation, Foundation, UIKit, SpringBoard)
-
-## Display
-
-```text
-D8-M1     = PASS
-D8-M2     = PASS
-D8-A0..A3 = PASS
-D8-M3     = PASS (COMPLETE / SEALED / HARDWARE_PROVEN)
-D8-M4     = PASS (COMPLETE / SEALED / HARDWARE_PROVEN)
-D8-P1     = PASS (COMPLETE / SEALED / HARDWARE_PROVEN)
-D8-P2     = PASS (COMPLETE / SEALED / HARDWARE_PROVEN)
-D8-M5     = PASS (COMPLETE / SEALED / HARDWARE_PROVEN)
-D8-M6     = PASS (COMPLETE / SEALED / HARDWARE_PROVEN)
-D8-M8     = DEFERRED / INCOMPLETE / UNSEALED (tag `xzs-d8m8-deferred`)
-D8-P3     = PENDING
-```
-
-D8-M1, tag `xzs-d8-m1-complete` at `861032cb7b137096edeb1aa5caa04aef6737533a`, read the clock controller only. MMAGIC_MDSS_GDSC was `0xa0222000` (on). MDSS_GDSC was `0x00222001` (collapsed).
-
-D8-M2, tag `xzs-d8-m2-complete` at `545398f30d8fda592d4ca67ee867a016c2f37092`, completed display power domain and clock bring-up on physical silicon:
-- MMAGIC GDSC: `0xa0222000` (ON)
-- MDSS GDSC: `0xa0222000` (ON)
-- Linux critical MMAGIC interconnect/bridge branches: `mmss_mmagic_ahb`, `mmss_mmagic_cfg_ahb`, `mmagic_mdss_noc_cfg_ahb`, `mmagic_mdss_axi` enabled (`enable=1, halt=0`)
-- `mdss_ahb`: enabled and running (`enable=1, halt=0`, readback `0x20008001`)
-- `mdss_axi`: enabled and running (`enable=1, halt=0`, readback `0x00006221`)
-- `mdss_mdp`: enabled and running (`enable=1, halt=0`, readback `0x00006221`)
-- USB console shell remained fully responsive; zero panics, zero resets.
-
-D8-M3, tag `xzs-d8m3-display-pll-phy-complete`, completed DSI0 PLL, MMCC clock tree branches, and Qualcomm 14nm DSI PHY Stage B bring-up on physical Xperia XZs hardware across two independent fresh-boot runs:
-- DSI0 PLL locked and ready: `0x009948cc = 0x0000002f` (`pll_locked=1, pll_ready=1`)
-- BYTE0 clock branch unhalted: `BYTE0_CFG_RCGR = 0x00000100` (`src_sel=1:DSI0_BYTE`), `BYTE0_CBCR = 0x00000001` (`halt=0, enable=1`)
-- PCLK0 clock branch unhalted: `PCLK0_CFG_RCGR = 0x00000100` (`src_sel=1:DSI0_PIXEL`), `PCLK0_CBCR = 0x00000001` (`halt=0, enable=1`)
-- ESC0 clock branch unhalted: `ESC0_CFG_RCGR = 0x00000000` (`src_sel=0:XO`), `ESC0_CBCR = 0x00000001` (`halt=0, enable=1`)
-- 14nm PHY Stage B: All 5 lane regulator biases verified (`0x1d`), drive strengths calibrated (`0x0ff`), full acceptance readback verified
-- Reproducibility: 2/2 independent fresh boots passed 100%
-- Critical M3 diff: 0 against Linux golden state
-- Safety invariants: 0 panel GPIO writes, 0 LAB/IBB writes, 0 WLED writes, 0 DCS packets sent; shell and USB console remained 100% responsive; 0 bus aborts, 0 panics, 0 resets.
-
-D8-M4, tag `xzs-d8m4-dsi-host-complete`, completed DSI0 host controller staged configuration and master enable (Command Mode, 4 active data lanes) on physical Xperia XZs hardware across two independent fresh-boot runs:
-- DSI controller enable: `DSI_CTRL_PRE_ENABLE = 0x000001f4` (command mode, 4 data lanes, clock lane, master disabled) -> `DSI_CTRL_POST_ENABLE = 0x000001f5` (master bit 0 enabled)
-- DSI timing & packets: `DSI_CLKOUT_TIMING_CTRL = 0x00001b2b` (Keyaki `t_clk_post=0x1b`, `t_clk_pre=0x2b`), `DSI_EOT_PACKET_CTRL = 0x00000011`
-- DSI lane status: `DSI_LANE_STATUS = 0x00001f1f` (all 4 data lanes and clock lane in clean MIPI Stopstate, idle and ready)
-- DSI internal clocks: `DSI_CLK_CTRL = 0x0000023f`, `DSI_CLK_STATUS = 0x0000234f` (all core clock gates active)
-- DSI FIFO status: `DSI_FIFO_STATUS = 0x11111000` (idle, transmit queues ready)
-- Reproducibility: 2/2 independent cold/fresh boots passed 100%
-- Critical M4 diff: 0 against updated Linux golden state
-- Safety invariants: 0 DCS packets sent, 0 DMA/BTA/MDP SW triggers, 0 panel GPIO writes, 0 LAB/IBB/WLED writes, 0 bus aborts, 0 SError, 0 panics, 0 resets; shell and USB console remained 100% responsive.
-
-D8-P1, tag `xzs-d8p1-gpio-complete`, completed TLMM GPIO configuration for the Keyaki panel across two independent cold/fresh boots:
-- TLMM register base: `0x01010000` (64KB block)
-- GPIO 8 (`disp_reset_n`): `CFG = 0x00000200` (`mux=0:gpio, pull=0:none, drv=0:2mA, dir=OUTPUT`), `IN_OUT = 0x00000000` (Reset held asserted LOW / safe state)
-- GPIO 10 (`mdp_vsync` / TE): `CFG = 0x00000005` (`mux=1:mdp_vsync, pull=1:pull-down, drv=0:2mA, dir=INPUT`), `IN_OUT = 0x00000000` (TE input with pull-down)
-- GPIO 51 (`lcd_vddio_en`): `CFG = 0x00000200` (`mux=0:gpio, pull=0:none, drv=0:2mA, dir=OUTPUT`), `IN_OUT = 0x00000000` (VDDIO disabled LOW / safe state)
-- M3/M4 display engine health verified post-GPIO configuration (`PLL = 0x2f`, `DSI_CTRL = 0x1f5`, `DSI_LANE_STATUS = 0x1f1f`)
-- Safety invariants: 0 LAB/IBB writes, 0 WLED writes, 0 DCS packets sent, 0 bus aborts, 0 SError, 0 panics, 0 resets; USB console and shell remained 100% responsive.
-
-D8-P2, tag `xzs-d8p2-power-rails-complete`, completed SPMI Arbiter v2 communication and PMIC (PMI8996) LAB (+5.60V) / IBB (-5.60V) display panel bias regulator bring-up and safe disable across two independent cold/fresh boots:
-- SPMI Transport: Arbiter v2 core `0x0400F000`, write channels `0x04400000`, observer read channels `0x04C00000`. Peripheral APID mapping verified for SID 2 REVID (`0x0100`), SID 3 LAB (`0xDE00`), and SID 3 IBB (`0xDC00`).
-- Stage 1 Configuration: LAB programmed to +5.60V (`0x8a`), MODULE_RDY (`0x80`), ENABLE (`0x00`); IBB programmed to -5.60V (`0xaa`), MODULE_RDY (`0x80`), ENABLE (`0x00`). Verified safely inactive.
-- Stage 2A LAB Enable: `LAB_ENABLE_CTL = 0x80` written -> `LAB_STATUS1 = 0xa0` (`VREG_OK=1`, positive bias rail active).
-- Stage 2B IBB Enable: `IBB_ENABLE_CTL = 0x80` written -> `IBB_STATUS1 = 0x80` (`VREG_OK=1`, negative bias rail active).
-- Stage 2C Mandatory Safe Disable: IBB disabled first (`0xDC46 = 0x00`), `STATUS1 = 0x00` (OFF PASS) -> 8ms inter-rail delay -> LAB disabled (`0xDE46 = 0x00`), `STATUS1 = 0x00` (OFF PASS).
-- Display Engine Integrity: `PLL = 0x2f`, `DSI_CTRL = 0x000001f5`, `LANE_STATUS = 0x00001f1f` intact.
-- Reproducibility: 2/2 independent physical cold/fresh boots passed 100%.
-- Safety invariants: 0 DCS packets sent, 0 WLED writes, panel reset held asserted LOW (GPIO 8 = 0), 0 bus aborts, 0 SError, 0 panics, 0 resets; shell and USB console remained 100% responsive.
-
-D8-M5, tag `xzs-d8m5-panel-power-reset-complete`, completed Keyaki panel power-on sequence, cycle-accurate hardware reset sequence, powered-idle verification, and source-proven safe power-down sequence on physical hardware across two independent fresh boots:
-- Sequence Verification: Fully compliant with authoritative downstream kernel `keyaki.dts` specification (`VDDIO_10MS->LAB_10MS->IBB_0MS->RST_LOW_10MS->RST_HIGH_10MS`).
-- Hardware Timed Reset: `RESET_DELTA_US = 10,000 µs` (Run 1) and `10,002 µs` (Run 2) cycle-accurate via `cntvct_el0` (19.2 MHz clock base).
-- Powered-Idle Check: GPIO8=HIGH (Reset released), GPIO10=LOW (TE inactive), GPIO51=HIGH (VDDIO 1.8V enabled), LAB=0xa0 (VREG_OK=1), IBB=0x80 (VREG_OK=1), DSI0 host stopstate intact (`LANE=0x00001f1f`).
-- Mandatory Safe Power-Down: Reset assert LOW (5ms) -> IBB disable (10ms) -> LAB disable (10ms) -> VDDIO disable -> 300ms settling window passed 100%.
-- Reproducibility: 2/2 independent physical cold/fresh boots passed 100%.
-- Strict Scope Locks: 0 DCS packets sent, 0 WLED writes, 0 MDP scanouts/DMA triggers, 0 bus aborts, 0 SError, 0 panics, 0 resets.
-
-> Native XNU now deterministically powers on, resets, verifies regulation of, and cleanly shuts down the physical Sharp + Synaptics command-mode panel on Sony Xperia XZs hardware.
-
-D8-M6, tag `xzs-d8m6-panel-dcs-complete`, completed panel vendor/DCS command transmission, TE monitoring, and safe shutdown on physical hardware across two independent fresh boots:
-- Canonical DCS Packets: Transmitted `SLPOUT (0x11)`, `TEON (0x35 0x00)`, `DISPON (0x29)`, `DISPOFF (0x28)`, and `SLPIN (0x10)` in command mode via 64-byte aligned DMA buffers.
-- Zero Timeouts & ACK Errors: 5/5 DMA triggers and completions with `DMA_TIMEOUTS=0` and `ACK_ERRORS=0` across both runs.
-- TE Monitoring: Sampled GPIO10 (TE/mdp_vsync) over ~33 ms (19,921 samples) verifying 0 transitions (stable LOW, scanout inactive).
-- Graceful Shutdown: Fully reversed DCS sequence (`DISPOFF -> SLPIN -> M5 physical power-down`) returning to stable zero-power idle state.
-- Strict Scope Locks: `WLED_WRITES=0` (backlight strictly off), `MDP_KICKOFFS=0` (MDP scanout untouched).
-- Reproducibility: 2/2 independent physical cold/fresh boots passed 100% with identical pre- and post-register snapshots.
-
-D8-M8, tag `xzs-d8m8-deferred`, investigated MDP command-mode framebuffer scanout on physical silicon across 10 controlled single-kickoff attempts. Framebuffer allocation (`0x98000000`), SSPP RGB0 configuration (1080x1920 XRGB8888, format/stride verified, active source address latched `0x98000000`), LM0 BASE routing, CTL0 flush consumption (`0x00020048` -> 0), and Qualcomm software-TE / internal VSYNC override (`PP_SYNC_CONFIG_VSYNC=0x00080093`, WR_PTR at 0 us, RD_PTR at 10 ms, internal period ~16.56 ms) were hardware-proven. However, pixel rasterization never advanced (`PP0_LINE_COUNT=0`, `PP0_DONE=0`, `DSI_STREAM_ACTIVITY=0`) due to an unresolved PingPong0 to DSI command-mode trigger / flow-control handshake. As explicitly directed, D8-M8 debugging is frozen, with no further hardware attempts. Milestone D8-M8 is formally marked DEFERRED / INCOMPLETE / UNSEALED. Phase D8 overall remains INCOMPLETE. Full report: [`docs/XZS_D8_M8_DEFERRED.md`](docs/XZS_D8_M8_DEFERRED.md).
-
-Details: [`docs/XZS_DISPLAY_BRINGUP.md`](docs/XZS_DISPLAY_BRINGUP.md), [`docs/XZS_D8_M3_SEAL_REPORT.md`](docs/XZS_D8_M3_SEAL_REPORT.md), [`docs/XZS_D8_M4_SEAL_REPORT.md`](docs/XZS_D8_M4_SEAL_REPORT.md), [`docs/XZS_D8_P1_SEAL_REPORT.md`](docs/XZS_D8_P1_SEAL_REPORT.md), [`docs/XZS_D8_P2_SEAL_REPORT.md`](docs/XZS_D8_P2_SEAL_REPORT.md), [`docs/XZS_D8_M5_SEAL_REPORT.md`](docs/XZS_D8_M5_SEAL_REPORT.md), [`docs/XZS_D8_M6_SEAL_REPORT.md`](docs/XZS_D8_M6_SEAL_REPORT.md), [`docs/XZS_D8_M8_DEFERRED.md`](docs/XZS_D8_M8_DEFERRED.md). Bypassed work: [`docs/XZS_BLOCKERS_AND_DEFERRED.md`](docs/XZS_BLOCKERS_AND_DEFERRED.md). Status: [`docs/XZS_PORT_STATUS.md`](docs/XZS_PORT_STATUS.md).
-
-### Verified Milestone Capabilities
-
-* **Native Kernel Entry**: Bare-metal EL1 entry via `xzs-bootshim`, Apple Device Tree (ADT) generation, 16KB translation tables, and transition to High KVA (`0xfffffe0000000000`).
-* **4-Core SMP Scheduler**: CPU0–CPU3 brought online via standard ARM PSCI `CPU_ON` (`0xC4000003`); Mach `pset0` active with `idle_thread` on all cores, GICv3 SGI 1 reschedule IPIs, and AST urgent preemption.
-* **BSD Subsystem & VFS Root**: Full BSD process table, credentials, and read-only XZSFS v1 root filesystem mounted from RAMDisk (`rd=md0`).
-* **devfs & Console Device**: Namespace resolution through `/dev` overlay; `/dev/console` created as character device 0:0 (`VCHR`).
-* **PID 1 Userspace (EL0)**: BSD `initproc` (PID 1) mapped with PAGEZERO guard, RX `__TEXT`, and RW/NX initial stack; Strategy A2 native AF & UXN permission promotion verified on silicon.
-* **Native Console Output**: PID 1 holds native file descriptors 0, 1, and 2 mapped to `/dev/console`; real Darwin `write(1)` syscall verified producing 26 bytes of console output (`[XZS-INIT] launchd entered\n`).
-* **Sustained Stable Runtime**: PID 1 executes in EL0 indefinitely; completed 3,009 consecutive successful `getpid` (syscall 20) round-trips without faulting.
+### 3.5 Storage, HFS+ VFS & Security Layer
+* **High-Speed SDCC1 eMMC 5.1 Driver (`src/xnu/pexpert/arm/xzs_sdhci.c`)**:
+  * Operates at 19.2 MHz with 8-bit bus width (`CMD6`), `CMD18` multi-block PIO reads, and `CMD24`/`CMD25` writes. Exposes `/dev/disk0` and 55 GPT slices (`/dev/disk0s1..s55`) with `DKIOCISSOLIDSTATE = 1`.
+* **Case-Sensitive Journaled HFS+ (`src/xnu/bsd/sweet_hfs/`)**:
+  * Mounts `/dev/disk0s54` (`userdata`, 14 GB) read-write as `/`, supporting `FSIOC_CAS_BSDFLAGS`, `FSIOC_KERNEL_ROOTAUTH`, 64-bit `hfs_clonefile`, and volume space quota attributes (`ATTR_VOL_QUOTA_SIZE`, `ATTR_VOL_RESERVED_SIZE` in [`src/xnu/bsd/sweet_hfs/core/hfs_vfsops.c`](file:///Users/lechaukha12/Desktop/xnu-xzs/src/xnu/bsd/sweet_hfs/core/hfs_vfsops.c) and [`src/xnu/bsd/vfs/vfs_attrlist.c`](file:///Users/lechaukha12/Desktop/xnu-xzs/src/xnu/bsd/vfs/vfs_attrlist.c)) required by `MobileSafari`, `WebKit`, `Notes`, and `Photos`.
+* **AMFI, Sandbox & Process Management (`src/xnu/bsd/kern/xzs_amfi.c`, `kern_exit.c`)**:
+  * Registers dual MAC policies (`"Sandbox"` and `"AMFI"`), implements syscalls `0x5a` and `0x60`, resolves container paths (`call == 4` -> `CFFIXED_USER_HOME=` or `ENOENT`), synthesizes entitlements for `PlugInKit` (`pkd`) and `chronod`, and parks unsupported hardware daemons (`fairplayd.H2`, `bluetoothd`, `watchdogd`, `searchpartyd`, `biometrickitd`, `pearld`, `nfcd`, `wirelessproxd`, `syncdefaultsd`) inside `exit_with_reason()` after full VM/FD teardown so `launchd` never wastes CPU respawning them.
 
 ---
 
-## Architecture
+## 4. Hardware-Verified Milestone Matrix
 
-```text
-               Authentic Apple / Darwin Userspace (launchd, dyld, daemons)
-                                            │
-                                            ▼
-                       Standard IOKit / Platform Contracts
-                 (IORegistry, AppleARMPERoot, IOPMPowerSource)
-                                            │
-                                            ▼
-                    +──────────────────────────────────────────────+
-                    |                XZSAppleCompat                |
-                    |  - Translates Apple contracts to platform    |
-                    |  - Emulates Apple IORegistry topologies      |
-                    |  - Provides device-tree/chosen properties    |
-                    |  - Exposes power/battery/display interfaces  |
-                    +──────────────────────────────────────────────+
-                                            │
-                                            ▼
-                    +──────────────────────────────────────────────+
-                    |                 XZSPlatform                  |
-                    |  - Clean OS-neutral Qualcomm hardware API    |
-                    |  - MMIO, Clock (GCC), Reset, Regulator (RPM) |
-                    |  - GPIO/TLMM pinmux, GICv3 IRQ, SMMU DMA     |
-                    +──────────────────────────────────────────────+
-                                            │
-                                            ▼
-                    +──────────────────────────────────────────────+
-                    |          Native Qualcomm / Sony Drivers      |
-                    |  - BLSP UARTDM, SDCC1 eMMC, MDP5 display,    |
-                    |  - Synaptics ClearPad touch, DWC3 USB, etc.  |
-                    +──────────────────────────────────────────────+
-                                            │
-                                            ▼
-                                  MSM8996 Hardware
-```
-
----
-
-## Current Development Phase
-
-* **Integrated on `main`**:
-  - D7-T2 generic native Mach-O execution complete and sealed (tag `xzs-d7t2-full-complete`, `DEBT-001` RESOLVED).
-  - D8-M1 display topology audit complete (tag `xzs-d8-m1-complete`).
-  - D8-M2 display power domain & core clocks hardware-verified (tag `xzs-d8-m2-complete`).
-  - D8-M3 DSI0 PLL, MMCC clock tree, and 14nm PHY hardware-verified (tag `xzs-d8m3-display-pll-phy-complete`).
-  - D8-M4 DSI0 host controller in command mode complete (tag `xzs-d8m4-dsi-host-complete`).
-  - D8-P1 TLMM GPIO prerequisite complete (tag `xzs-d8p1-gpio-complete`).
-  - D8-P2 SPMI + LAB/IBB display bias rails complete (tag `xzs-d8p2-power-rails-complete`).
-  - D8-M5 Panel power & reset sequence complete (tag `xzs-d8m5-panel-power-reset-complete`).
-  - D8-M6 Panel vendor/DCS init sequence complete (tag `xzs-d8m6-panel-dcs-complete`).
-  - D8-M8 MDP command-mode scanout remains blocked: source fetch latches, but no PP0 scanline or DSI command-MDP completion has been observed.
-  - D8-M8.5 proves WLED, panel DCS, and rendering into the RAM framebuffer; it does **not** prove visible pixels.
-  - D8-M9 and D8-M10 are blocked on D8-M8. USB console and framebuffer-RAM rendering are not LCD evidence.
-* **Next active milestone**: source-audit the remaining Panel 9 wake/vendor-init and bootloader-handoff differences; no further MMIO experiment is justified until it yields one source-backed variable.
-
----
-
-## Roadmap
-
-| Phase | Milestone Description | Hardware Status |
+| Phase | Milestone Description | Status |
 | :--- | :--- | :---: |
-| **Phase A** | Native kernel entry (Bootshim, ADT, MMU, High KVA) | **COMPLETE** |
-| **Phase B** | Platform bring-up (UARTDM, GICv3, Timer, Pmap, VM) | **COMPLETE** |
-| **Phase C** | SMP / Mach scheduler (PSCI, 4 Kryo cores, IPI, AST, Preemption) | **COMPLETE** |
-| **Phase D1** | BSD / VFS bootstrap to root-storage boundary | **COMPLETE** |
-| **Phase D2** | Physical eMMC storage bring-up (SDCC1, CMD0..CMD17, PIO) | **COMPLETE** |
-| **Phase D3** | GUID Partition Table (GPT) discovery & partition enumeration | **COMPLETE** |
-| **Phase D4** | Block-storage driver integration (`bdevsw` / `disk0`) | **COMPLETE** |
-| **Phase D5** | Real root filesystem mount (RAMDisk XZSFS v1) | **COMPLETE / SEALED** |
-| **Phase D6** | PID 1 / First EL0 userspace (`initproc` / launchd) | **COMPLETE / SEALED** |
-| **Phase D7** | Interactive USB shell (`/bin/sh`) & Generic Mach-O exec | **COMPLETE / SEALED** |
-| **Phase D8** | Display subsystem: Clocks, DSI PHY/PLL, WLED & Framebuffer | **D8-M1..M6 SEALED / D8-M8 BLOCKED** |
-| **Phase D9** | XZSAppleCompat: Apple Compatibility Services (`AppleCLCD`, `IOSurface`, `AppleKeyStore`, `xzs_amfi`, `XZSHID`) | **ACTIVE / IN PROGRESS** |
-| **Phase D10**| Authentic iOS RootFS Pipeline: IPSW extraction, HFS+ volume, Setup & Activation tweaks | **PLANNED** |
-| **Phase D11**| Apple Device Tree & Identity (`tools/mkadt.py` for iPhone X / D22AP) | **PLANNED** |
-| **Phase D12**| Authentic iOS Userland Boot: `/sbin/launchd` -> `backboardd` -> `SpringBoard` GUI | **TARGET** |
-
-Full specifications and milestone criteria are detailed in [`docs/XZS_ROADMAP.md`](docs/XZS_ROADMAP.md) and [`docs/XZS_IOS_HYBRID_ARCHITECTURE.md`](docs/XZS_IOS_HYBRID_ARCHITECTURE.md).
-
+| **Phase A** | Native EL1 kernel entry (`xzs-bootshim`, ADT generation, 16KB MMU, High KVA) | **COMPLETE & SEALED** |
+| **Phase B** | Platform bring-up (BLSP2 UARTDM, GICv3, 19.2MHz Timers, VM & pmap bootstrap) | **COMPLETE & SEALED** |
+| **Phase C** | 4-core Kryo SMP scheduler (PSCI `CPU_ON`, per-core GICR, SGI 1 IPI, AST preemption) | **COMPLETE & SEALED** |
+| **Phase D1–D4** | BSD/VFS bootstrap, SDCC1 eMMC 5.1 driver, GPT discovery & 55 `/dev/disk0s*` slices | **COMPLETE & SEALED** |
+| **Phase D5–D7** | RAMDisk XZSFS, PID 1 EL0 transition, DWC3 USB console & generic Mach-O demand paging | **COMPLETE & SEALED** |
+| **Phase D8** | Physical 1080x1920 MIPI DSI command-mode LCD bring-up (MDP5, LAB/IBB, WLED, `xzs_fbcon`) | **COMPLETE & SEALED** |
+| **Phase D9** | `XZSAppleCompat` services (`XZSFramebuffer`, `XZSSurface`, `XZSKeyStore`, `SweetHID`, `sweet_hfs`, `xzs_amfi`) | **COMPLETE & SEALED** |
+| **Phase D10** | 14 GB HFS+ iOS 16.7.16 RootFS on `/dev/disk0s54`, `/sbin/launchd`, `backboardd` & `SpringBoard` GUI | **COMPLETE & SEALED** |
+| **Phase D11** | Synaptics RMI4 125Hz multi-touch, edge gestures, PON/GPIO keys & WLED sleep/wake | **COMPLETE & SEALED** |
+| **Phase D12** | 60Hz multi-threaded 1:1 LUT compositor, non-blocking USB console & stock iOS 16 apps/widgets | **COMPLETE & SEALED** |
 
 ---
 
-## Hardware / Platform Strategy
+## 5. Repository Layout
 
-To maintain engineering rigor and keep generic XNU maintainable:
-1. **Upstream Alignment**: Keep generic XNU code as close to canonical Apple/Darwin semantics as practical.
-2. **Platform Encapsulation**: All Qualcomm MSM8996 and Sony Xperia specific hardware behaviors must be encapsulated within `XZSPlatform`.
-3. **Compatibility Shimming (`XZSAppleCompat`)**: Apple-specific expectations (`AppleCLCD` / `IOMobileFramebuffer`, `IOCoreSurfaceRoot` / `IOSurface`, `AppleKeyStore`, `IOHIDEventService`, permissive AMFI/Sandbox) are ported from the proven `ios-sweet` architectural model into `xnu-xzs`.
-4. **Continuous Framebuffer Decoupling**: Rather than requiring kernel-level DPU composition, userland window compositing (`backboardd` / `RenderServer`) renders via CPU software rasterization into `IOSurface` buffers, which `XZSFramebuffer` copies to physical RAM (`0x83401000` / `0x98000000`).
-5. **Audit and Retirement**: Temporary bring-up workarounds (e.g. `devfs_getattr` pointer-hardening bypass `3e417bb`) are tracked as technical debt and slated for systematic retirement under Phase D9.
-
----
-
-## iOS Userland Research Goal
-
-The project models authentic iOS userland execution through an extracted-image paradigm:
 ```text
-Authentic Apple iPhone IPSW
-        ↓
-mkiosroot.sh (Merge OS, SystemOS, AppOS Cryptexes into single HFS+ volume)
-        ↓
-sweet-root-tweaks.py (DataMigration bypass, Hactivation, Setup skip, disable watchdogs)
-        ↓
-Flash to eMMC userdata partition (/dev/disk0s54)
-        ↓
-Boot via xnu-xzs / bootshim with unified ADT payload
-        ↓
-Mount HFS+ root volume (rd=emmcroot0)
-        ↓
-Execute authentic Apple launchd -> backboardd -> SpringBoard
+xnu-xzs/
+├── src/
+│   ├── xnu/                  # Apple XNU 24.0.0 kernel source tree with MSM8996 & XZSAppleCompat layers
+│   │   ├── osfmk/arm64/      # Low-level bootstrap, MMU, Kryo SMP, exception vectors & AST handling
+│   │   ├── pexpert/arm/      # MSM8996 UARTDM, GICv3, SDCC1 eMMC, DWC3 USB, MDSS MDP5/DSI0 & fbcon
+│   │   ├── iokit/Kernel/arm/ # XZSFramebuffer, XZSSurface, XZSKeyStore, SweetHID (touch/buttons), SweetBattery
+│   │   └── bsd/              # sweet_hfs (Journaled HFS+), sweet_libpthread, sweet_bearssl, xzs_amfi
+│   └── xzs-bootshim/         # EL1 ARM64 bootshim, Qualcomm DTB parser & D22AP Apple Device Tree builder
+├── scripts/                  # Build, PAC verification, boot.img packaging & hardware deployment scripts
+├── tools/                    # HFS+ iOS 16 RootFS builder (mkiosroot-macos.py, xzs-root-tweaks.py, raw2simg.py)
+├── docs/                     # Architecture blueprints, hardware verification reports & register audits
+└── artifacts/                # Built boot.img payloads and hardware telemetry logs (gitignored)
 ```
 
-### Reference Architecture: `ios-sweet`
-The complete reference implementation of Apple's iOS 16 userland running on Qualcomm silicon has been incorporated into the project repository (`ios-sweet/`, excluded via `.gitignore`). The architectural synthesis is detailed in [`docs/XZS_IOS_HYBRID_ARCHITECTURE.md`](docs/XZS_IOS_HYBRID_ARCHITECTURE.md).
+---
+
+## 6. Build & Hardware Reproduction Guide
+
+### 6.1 Prerequisites
+* **Host OS**: macOS (Apple Silicon or Intel) with Xcode / Command Line Tools installed.
+* **Target Device**: Sony Xperia XZs (`G8231`) with unlocked bootloader in Fastboot mode (`Volume Down` + USB connect).
+
+### 6.2 Compile the XNU Kernel & Verify Zero PAC
+```bash
+DEVELOPER_DIR=/Applications/Xcode-beta.app/Contents/Developer \
+make -C src/xnu \
+  KERNEL_CONFIGS=DEVELOPMENT \
+  ARCH_CONFIGS=ARM64 \
+  MACHINE_CONFIGS=VMAPPLE \
+  RC_DARWIN_KERNEL_VERSION=24.0.0 \
+  build -j$(sysctl -n hw.ncpu)
+
+./scripts/check-no-pac.sh src/xnu/BUILD/obj/DEVELOPMENT_ARM64_VMAPPLE/kernel.development.vmapple
+```
+
+### 6.3 Package `boot.img` & Boot via Fastboot
+```bash
+./scripts/package-boot.sh
+fastboot boot artifacts/builds/boot.img
+```
+
+### 6.4 Build & Flash the iOS 16.7.16 HFS+ RootFS (One-Time Setup)
+```bash
+sudo python3 tools/mkiosroot-macos.py
+python3 tools/raw2simg.py artifacts/builds/ios16-root.img artifacts/builds/ios16-root.simg
+fastboot flash userdata artifacts/builds/ios16-root.simg
+```
 
 ---
 
-## Debug / Recovery Workflow
+## 7. Documentation Index
 
-* **Boot Mechanism**: Sony S1 Fastboot, `fastboot boot` only. Do not flash.
-* **Primary debugger**: USB shell and the host transcript. Each hardware-changing display step is one PRE / APPLY / readback / POST transaction.
-* **Recovery**: manual Sony force shutdown, then fastboot. Do not use `xzs# reboot`.
-* **Ramoops**: the reserved region is mapped, but a TWRP pull is not XNU evidence unless the file contains an XNU marker. That path is deferred. See [`docs/XZS_BLOCKERS_AND_DEFERRED.md`](docs/XZS_BLOCKERS_AND_DEFERRED.md).
-
----
-
-## Current Status & Known Boundaries
-
-1. **Display Subsystem Status**:
-   - WLED, panel DCS, RAM framebuffer rendering, and the USB console are hardware-proven. The physical LCD backlight is active, but no pixel scanout is proven: `PP_LINE`, `PP_OUT`, `PP0_DONE`, and DSI command-MDP completion remain absent.
-   - `xzs_fbcon` renders text into RAM and mirrors the shell to USB CDC; it must not be described as an LCD console until the D8-M8 transport gate is passed.
-2. **Apple Compatibility Services Pivot**:
-   - In accordance with the `XZS_IOS_HYBRID_ARCHITECTURE` blueprint, Phase D9 brings in the self-contained IOKit service providers (`XZSFramebuffer`, `XZSSurface`, `XZSKeyStore`, `xzs_amfi`, `XZSHID`) to transition from simple shell display to authentic `backboardd` / `SpringBoard` window-server execution.
-3. **devfs Pointer-Hardening Bypass**: Commit `3e417bb` bypasses `vm_kernel_addrhash` in `devfs_getattr` to prevent a SHA-256 address hashing hang during early devfs open. Classified as `XZS PLATFORM WORKAROUND` to be re-audited under Phase D9.
-4. **Deferred Subsystems**: Advanced networking (Skywalk, lo0) and DTrace FBT are temporarily deferred until required drivers are active.
-
----
-
-## Documentation Index
-
-### Core Architecture & Strategy
-* [iOS Hybrid Architecture Blueprint](docs/XZS_IOS_HYBRID_ARCHITECTURE.md) — Comprehensive technical blueprint importing the `ios-sweet` architecture onto Sony Xperia XZs (MSM8996).
-* [Project Roadmap](docs/XZS_ROADMAP.md) — Authoritative multi-phase development roadmap (Phases A through D12).
-* [Architecture Overview](docs/XZS_ARCHITECTURE.md) — End-to-end boot architecture, execution flow, and platform design.
-* [Workarounds & Compatibility Matrix](docs/XZS_WORKAROUNDS.md) — Active shims, workarounds, and classification taxonomy.
-* [Technical Debt & Backlog](docs/XZS_TECHNICAL_DEBT.md) — Architectural debt inventory, risks, and remediation plans.
-* [Current Session Handoff](docs/CURRENT_HANDOFF.md) — Concise current state, commits, and next actions for AI sessions.
-* [Port Status](docs/XZS_PORT_STATUS.md) — Hardware-verified checklist and the current milestone.
-* [Display Bring-up](docs/XZS_DISPLAY_BRINGUP.md) — D8 topology, measured registers, and the power/clock sequence.
-* [Blockers and Deferred Work](docs/XZS_BLOCKERS_AND_DEFERRED.md) — Issues that were bypassed on purpose, and the condition that resumes each one.
-
-### Hardware & Bring-up Reference
-* [Hardware Map](docs/HARDWARE_MAP.md) — Audited MMIO register bases, IRQs, and clock domains.
-* [Memory Map](docs/XZS_MEMORY_MAP.md) — Physical memory layout, carveouts, and pstore allocations.
-* [Early Debug Architecture](docs/XZS_EARLY_DEBUG.md) — Diagnostic telemetry, breadcrumbs, and ramoops recovery.
-* [Hardware Verification Guide](docs/XZS_HARDWARE_VERIFICATION.md) — Flashing, testing, and extraction procedures.
-
-### Sealed Phase Reports & Audits
-* [Phase D8-M8 Final Closure Report](docs/XZS_D8_M8_FINAL_CLOSURE.md) — Comprehensive D8-M8 Final Closure Campaign ledger (R1..R6), proven architectural milestones, and in-cell touch interlock isolation.
-* [Phase D6 Final Userspace Foundation Report](artifacts/reports/D6_FINAL_USERSPACE_FOUNDATION_REPORT.md) — Comprehensive multi-milestone seal and regression report.
-* [Phase D6-M6 Stable PID1 Report](artifacts/reports/D6_M6_STABLE_PID1_REPORT.md) — D6-M6 hardware acceptance report.
-* [Phase D6-M6 Source Audit](docs/D6_M6_STABLE_PID1_SOURCE_AUDIT.md) — File descriptor bootstrap, console call path, and telemetry audit.
-* [Phase D6-M5 Syscall Round-Trip Report](artifacts/reports/D6_M5_FIRST_SYSCALL_REPORT.md) — First EL0 syscall dispatcher and return proof.
-* [Phase D6-M4 First EL0 Transition Report](artifacts/reports/D6_M4_FIRST_EL0_REPORT.md) — First userland instruction execution proof.
-* [Phase D5 Rootfs Final Architecture](docs/D5_ROOTFS_FINAL_ARCHITECTURE.md) — RAMDisk transport and XZSFS v1 filesystem architecture.
+* [Current Session Handoff](docs/CURRENT_HANDOFF.md) — Executive summary of completed milestones and active configuration.
+* [Port Status Overview](docs/XZS_PORT_STATUS.md) — Milestone verification checklist and hardware status.
+* [Architecture & Execution Pipeline](docs/XZS_ARCHITECTURE.md) — End-to-end boot flow, memory map, and MMIO register reference.
+* [iOS Compatibility Architecture Blueprint](docs/XZS_IOS_HYBRID_ARCHITECTURE.md) — Detailed specification of `XZSAppleCompat` services (`XZSFramebuffer`, `XZSSurface`, `SweetHID`, `xzs_amfi`, `sweet_hfs`).
+* [Technical Roadmap](docs/XZS_ROADMAP.md) — Complete Phase A through Phase D12 milestone specifications.
+* [Physical Display Evaluation Report](docs/XZS_D8_M10_HARDWARE_EVALUATION.md) — Root-cause resolution and hardware verification of the Sharp/Synaptics 1080x1920 MIPI DSI pipeline.
+* [Build Guide](docs/XZS_BUILD.md) — Detailed toolchain and build flags reference.

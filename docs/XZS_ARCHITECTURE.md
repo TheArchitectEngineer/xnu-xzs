@@ -124,38 +124,22 @@ Its long-term research goal is to determine how far an older authentic **Apple i
 +-------------------------------------------------------------------------+
 |        VFS Root Filesystem Mount & devfs (vfs_mountroot) [VERIFIED]     |
 |  [XZS-PORT / CANONICAL VFS]                                             |
-|  - Discovers RAMDisk block device via ADT memory-map (rd=md0)          |
-|  - Mounts read-only XZSFS v1 filesystem as rootvnode ("/")              |
+|  - Discovers eMMC GPT partition slices (/dev/disk0s1..s55) via SDCC1    |
+|  - Mounts 14 GB Journaled HFS+ iOS 16.7.16 RootFS (/dev/disk0s54) R/W   |
 |  - Mounts devfs overlay at "/dev", creates cdev 0:0 (/dev/console)      |
-|  - Verifies namespace traversal: /sbin/launchd, /bin/sh, /dev/console   |
+|  - Supports 64-bit clonefile, HFS_SSD, and volume quota attributes      |
 +-------------------------------------------------------------------------+
                                      │
                                      ▼
 +-------------------------------------------------------------------------+
-|        PID 1 Userspace Bootstrap & Native Console [VERIFIED]            |
-|  [XZS-PORT / CANONICAL DARWIN USR]                                      |
-|  - Constructs initproc (PID 1), user VM map, PAGEZERO, and RX __TEXT    |
-|  - Prepares native initial stack frame (argc=1, argv[0]=/sbin/launchd)  |
-|  - Performs Strategy A2 native AF & UXN permission promotion            |
-|  - Sets up native fd 0, 1, 2 bound to /dev/console (VCHR, cdev 0:0)     |
-|  - Transitions EL1 -> EL0 via eret; executes first user instruction    |
-|  - Issues SYS_write (x16=4) -> 26 bytes output to /dev/console          |
-|  - Enters stable loop: 3,009 consecutive successful SYS_getpid calls    |
-+-------------------------------------------------------------------------+
-                                     │
-                                     ▼
-+-------------------------------------------------------------------------+
-|              Long-Term Platform & Compatibility Roadmap                 |
-|  Phase D7:  Headless Interactive Serial Shell (/bin/sh REPL)            |
-|  Phase D8:  Native Display / Framebuffer / Touch / Recovery Console     |
-|  Phase D9:  XZSPlatform Hardware Compatibility Layer (qcom-common)      |
-|  Phase D10: Core Native Drivers (storage, USB, power, sensors)          |
-|  Phase D11: System Hardware Integration (sleep/wake, thermal, battery)  |
-|  Phase D12: XZSAppleCompat (Apple IOKit contracts & service topology)   |
-|  Phase D13: Darwin / iOS Userland Compatibility (Mach IPC, dyld, VM)    |
-|  Phase D14: First Old-iOS Userland Boot (extracted IPSW -> launchd)     |
-|  Phase D15: iOS Service Bring-Up (system daemons under launchd)         |
-|  Phase D16: Graphical iOS Userland Investigation (SpringBoard / UI)     |
+|        iOS 16.7.16 Userland, Window Server & HID [VERIFIED]             |
+|  [XZSAppleCompat / CANONICAL DARWIN USR]                                |
+|  - Executes /sbin/launchd (PID 1) with dyld_shared_cache_arm64          |
+|  - Starts logd, keybagd (XZSKeyStore), lsd, containermanagerd, pkd      |
+|  - backboardd matches XZSFramebuffer (AppleCLCD) & XZSSurface           |
+|  - SweetHID delivers 125Hz RMI4 multi-touch, edge gestures & keys       |
+|  - 4-core 60Hz 1:1 LUT presenter blits 1125x2436 -> 1080x1920 LCD       |
+|  - SpringBoard Lock Screen, Home Screen, Wallpapers & stock iOS 16 apps |
 +-------------------------------------------------------------------------+
 ```
 

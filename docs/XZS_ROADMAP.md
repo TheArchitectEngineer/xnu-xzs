@@ -20,15 +20,11 @@ Progress is strictly gated by physical hardware verification. Speculative percen
 | **Phase D5** | Real root filesystem mount (RAMDisk XZSFS) | **COMPLETE / SEALED** |
 | **Phase D6** | PID 1 / First EL0 userspace (`initproc` / launchd) | **COMPLETE / SEALED** |
 | **Phase D7** | Interactive USB shell (`/bin/sh`) & Generic Mach-O exec | **COMPLETE / SEALED (D7-M1..M4, D7-T1, D7-T2 COMPLETE)** |
-| **Phase D8** | Native display / framebuffer / touch / recovery console | **IN PROGRESS (D8-M1..M6 PASS / SEALED, D8-P1..P2 COMPLETE / SEALED, D8-P3 NEXT)** |
-| **Phase D9** | XZSPlatform hardware/platform compatibility layer | **PLANNED** |
-| **Phase D10**| Core native device drivers | **PLANNED** |
-| **Phase D11**| System hardware integration | **PLANNED** |
-| **Phase D12**| XZSAppleCompat (Apple-facing hardware compatibility layer) | **PLANNED** |
-| **Phase D13**| Darwin / iOS userland compatibility | **PLANNED** |
-| **Phase D14**| First old-iOS userland boot | **PLANNED** |
-| **Phase D15**| iOS service bring-up | **PLANNED** |
-| **Phase D16**| Graphical iOS userland / SpringBoard investigation | **PLANNED** |
+| **Phase D8** | Native display / framebuffer / boot console (`1080x1920` MIPI DSI) | **COMPLETE / SEALED (D8-M1..M10 HARDWARE PROVEN)** |
+| **Phase D9** | `XZSAppleCompat` kernel services (`XZSFramebuffer`, `XZSSurface`, `XZSKeyStore`, `SweetHID`, `sweet_hfs`, `xzs_amfi`) | **COMPLETE / SEALED** |
+| **Phase D10**| 14 GB HFS+ iOS 16.7.16 RootFS on `/dev/disk0s54`, `/sbin/launchd`, `backboardd` & `SpringBoard` Home Screen | **COMPLETE / SEALED** |
+| **Phase D11**| Synaptics RMI4 125 Hz multi-touch, edge gestures, PON/GPIO keys & WLED sleep/wake | **COMPLETE / SEALED** |
+| **Phase D12**| 60 Hz 4-core 1:1 LUT compositor, non-blocking USB console & stock iOS 16 apps/widgets | **COMPLETE / SEALED** |
 
 
 ---

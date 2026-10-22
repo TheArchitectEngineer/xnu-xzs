@@ -64,7 +64,7 @@ By disassembling both the stock Sony Little Kernel bootloader (`artifacts/firmwa
 
 1. **Pixel Rendering into Framebuffer Memory (`PA = 0x98000000`) — CPU**:
    - In early boot and `xzs_fbcon`, the **ARM64 Kryo CPU** rasterizes 8x16 text glyphs and the 32-bit `XRGB8888` test pattern directly into the physical framebuffer carveout at `0x98000000`.
-   - Under the `ios-sweet` hybrid iOS architecture (`XZSFramebuffer` / `IOMobileFramebuffer` + `XZSSurface` / `IOSurface`), Apple's userspace (`backboardd`, `RenderServer`, `SpringBoard`) likewise performs **CPU software rasterization** into shared `IOSurface` buffers. The Adreno 530 GPU is not required for bring-up or SpringBoard UI rendering.
+   - Under the `XZSAppleCompat` iOS architecture (`XZSFramebuffer` / `IOMobileFramebuffer` + `XZSSurface` / `IOSurface`), Apple's userspace (`backboardd`, `RenderServer`, `SpringBoard`) likewise performs **CPU software rasterization** into shared `IOSurface` buffers. The Adreno 530 GPU is not required for bring-up or SpringBoard UI rendering.
 2. **Frame Scanout, Mixing & MIPI DSI Transport — Hardware Display Engine (MDSS MDP5 + DSI0)**:
    - Once pixels are in RAM at `0x98000000`, **zero CPU cycles** are spent copying pixels to the panel:
      - **MDP5 `SSPP RGB0` DMA (`0x00915000`)** fetches pixel lines over the `MMAGIC` AXI bus.
