@@ -744,16 +744,19 @@ load_machfile(
 		snprintf(xline, sizeof(xline), "EXEC_CONTROL_IS_NULL=%s\n", (exec_ctrl == MEMORY_OBJECT_CONTROL_NULL) ? "yes" : "no");
 		XZS_LOADER_EMIT(xline);
 	} else {
-		char xline[256];
-		extern void xzs_bringup_console_write(const void *buf, int len);
-		int xlen = snprintf(xline, sizeof(xline), "[XZS-EXEC] load_machfile: %s (sz=%llu)\n",
-		    (imgp->ip_startargv && imgp->ip_startargv[0]) ? imgp->ip_startargv : "?",
-		    (unsigned long long)file_size);
-		if (xlen >= (int)sizeof(xline)) {
-			xlen = (int)sizeof(xline) - 1;
-			xline[xlen - 1] = '\n';
+		extern bool g_xzs_gui_presented;
+		if (!g_xzs_gui_presented) {
+			char xline[256];
+			extern void xzs_bringup_console_write(const void *buf, int len);
+			int xlen = snprintf(xline, sizeof(xline), "[XZS-EXEC] load_machfile: %s (sz=%llu)\n",
+			    (imgp->ip_startargv && imgp->ip_startargv[0]) ? imgp->ip_startargv : "?",
+			    (unsigned long long)file_size);
+			if (xlen >= (int)sizeof(xline)) {
+				xlen = (int)sizeof(xline) - 1;
+				xline[xlen - 1] = '\n';
+			}
+			xzs_bringup_console_write(xline, xlen);
 		}
-		xzs_bringup_console_write(xline, xlen);
 	}
 
 	result->is_64bit_addr = ((imgp->ip_flags & IMGPF_IS_64BIT_ADDR) == IMGPF_IS_64BIT_ADDR);

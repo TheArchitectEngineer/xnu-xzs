@@ -1481,12 +1481,15 @@ exit(proc_t p, struct exit_args *uap, int *retval)
 {
 #if CONFIG_XZS_BRINGUP
 	{
+		extern bool g_xzs_gui_presented;
 		extern void xzs_exec_mark(const char *tag);
 		extern void xzs_bringup_console_write(const void *buf, int len);
-		char emsg[96];
-		int elen = snprintf(emsg, sizeof(emsg), "[XZS-T4R] CP=T4R-10 ROLE=CHILD PID=%d SYS_EXIT_ENTER status=%d\n",
-		    proc_pid(p), (int)uap->rval);
-		xzs_bringup_console_write(emsg, elen);
+		if (!g_xzs_gui_presented) {
+			char emsg[96];
+			int elen = snprintf(emsg, sizeof(emsg), "[XZS-T4R] CP=T4R-10 ROLE=CHILD PID=%d SYS_EXIT_ENTER status=%d\n",
+			    proc_pid(p), (int)uap->rval);
+			xzs_bringup_console_write(emsg, elen);
+		}
 		xzs_exec_mark("E30 exit entered");
 	}
 #endif
@@ -1976,6 +1979,9 @@ proc_prepareexit(proc_t p, int rv, boolean_t perf_notify)
 		etype = ut->uu_exception;
 
 #if CONFIG_XZS_BRINGUP || defined(ARM64_BOARD_CONFIG_SWEET)
+		if (strncmp(p->p_comm, "syncdefaultsd", sizeof(p->p_comm)) == 0) {
+			goto skipcheck;
+		}
 		if (p == current_proc()) {
 			extern void sweet_crash_log(const char *, int, int, uint64_t, uint64_t);
 			sweet_crash_log(p->p_comm, proc_getpid(p), WTERMSIG(rv),
@@ -2576,6 +2582,25 @@ proc_exit(proc_t p)
 
 	proc_limitdrop(p);
 
+#if CONFIG_XZS_BRINGUP
+	if (p->p_ppid == 1 &&
+	    (strncmp(p->p_comm, "fairplayd.H2", sizeof(p->p_comm)) == 0 ||
+	     strncmp(p->p_comm, "bluetoothd", sizeof(p->p_comm)) == 0 ||
+	     strncmp(p->p_comm, "watchdogd", sizeof(p->p_comm)) == 0 ||
+	     strncmp(p->p_comm, "searchpartyd", sizeof(p->p_comm)) == 0 ||
+	     strncmp(p->p_comm, "nanoregistrylaun", sizeof(p->p_comm)) == 0 ||
+	     strncmp(p->p_comm, "voiced", sizeof(p->p_comm)) == 0 ||
+	     strncmp(p->p_comm, "biometrickitd", sizeof(p->p_comm)) == 0 ||
+	     strncmp(p->p_comm, "pearld", sizeof(p->p_comm)) == 0 ||
+	     strncmp(p->p_comm, "nfcd", sizeof(p->p_comm)) == 0 ||
+	     strncmp(p->p_comm, "wirelessproxd", sizeof(p->p_comm)) == 0 ||
+	     strncmp(p->p_comm, "syncdefaultsd", sizeof(p->p_comm)) == 0)) {
+		printf("SWEET EXIT: parking %s[%d] after task/vm/fd teardown to prevent launchd respawn storm\n",
+		    p->p_comm, pid);
+		delay_for_interval(3600, NSEC_PER_SEC);
+	}
+#endif
+
 #if DEVELOPMENT || DEBUG
 	proc_exit_lpexit_check(pid, PELS_POS_PRE_TASK_DETACH);
 #endif
@@ -2665,17 +2690,20 @@ proc_exit(proc_t p)
 		    pid, exitval, 0, 0, 0);
 #if CONFIG_XZS_BRINGUP
 		{
+			extern bool g_xzs_gui_presented;
 			extern volatile boolean_t xzs_d6m4_probe_armed;
 			extern void xzs_bringup_console_write(const void *buf, int len);
-			char zmsg[96];
-			int zlen;
-			if (xzs_d6m4_probe_armed) {
-				zlen = snprintf(zmsg, sizeof(zmsg), "[XZS-T4R] CP=T4R-70 ROLE=CHILD PID=%d CHILD_REAPABLE\n", proc_pid(p));
-			} else {
-				zlen = snprintf(zmsg, sizeof(zmsg), "[XZS-EXIT] pid=%d(%s) exitval=0x%x\n",
-				    proc_pid(p), p->p_comm, exitval);
+			if (xzs_d6m4_probe_armed || !g_xzs_gui_presented) {
+				char zmsg[96];
+				int zlen;
+				if (xzs_d6m4_probe_armed) {
+					zlen = snprintf(zmsg, sizeof(zmsg), "[XZS-T4R] CP=T4R-70 ROLE=CHILD PID=%d CHILD_REAPABLE\n", proc_pid(p));
+				} else {
+					zlen = snprintf(zmsg, sizeof(zmsg), "[XZS-EXIT] pid=%d(%s) exitval=0x%x\n",
+					    proc_pid(p), p->p_comm, exitval);
+				}
+				xzs_bringup_console_write(zmsg, zlen);
 			}
-			xzs_bringup_console_write(zmsg, zlen);
 		}
 #endif
 		p->p_stat = SZOMB;

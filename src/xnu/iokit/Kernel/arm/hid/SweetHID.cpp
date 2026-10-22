@@ -347,8 +347,10 @@ OSDefineMetaClassAndStructors(SweetHIDButtons, IOHIDEventService);
  * coordinates normalized to 0..1 like IOHIDEventDriver produces for
  * absolute digitizers.
  */
-#define SWEET_TOUCH_FINGERS 10
-#define SWEET_TOUCH_EDGE_PX 48
+#define SWEET_TOUCH_FINGERS        10
+#define SWEET_TOUCH_EDGE_SIDE_PX   60
+#define SWEET_TOUCH_EDGE_TOP_PX    96
+#define SWEET_TOUCH_EDGE_BOTTOM_PX 96
 class SweetHIDTouch : public IOHIDEventService {
 	OSDeclareDefaultStructors(SweetHIDTouch);
 public:
@@ -371,6 +373,7 @@ static SweetHIDButtons *gSweetButtons;
 static SweetHIDTouch *gSweetTouch;
 extern "C" {
 extern bool g_xzs_gui_presented;
+extern bool g_xzs_power_key_used;
 extern uint32_t xzs_fb_py_to_ly(uint32_t py);
 extern int xzs_spmi_read8(uint8_t sid, uint16_t addr, uint8_t *val);
 extern int xzs_spmi_write8(uint8_t sid, uint16_t addr, uint8_t val);
@@ -495,8 +498,8 @@ SweetHIDTouch::touch(int finger, bool down, int x, int y)
 		return;
 	}
 	if (!was && down) {
-		fEdge[finger] = x < SWEET_TOUCH_EDGE_PX || x > 1079 - SWEET_TOUCH_EDGE_PX ||
-		    y < SWEET_TOUCH_EDGE_PX || y > 1919 - SWEET_TOUCH_EDGE_PX;
+		fEdge[finger] = x < SWEET_TOUCH_EDGE_SIDE_PX || x > 1079 - SWEET_TOUCH_EDGE_SIDE_PX ||
+		    y < SWEET_TOUCH_EDGE_TOP_PX || y > 1919 - SWEET_TOUCH_EDGE_BOTTOM_PX;
 	}
 
 	collection = IOHIDEvent::digitizerEvent(now, 0, kIOHIDDigitizerTransducerTypeHand, false, 0, 0, 0);
@@ -505,6 +508,8 @@ SweetHIDTouch::touch(int finger, bool down, int x, int y)
 		return;
 	}
 	collection->setIntegerValue(kIOHIDEventFieldDigitizerCollection, TRUE);
+	collection->setIntegerValue(kIOHIDEventFieldDigitizerIsDisplayIntegrated, TRUE);
+	collection->setIntegerValue(kIOHIDEventFieldIsBuiltIn, TRUE);
 
 	UInt32 cmask = 0;
 	for (int i = 0; i < SWEET_TOUCH_FINGERS; i++) {
@@ -534,6 +539,7 @@ SweetHIDTouch::touch(int finger, bool down, int x, int y)
 		child->setIntegerValue(kIOHIDEventFieldDigitizerIndex, i);
 		child->setIntegerValue(kIOHIDEventFieldDigitizerIdentity, i + 2);
 		child->setIntegerValue(kIOHIDEventFieldDigitizerTouch, d);
+		child->setIntegerValue(kIOHIDEventFieldDigitizerIsDisplayIntegrated, TRUE);
 		child->setIntegerValue(kIOHIDEventFieldDigitizerEventMask, mask);
 		collection->appendChild(child);
 		child->release();
@@ -553,7 +559,9 @@ SweetHIDTouch::touch(int finger, bool down, int x, int y)
 	collection->setIntegerValue(kIOHIDEventFieldDigitizerButtonMask, any ? 1 : 0);
 	IOLockUnlock(fLock);
 
-	if (was != down) {
+	static uint32_t s_touch_events_logged = 0;
+	if (was != down && s_touch_events_logged < 64) {
+		s_touch_events_logged++;
 		IOLog("SWEET HID: touch %d %s at %d,%d\n", finger, down ? "down" : "up", x, y);
 	}
 	dispatchEvent(collection);
@@ -656,6 +664,9 @@ xzs_keys_thread(void *arg __unused, wait_result_t wr __unused)
 					state[k] = down;
 					IOLog("XZS KEYS: hw_key %d %s (reg 0x%04x=0x%02x)\n",
 					    k, down ? "down" : "up", k_regs[k], v);
+					if (k == 0 && down) {
+						g_xzs_power_key_used = true;
+					}
 					if (k < 3) {
 						sweet_hid_key(k, down);
 					} else {
@@ -1069,7 +1080,7 @@ xzs_touch_thread(void *arg __unused, wait_result_t wr __unused)
 				}
 			}
 		}
-		if (irq_pin == 0u || st[1] != 0u || active_mask != 0u || (poll_tick & 7u) == 0u) {
+		if (irq_pin == 0u || st[1] != 0u || active_mask != 0u || (poll_tick & 3u) == 0u) {
 			uint32_t next_mask = 0;
 			if (f12_data != 0) {
 				if (f12_page != 0) {
@@ -1087,14 +1098,17 @@ xzs_touch_thread(void *arg __unused, wait_result_t wr __unused)
 					for (int i = 0; i < 3; i++) {
 						const uint8_t *fo = &raw[i * 8];
 						uint8_t type = fo[0] & 0x0fu;
-						bool down = (type == 1u || type == 2u || type == 6u) ||
-						    (fo[5] >= 4u && (fo[6] > 0u || fo[7] > 0u));
+						bool down = (type == 1u || type == 3u);
 						int rx = (int)(fo[1] | ((uint16_t)fo[2] << 8));
 						int ry = (int)(fo[3] | ((uint16_t)fo[4] << 8));
 						int x = (sensor_max_x > 0 && sensor_max_x != 1079) ?
 						    (rx * 1079) / sensor_max_x : rx;
 						int y = (sensor_max_y > 0 && sensor_max_y != 1919) ?
 						    (ry * 1919) / sensor_max_y : ry;
+						/* Reject 2.5D curved-bezel grip contacts on initial touch-down */
+						if (down && !(active_mask & (1u << i)) && (x < 12 || x > 1067)) {
+							down = false;
+						}
 						if (down && x >= 0 && x <= 1200 && y >= 0 && y <= 2000) {
 							next_mask |= (1u << i);
 							last_x[i] = x;
@@ -1136,7 +1150,7 @@ xzs_touch_thread(void *arg __unused, wait_result_t wr __unused)
 				}
 			}
 		}
-		IOSleep(12);
+		IOSleep(active_mask != 0u ? 8 : 12);
 	}
 }
 

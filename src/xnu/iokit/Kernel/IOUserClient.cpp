@@ -2749,7 +2749,7 @@ sweet_iolog(char *name, size_t len)
 {
 	if (!sweet_iolog_parsed) {
 		if (!PE_parse_boot_argn("sweetiolog", sweet_iolog_names, sizeof(sweet_iolog_names))) {
-			strlcpy(sweet_iolog_names, "backboardd,SpringBoard", sizeof(sweet_iolog_names));
+			strlcpy(sweet_iolog_names, "-", sizeof(sweet_iolog_names));
 		}
 		sweet_iolog_parsed = 1;
 	}

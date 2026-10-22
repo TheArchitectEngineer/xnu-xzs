@@ -26,15 +26,23 @@
 #if defined(ARM64_BOARD_CONFIG_VMAPPLE) || defined(ARM64_BOARD_CONFIG_SWEET) || defined(XZS) || defined(CONFIG_XZS_BRINGUP)
 #include <kern/debug.h>
 #include <kern/startup.h>
+#include <kern/task.h>
+#include <vm/vm_kern_xnu.h>
+#include <vm/vm_map_xnu.h>
 #include <libkern/amfi/amfi.h>
 #include <mach/kern_return.h>
+#include <mach/vm_param.h>
 #include <sys/codesign.h>
+#include <sys/kauth.h>
 #include <sys/mount.h>
 #include <sys/priv.h>
 #include <sys/proc.h>
+#include <sys/proc_internal.h>
 #include <sys/systm.h>
 #include <sys/ubc_internal.h>
 #include <sys/vnode.h>
+#include <vm/vm_kern.h>
+#include <vm/vm_map.h>
 #include <security/mac_policy.h>
 
 /* iokit/Kernel/arm/SweetEntitlements.cpp */
@@ -284,10 +292,122 @@ sweet_amfi_vnode_check_signature(struct vnode *vp, __unused struct label *label,
  * data (container paths, extension tokens) fail with ENOENT. The first
  * use of each operation number is logged.
  */
+#define AMFI_SYSCALL_CHECK_DYLD_POLICY   0x5a
+#define AMFI_DYLD_OUTPUT_ALLOW_ALL       0xffULL
+#define AMFI_SYSCALL_QUERY_BOOTARG_STATE 0x60
+#define AMFI_BOOTARG_STATE_NOT_ENFORCING 0x86ULL
+
+static int
+sweet_amfi_policy_syscall(__unused struct proc *p, int call, user_addr_t arg)
+{
+	struct {
+		uint64_t input_flags;
+		user_addr_t output_flags;
+	} args;
+	uint64_t flags = AMFI_DYLD_OUTPUT_ALLOW_ALL;
+	uint64_t state = AMFI_BOOTARG_STATE_NOT_ENFORCING;
+	int error;
+
+	if (call == AMFI_SYSCALL_QUERY_BOOTARG_STATE) {
+		return copyout(&state, arg, sizeof(state));
+	}
+	if (call != AMFI_SYSCALL_CHECK_DYLD_POLICY) {
+		return ENOPOLICY;
+	}
+	error = copyin(arg, &args, sizeof(args));
+	if (error == 0) {
+		error = copyout(&flags, args.output_flags, sizeof(flags));
+	}
+	return error;
+}
+
+#define SANDBOX_SYSCALL_CONTAINER_PATH  4
+#define SANDBOX_CONTAINER_VARIABLE      "CFFIXED_USER_HOME="
+
+static int
+sweet_sandbox_container_path(user_addr_t arg)
+{
+	struct {
+		int64_t     pid;
+		uint64_t    pidversion;
+		user_addr_t buffer;
+		user_size_t size;
+		uint64_t    check_pidversion;
+	} args;
+	const size_t prefix_len = sizeof(SANDBOX_CONTAINER_VARIABLE) - 1;
+	proc_t p;
+	task_t task;
+	vm_map_t map;
+	vm_map_copy_t copy = NULL;
+	vm_offset_t strings = 0;
+	vm_size_t strings_size;
+	user_addr_t user_stack;
+	size_t argslen, len;
+	const char *s, *end;
+	int error;
+
+	error = copyin(arg, &args, sizeof(args));
+	if (error) {
+		return error;
+	}
+	p = proc_find((int)args.pid);
+	if (p == PROC_NULL) {
+		return ESRCH;
+	}
+	if (args.check_pidversion && (uint64_t)proc_pidversion(p) != args.pidversion) {
+		proc_rele(p);
+		return ESRCH;
+	}
+	user_stack = p->user_stack;
+	argslen = p->p_argslen;
+	task = proc_task(p);
+	if (user_stack == 0 || argslen == 0 || task == TASK_NULL) {
+		proc_rele(p);
+		return ENOENT;
+	}
+	task_reference(task);
+	proc_rele(p);
+	map = get_task_map_reference(task);
+	task_deallocate(task);
+	if (map == VM_MAP_NULL) {
+		return ENOENT;
+	}
+	strings_size = vm_map_round_page(argslen, vm_map_page_mask(map));
+	if (kmem_alloc(kernel_map, &strings, strings_size, KMA_DATA | KMA_ZERO, VM_KERN_MEMORY_BSD) != KERN_SUCCESS) {
+		vm_map_deallocate(map);
+		return ENOMEM;
+	}
+	if (vm_map_copyin(map, (vm_map_address_t)(user_stack - strings_size), strings_size, FALSE, &copy) != KERN_SUCCESS) {
+		copy = NULL;
+	}
+	vm_map_deallocate(map);
+	if (copy == NULL || vm_map_copy_overwrite(kernel_map, strings, copy, strings_size, FALSE) != KERN_SUCCESS) {
+		if (copy != NULL) {
+			vm_map_copy_discard(copy);
+		}
+		kmem_free(kernel_map, strings, strings_size);
+		return ENOENT;
+	}
+
+	error = ENOENT;
+	end = (const char *)(strings + strings_size);
+	for (s = end - argslen; s < end; s += len + 1) {
+		len = strnlen(s, end - s);
+		if (len > prefix_len && s + len < end && strncmp(s, SANDBOX_CONTAINER_VARIABLE, prefix_len) == 0) {
+			s += prefix_len;
+			len -= prefix_len;
+			error = len < args.size ? copyout(s, args.buffer, len + 1) : ENAMETOOLONG;
+			break;
+		}
+	}
+	kmem_free(kernel_map, strings, strings_size);
+	return error;
+}
+
 static uint64_t sweet_sandbox_seen;
 
 static int
-sweet_sandbox_syscall(struct proc *p, int call, __unused user_addr_t arg)
+sweet_sandbox_syscall(struct proc *p, int call, user_addr_t arg)
 {
 	if (call >= 0 && call < 64 && !(sweet_sandbox_seen & (1ULL << call))) {
 		sweet_sandbox_seen |= 1ULL << call;
@@ -295,28 +415,64 @@ sweet_sandbox_syscall(struct proc *p, int call, __unused user_addr_t arg)
 		proc_name(proc_pid(p), name, sizeof(name));
 		printf("SWEET Sandbox: %s op %d\n", name, call);
 	}
-	switch (call) {
-	case 4:         /* container path (audit token / pid) */
-	case 5:         /* extension issue */
-	case 6:         /* extension consume */
-	case 0x43:      /* container expected */
-		return ENOENT;
-	default:
-		return 0;
+	if (call == SANDBOX_SYSCALL_CONTAINER_PATH) {
+		return sweet_sandbox_container_path(arg);
 	}
+	return 0;
 }
 
 static const struct mac_policy_ops sweet_amfi_mac_ops = {
 	.mpo_vnode_check_signature = sweet_amfi_vnode_check_signature,
+	.mpo_policy_syscall = sweet_amfi_policy_syscall,
 };
 
-/*
- * Privileges for non-root processes come from MAC policies (priv_check_cred
- * -> mac_priv_grant); on iOS Sandbox/AMFI grant them. Without a grant UIKit
- * apps die in CoreAnimation setup: work_interval_create(CA_CLIENT) needs
- * PRIV_WORK_INTERVAL ("Failed to create work interval", SpringBoard).
- * Grant that one; log the first denial of each other privilege per process.
- */
+static const struct {
+	int priv;
+	const char *entitlement;
+} sweet_sandbox_privileges[] = {
+	{ PRIV_PROC_UUID_POLICY, "com.apple.private.kernel.uuid-policy" },
+	{ PRIV_GLOBAL_PROC_INFO, "com.apple.private.kernel.global-proc-info" },
+	{ PRIV_SYSTEM_OVERRIDE, "com.apple.private.kernel.system-override" },
+	{ PRIV_HW_DEBUG_DATA, "com.apple.private.kernel.hw-debug-data" },
+	{ PRIV_SELECTIVE_FORCED_IDLE, "com.apple.private.kernel.selective-forced-idle" },
+	{ PRIV_DARKBOOT, "com.apple.private.kernel.darkboot" },
+	{ PRIV_AUDIO_LATENCY, "com.apple.private.kernel.audio_latency" },
+	{ PRIV_KTRACE_BACKGROUND, "com.apple.private.kernel.ktrace-background" },
+	{ PRIV_SETPRIORITY_DARWIN_ROLE, "com.apple.private.kernel.setpriority-darwin-role" },
+	{ PRIV_PACKAGE_EXTENSIONS, "com.apple.private.kernel.set-package-extensions" },
+	{ PRIV_TRIM_ACTIVE_FILE, "com.apple.private.apfs.trim-active-file" },
+	{ PRIV_PROC_CPUMON_OVERRIDE, "com.apple.private.kernel.override-cpumon" },
+	{ PRIV_VM_PRESSURE, "vm-pressure-level" },
+	{ PRIV_VM_JETSAM, "com.apple.private.kernel.jetsam" },
+	{ PRIV_VM_FOOTPRINT_LIMIT, "com.apple.private.memorystatus" },
+	{ PRIV_NET_PRIVILEGED_TRAFFIC_CLASS, "com.apple.private.network.privileged-traffic-class" },
+	{ PRIV_NET_PRIVILEGED_SOCKET_DELEGATE, "com.apple.private.network.socket-delegate" },
+	{ PRIV_NET_INTERFACE_CONTROL, "com.apple.private.network.interface-control" },
+	{ PRIV_NET_PRIVILEGED_NETWORK_STATISTICS, "com.apple.private.network.statistics" },
+	{ PRIV_NET_PRIVILEGED_NECP_POLICIES, "com.apple.private.necp.policies" },
+	{ PRIV_NET_RESTRICTED_AWDL, "com.apple.private.network.awdl.restricted" },
+	{ PRIV_NET_QOSMARKING_POLICY_OVERRIDE, "com.apple.private.network.qos-marking-policy-override" },
+	{ PRIV_NET_RESTRICTED_MULTIPATH_EXTENDED, "com.apple.developer.networking.multipath_extended" },
+	{ PRIV_NET_RESTRICTED_ROUTE_NC_READ, "com.apple.developer.networking.route_nc_read" },
+	{ PRIV_NET_VALIDATED_RESOLVER, "com.apple.private.validated-resolver" },
+	{ PRIV_NET_CUSTOM_PROTOCOL, "com.apple.developer.networking.custom-protocol" },
+	{ PRIV_NET_PRIVILEGED_NECP_DROP_ALL_BYPASS, "com.apple.private.necp.drop_all_bypass" },
+	{ PRIV_NET_PRIVILEGED_IPSEC_WAKE_PACKET, "com.apple.private.network.ipsec-wake-packet" },
+	{ PRIV_NETINET_RESERVEDPORT, "com.apple.private.network.reserved-port" },
+	{ PRIV_NETINET_TCP_KA_OFFLOAD, "com.apple.developer.networking.tcp_ka_offload" },
+	{ PRIV_SKYWALK_REGISTER_USER_PIPE, "com.apple.private.skywalk.register-user-pipe" },
+	{ PRIV_SKYWALK_REGISTER_KERNEL_PIPE, "com.apple.private.skywalk.register-kernel-pipe" },
+	{ PRIV_SKYWALK_REGISTER_NET_IF, "com.apple.private.skywalk.register-net-if" },
+	{ PRIV_SKYWALK_REGISTER_FLOW_SWITCH, "com.apple.private.skywalk.register-flow-switch" },
+	{ PRIV_SKYWALK_OBSERVE_ALL, "com.apple.private.skywalk.observe-all" },
+	{ PRIV_SKYWALK_OBSERVE_STATS, "com.apple.private.skywalk.observe-stats" },
+	{ PRIV_VFS_OPEN_BY_ID, "com.apple.private.vfs.open-by-id" },
+	{ PRIV_VFS_MOVE_DATA_EXTENTS, "com.apple.private.vfs.move-data-extents" },
+	{ PRIV_VFS_SNAPSHOT, "com.apple.private.vfs.snapshot" },
+	{ PRIV_VFS_DATALESS_RESOLVER, "com.apple.private.vfs.dataless-resolver" },
+	{ PRIV_VFS_SETSIZE, "com.apple.private.vfs.setsize" },
+};
+
 #define SWEET_PRIV_LOG_MAX      64
 static struct {
 	int  priv;
@@ -325,10 +481,25 @@ static struct {
 static int sweet_priv_logged_count;
 
 static int
-sweet_sandbox_priv_grant(kauth_cred_t cred __unused, int priv)
+sweet_sandbox_priv_grant(kauth_cred_t cred, int priv)
 {
-	if (priv == PRIV_WORK_INTERVAL) {
+	proc_t proc = current_proc();
+
+	if (priv == PRIV_WORK_INTERVAL ||
+	    priv == PRIV_VM_FOOTPRINT_LIMIT ||
+	    priv == PRIV_DARKBOOT ||
+	    priv == PRIV_SETPRIORITY_DARWIN_ROLE) {
 		return 0;
+	}
+	if (proc != PROC_NULL && cred == kauth_cred_get()) {
+		for (unsigned i = 0; i < sizeof(sweet_sandbox_privileges) / sizeof(sweet_sandbox_privileges[0]); i++) {
+			if (sweet_sandbox_privileges[i].priv == priv) {
+				if (sweet_amfi_query_boolean_with_proc(proc, sweet_sandbox_privileges[i].entitlement) == KERN_SUCCESS) {
+					return 0;
+				}
+				break;
+			}
+		}
 	}
 	char name[20];
 	proc_selfname(name, sizeof(name));
@@ -361,7 +532,7 @@ static struct mac_policy_conf sweet_sandbox_mac_conf = {
 static mac_policy_handle_t sweet_sandbox_mac_handle;
 
 static struct mac_policy_conf sweet_amfi_mac_conf = {
-	.mpc_name = "SWEET AMFI",
+	.mpc_name = "AMFI",
 	.mpc_fullname = "SWEET built-in Mobile File Integrity",
 	.mpc_ops = &sweet_amfi_mac_ops,
 };

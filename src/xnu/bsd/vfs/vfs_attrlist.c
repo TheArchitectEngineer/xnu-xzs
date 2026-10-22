@@ -1114,6 +1114,22 @@ getvolattrlist(vfs_context_t ctx, vnode_t vp, struct attrlist *alp,
 				VFSATTR_RETURN(&vs, f_bused, mnt->mnt_vfsstat.f_blocks - vs.f_bfree);
 			}
 
+			/*
+			 * VFS_DFLT_ATTR_VOL advertises ATTR_VOL_QUOTA_SIZE and
+			 * ATTR_VOL_RESERVED_SIZE on all filesystems, so provide
+			 * 0 defaults when a filesystem (e.g. HFS+ or bindfs)
+			 * does not populate them. Otherwise URL.volumeTotalCapacity
+			 * and CacheDelete fail getattrlist() with EINVAL.
+			 */
+			if (VFSATTR_IS_ACTIVE(&vs, f_quota)
+			    && !VFSATTR_IS_SUPPORTED(&vs, f_quota)) {
+				VFSATTR_RETURN(&vs, f_quota, 0);
+			}
+			if (VFSATTR_IS_ACTIVE(&vs, f_reserved)
+			    && !VFSATTR_IS_SUPPORTED(&vs, f_reserved)) {
+				VFSATTR_RETURN(&vs, f_reserved, 0);
+			}
+
 			/* default value for volume f_attributes */
 			if (VFSATTR_IS_ACTIVE(&vs, f_attributes)
 			    && !VFSATTR_IS_SUPPORTED(&vs, f_attributes)) {

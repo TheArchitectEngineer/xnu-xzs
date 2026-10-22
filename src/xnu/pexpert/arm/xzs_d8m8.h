@@ -3562,9 +3562,10 @@ xzs_d8m8_wait_frame_idle(uint32_t timeout_us)
 		if (timeout_us == 0u) {
 			return false;
 		}
-		if ((++polls & 0xffu) == 0u) {
+		if ((++polls & 0x3fu) == 0u) {
 			xzs_watchdog_pet();
 		}
+		xzs_d8p2_delay_us(50u);
 		uint64_t now = xzs_d8m5_read_cntvct();
 		if ((now - start) >= limit) {
 			return false;

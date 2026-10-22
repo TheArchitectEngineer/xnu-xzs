@@ -466,7 +466,7 @@ void bootshim_main(uint64_t dtb_phys, uint64_t current_el, uint64_t mpidr) {
     ba->Video.v_height = 1920;
     ba->Video.v_depth = 32;
 
-    copy_string(ba->CommandLine, "console=ttyMSM0,115200 debug=0x4e serial=3 -v keepsyms=1 -noprogress rd=disk0s54 rootrw=1 emmcrw=1 unentitled_ios_sim_launch=1 ignition_level=1 wdt_test=no_user_checkin launchd_unsecure_cache=1 wdt=-1 cs_enforcement_disable=1 amfi_get_out_of_my_way=1 PE_i_can_has_debugger=1 sweetnull=lsd,SpringBoard,backboardd,containermanagerd,installd", sizeof(ba->CommandLine));
+    copy_string(ba->CommandLine, "console=ttyMSM0,115200 debug=0x4e serial=3 -v keepsyms=1 -noprogress rd=disk0s54 rootrw=1 emmcrw=1 unentitled_ios_sim_launch=1 ignition_level=1 wdt_test=no_user_checkin launchd_unsecure_cache=1 wdt=-1 cs_enforcement_disable=1 amfi_get_out_of_my_way=1 PE_i_can_has_debugger=1", sizeof(ba->CommandLine));
 
     ba->machineType = 0;
     ba->bootFlags = 0;

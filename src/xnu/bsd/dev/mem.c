@@ -162,7 +162,7 @@ sweet_null_tee(char *name, size_t len)
 {
 	if (!sweet_null_parsed) {
 		if (!PE_parse_boot_argn("sweetnull", sweet_null_names, sizeof(sweet_null_names))) {
-			strlcpy(sweet_null_names, "backboardd,SpringBoard", sizeof(sweet_null_names));
+			strlcpy(sweet_null_names, "-", sizeof(sweet_null_names));
 		}
 		sweet_null_parsed = 1;
 	}

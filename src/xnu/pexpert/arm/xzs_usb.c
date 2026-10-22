@@ -1017,16 +1017,15 @@ xzs_usb_console_write(const unsigned char *buf, int len)
 		return;
 	}
 	for (i = 0; i < len; i++) {
-		for (int retry = 0; retry < 50; retry++) {
-			if (xzs_tx_enqueue(buf[i])) {
-				break;
-			}
+		if (!xzs_tx_enqueue(buf[i])) {
 			if (!ml_get_interrupts_enabled()) {
 				xzs_usb_pump_sync();
 			} else {
 				xzs_tx_kick();
 			}
-			xzs_usb_busy_delay_us(20);
+			if (!xzs_tx_enqueue(buf[i])) {
+				break;
+			}
 		}
 	}
 	if (!ml_get_interrupts_enabled()) {

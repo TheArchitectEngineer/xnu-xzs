@@ -4031,6 +4031,8 @@ hfs_vfs_getattr(struct mount *mp, struct vfs_attr *fsap, __unused vfs_context_t 
 							   ATTR_VOL_ENCODINGSUSED	| \
 							   ATTR_VOL_CAPABILITIES	| \
 							   ATTR_VOL_UUID			| \
+							   ATTR_VOL_QUOTA_SIZE		| \
+							   ATTR_VOL_RESERVED_SIZE	| \
 							   ATTR_VOL_ATTRIBUTES
 
 
@@ -4089,6 +4091,8 @@ hfs_vfs_getattr(struct mount *mp, struct vfs_attr *fsap, __unused vfs_context_t 
 
 	VFSATTR_RETURN(fsap, f_signature, vcb->vcbSigWord);
 	VFSATTR_RETURN(fsap, f_carbon_fsid, 0);
+	VFSATTR_RETURN(fsap, f_quota, 0);
+	VFSATTR_RETURN(fsap, f_reserved, 0);
 
 	if (VFSATTR_IS_ACTIVE(fsap, f_capabilities)) {
 		vol_capabilities_attr_t *cap;

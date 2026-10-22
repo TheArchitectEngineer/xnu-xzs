@@ -25,6 +25,7 @@
 
 extern void xzs_diag_emit(const char *msg);
 extern uint64_t g_xzs_ttbr0;
+extern uintptr_t g_xzs_mdss_virt_base;
 
 static inline void
 xzs_d8p1_hex32(uint32_t val)
@@ -41,8 +42,14 @@ xzs_d8p1_hex32(uint32_t val)
 static __attribute__((noinline)) uint32_t
 d8p1_read32(uint32_t phys)
 {
+	if (g_xzs_mdss_virt_base != 0 && phys >= 0x00900000u && phys < 0x00a00000u) {
+		uint32_t val = *(volatile uint32_t *)(g_xzs_mdss_virt_base + (phys - 0x00900000u));
+		__asm__ volatile("dmb oshld" ::: "memory");
+		return val;
+	}
+	uint64_t daif = 0;
 	uint64_t saved = 0;
-	__asm__ volatile("mrs %0, TTBR0_EL1" : "=r"(saved));
+	__asm__ volatile("mrs %0, DAIF\n\tmsr DAIFSet, #0xf\n\tmrs %1, TTBR0_EL1" : "=r"(daif), "=r"(saved));
 	if (g_xzs_ttbr0 != 0) {
 		__asm__ volatile("msr TTBR0_EL1, %0\n\tisb sy" :: "r"(g_xzs_ttbr0) : "memory");
 	}
@@ -51,14 +58,22 @@ d8p1_read32(uint32_t phys)
 	if (g_xzs_ttbr0 != 0) {
 		__asm__ volatile("msr TTBR0_EL1, %0\n\tisb sy" :: "r"(saved) : "memory");
 	}
+	__asm__ volatile("msr DAIF, %0" :: "r"(daif) : "memory");
 	return val;
 }
 
 static __attribute__((noinline)) void
 d8p1_write32(uint32_t phys, uint32_t val)
 {
+	if (g_xzs_mdss_virt_base != 0 && phys >= 0x00900000u && phys < 0x00a00000u) {
+		__asm__ volatile("dmb oshst" ::: "memory");
+		*(volatile uint32_t *)(g_xzs_mdss_virt_base + (phys - 0x00900000u)) = val;
+		__asm__ volatile("dsb osh" ::: "memory");
+		return;
+	}
+	uint64_t daif = 0;
 	uint64_t saved = 0;
-	__asm__ volatile("mrs %0, TTBR0_EL1" : "=r"(saved));
+	__asm__ volatile("mrs %0, DAIF\n\tmsr DAIFSet, #0xf\n\tmrs %1, TTBR0_EL1" : "=r"(daif), "=r"(saved));
 	if (g_xzs_ttbr0 != 0) {
 		__asm__ volatile("msr TTBR0_EL1, %0\n\tisb sy" :: "r"(g_xzs_ttbr0) : "memory");
 	}
@@ -67,6 +82,7 @@ d8p1_write32(uint32_t phys, uint32_t val)
 	if (g_xzs_ttbr0 != 0) {
 		__asm__ volatile("msr TTBR0_EL1, %0\n\tisb sy" :: "r"(saved) : "memory");
 	}
+	__asm__ volatile("msr DAIF, %0" :: "r"(daif) : "memory");
 }
 
 static void

@@ -2193,12 +2193,15 @@ cleanup_rosetta_fp:
 
 #if CONFIG_XZS_BRINGUP
 	{
-		char emsg[128];
-		int elen = snprintf(emsg, sizeof(emsg), "[XZS-EXEC] pid=%d(%s) entry=0x%llx mach_header=0x%llx\n",
-		    proc_getpid(p), p->p_name[0] ? p->p_name : p->p_comm,
-		    (unsigned long long)load_result.entry_point,
-		    (unsigned long long)load_result.mach_header);
-		xzs_bringup_console_write(emsg, elen);
+		extern bool g_xzs_gui_presented;
+		if (!g_xzs_gui_presented) {
+			char emsg[128];
+			int elen = snprintf(emsg, sizeof(emsg), "[XZS-EXEC] pid=%d(%s) entry=0x%llx mach_header=0x%llx\n",
+			    proc_getpid(p), p->p_name[0] ? p->p_name : p->p_comm,
+			    (unsigned long long)load_result.entry_point,
+			    (unsigned long long)load_result.mach_header);
+			xzs_bringup_console_write(emsg, elen);
+		}
 	}
 #endif
 
@@ -8062,7 +8065,12 @@ process_signature(proc_t p, struct image_params *imgp)
 				goto done;
 			}
 #if CONFIG_XZS_BRINGUP
-			printf("exec %s\n", p->p_name);
+			{
+				extern bool g_xzs_gui_presented;
+				if (!g_xzs_gui_presented) {
+					printf("exec %s\n", p->p_name);
+				}
+			}
 #else
 			printf("Allowing spawn of iOS binary %s since it has "
 			    "com.apple.private.security.no-sandbox entitlement or unentitled_ios_sim_launch "

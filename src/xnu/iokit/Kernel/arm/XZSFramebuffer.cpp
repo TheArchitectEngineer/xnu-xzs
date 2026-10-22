@@ -41,12 +41,14 @@ extern "C" {
 uintptr_t xzs_fb_kernel_va(void);
 uint32_t xzs_fb_kick_count(void);
 void xzs_fb_present_kick(void);
+void xzs_fb_set_backlight(bool on);
 void xzs_fbcon_detach(void);
 bool xzs_fbcon_is_active(void);
 void xzs_draw_du_ma_may_banner(uintptr_t fb_va, uint32_t width, uint32_t stride, uint32_t top_y, bool clear_full_screen);
 void xzs_watchdog_pet(void);
 bool g_xzs_springboard_surface_ready = false;
 bool g_xzs_gui_presented = false;
+bool g_xzs_power_key_used = false;
 }
 #include <IOKit/IOService.h>
 #include <IOKit/IOUserClient.h>
@@ -378,7 +380,7 @@ AppleCLCD::start(IOService *provider)
 		IOLog("SWEET FB: no vsync timer\n");
 		return false;
 	}
-	uint32_t hz = 30;
+	uint32_t hz = 60;
 	PE_parse_boot_argn("sweetfb_hz", &hz, sizeof(hz));
 	fFlushTicks = (hz == 0 || hz >= 60) ? 1 : 60 / hz;
 
@@ -523,6 +525,14 @@ AppleCLCD::renderSlice(uint32_t worker_id, uint32_t total_workers)
 		    &s_ios16_wallpaper[((uint32_t)py >> 2) * XZS_WP_W] : NULL;
 		uint32_t acc_x = (uint32_t)job.sx << 16;
 
+		if (wp_row == NULL && full_row_lut) {
+			for (int32_t px = 0; px < 1080; px++) {
+				uint32_t p = src_row[s_px_to_lx_lut[(uint32_t)px]];
+				dst_row[px] = (p & 0xff00ff00u) | ((p & 0x00ff0000u) >> 16) | ((p & 0x000000ffu) << 16);
+			}
+			continue;
+		}
+
 		for (int32_t px = job.px0; px < job.px1; px++) {
 			uint32_t lx;
 			if (full_row_lut) {
@@ -637,8 +647,10 @@ AppleCLCD::present(const uint8_t *rec)
 			continue;
 		}
 		SweetSurface *s = sweet_surface_copy(id);
-		if (sweet_fb_swaps_logged < 64) {
+		if (sweet_fb_swaps_logged <= 64) {
 			sweet_fb_swaps_logged++;
+		}
+		if (sweet_fb_swaps_logged <= 8) {
 			IOLog("SWEET FB: swap %u layer %u surface %u %ux%u fmt 0x%x bpr %u a %d,%d %dx%d b %d,%d %dx%d\n",
 			    get32(rec, 0x50), layer, id, s ? s->width : 0, s ? s->height : 0,
 			    s ? s->pixelFormat : 0, s ? s->bytesPerRow : 0, sx, sy, sw,
@@ -705,10 +717,13 @@ AppleCLCD::present(const uint8_t *rec)
 			uint32_t total_samples = 0;
 			uint32_t max_rgb = 0;
 			uint32_t sample_rgb = 0;
-			uint32_t step_check_y = sh > 64 ? (uint32_t)(sh / 64) : 1u;
+			uint32_t step_check_y = g_xzs_gui_presented ?
+			    (sh > 16 ? (uint32_t)(sh / 16) : 1u) :
+			    (sh > 64 ? (uint32_t)(sh / 64) : 1u);
+			int32_t step_check_x = g_xzs_gui_presented ? 32 : 8;
 			for (int32_t cy = sy; cy < sy + sh; cy += (int32_t)step_check_y) {
 				const uint32_t *crow = (const uint32_t *)(src + s->offset + (uint64_t)cy * s->bytesPerRow);
-				for (int32_t cx = sx; cx < sx + sw; cx += 8) {
+				for (int32_t cx = sx; cx < sx + sw; cx += step_check_x) {
 					uint32_t rgb = crow[cx] & 0x00ffffffu;
 					total_samples++;
 					if (rgb != 0) {
@@ -764,7 +779,7 @@ AppleCLCD::present(const uint8_t *rec)
 					IOLog("SWEET FB: first visible SpringBoard GUI frame presented (swap %u surface %u %ux%u -> %ux%u non_black=%u max_rgb=0x%02x sample=0x%06x), switching LCD to iOS GUI\n",
 					    get32(rec, 0x50), s->id, s->width, s->height, fWidth, fHeight,
 					    non_black_samples, max_rgb, sample_rgb);
-				} else if (sweet_fb_swaps_logged <= 64) {
+				} else if (sweet_fb_swaps_logged <= 8) {
 					IOLog("SWEET FB: swap %u presented surface %u (non_black=%u max_rgb=0x%02x sample=0x%06x)\n",
 					    get32(rec, 0x50), s->id, non_black_samples, max_rgb, sample_rgb);
 				}
@@ -816,7 +831,7 @@ AppleCLCD::present(const uint8_t *rec)
 	}
 	if (any_drawn) {
 		xzs_fb_present_kick();
-		if (sweet_fb_swaps_logged <= 64) {
+		if (sweet_fb_swaps_logged <= 8) {
 			uint32_t center_px = *(volatile uint32_t *)(fPixels + (uint64_t)(fHeight / 2) * fRowBytes + (fWidth / 2) * 4);
 			IOLog("SWEET FB: swap %u kicked MDP5 (kicks=%u center_px=0x%08x)\n",
 			    get32(rec, 0x50), xzs_fb_kick_count(), center_px);
@@ -960,17 +975,22 @@ IOMobileFramebufferUserClient::externalMethod(uint32_t selector, IOExternalMetho
 			bool off = args->scalarInput[0] == 0;
 			int allow_off = 0;
 			PE_parse_boot_argn("sweetfb_allow_off", &allow_off, sizeof(allow_off));
-			if (off && !allow_off) {
-				IOLog("SWEET FB: ignoring display off request (keeping LCD active)\n");
+			if (off && !allow_off && !g_xzs_power_key_used) {
+				IOLog("SWEET FB: ignoring idle display off request (keeping LCD active)\n");
 				break;
 			}
 			IOLockLock(fFB->fLock);
 			if (off != fFB->fPowerOff) {
 				fFB->fPowerOff = off;
 				fFB->fFadeStep = 0;
-				fFB->fDirty = true;     /* on: redraw the latest frame */
+				if (!off) {
+					fFB->fDirty = true;
+					fFB->fPresentReady = true;
+					IOLockWakeup(fFB->fLock, &fFB->fPresentReady, true);
+				}
 			}
 			IOLockUnlock(fFB->fLock);
+			xzs_fb_set_backlight(!off);
 			IOLog("SWEET FB: display %s\n", off ? "off" : "on");
 		}
 		break;

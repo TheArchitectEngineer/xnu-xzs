@@ -1163,13 +1163,26 @@ xzs_display_bringup_auto(void)
 	}
 }
 
+extern vm_offset_t ml_io_map(vm_offset_t phys_addr, vm_size_t size);
+uintptr_t g_xzs_mdss_virt_base = 0;
+uintptr_t xzs_fb_kernel_va(void);
+
 uintptr_t
 xzs_fb_kernel_va(void)
 {
+	if (g_xzs_mdss_virt_base == 0) {
+		g_xzs_mdss_virt_base = (uintptr_t)ml_io_map(0x00900000ULL, 0x00100000ULL);
+	}
 	if (g_m8_fb_va == 0) {
 		g_m8_fb_va = (uintptr_t)ml_io_map_unmappable(g_m8_fb_pa, g_m8_fb_size, 0x6u);
 	}
 	return g_m8_fb_va;
+}
+
+void
+xzs_fb_set_backlight(bool on)
+{
+	(void)xzs_wled_set_brightness(on ? 2048u : 0u);
 }
 
 uint32_t
