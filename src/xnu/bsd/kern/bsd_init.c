@@ -1372,6 +1372,142 @@ bsd_init(void)
 }
 
 #if CONFIG_XZS_BRINGUP || defined(ARM64_BOARD_CONFIG_SWEET)
+#include <sys/kpi_mbuf.h>
+#include <sys/kpi_socket.h>
+#include <sys/sockio.h>
+#include <net/if.h>
+#include <net/if_types.h>
+#include <net/ethernet.h>
+#include <net/if_ether.h>
+#include <net/ether_if_module.h>
+#include <net/kpi_interface.h>
+#include <net/kpi_protocol.h>
+#include <net/if_media.h>
+#include <net/dlil.h>
+#include <sys/kern_event.h>
+
+static ifnet_t s_xzs_ue0_ifp = NULL;
+static const uint8_t s_xzs_phone_mac[ETHER_ADDR_LEN] = { 0x02, 0x00, 0x5e, 0x77, 0xee, 0x02 };
+
+static errno_t
+xzs_ue0_output(ifnet_t ifp, mbuf_t m)
+{
+	ifnet_stat_increment_out(ifp, 1, mbuf_pkthdr_len(m), 0);
+	mbuf_freem(m);
+	return 0;
+}
+
+static errno_t
+xzs_ue0_ioctl(ifnet_t ifp, unsigned long cmd, void *data)
+{
+	switch (cmd) {
+	case SIOCGIFMEDIA32:
+	case SIOCGIFMEDIA64: {
+		struct ifmediareq *ifmr = (struct ifmediareq *)data;
+		user_addr_t list = (cmd == SIOCGIFMEDIA64) ?
+		    ((struct ifmediareq64 *)ifmr)->ifmu_ulist :
+		    CAST_USER_ADDR_T(((struct ifmediareq32 *)ifmr)->ifmu_ulist);
+		int media = IFM_ETHER | IFM_AUTO;
+		ifmr->ifm_current = media;
+		ifmr->ifm_active = IFM_ETHER | IFM_1000_T | IFM_FDX;
+		ifmr->ifm_mask = 0;
+		ifmr->ifm_status = IFM_AVALID | IFM_ACTIVE;
+		if (list != USER_ADDR_NULL && ifmr->ifm_count > 0) {
+			ifmr->ifm_count = 1;
+			return copyout(&media, list, sizeof(media));
+		}
+		ifmr->ifm_count = 1;
+		return 0;
+	}
+	case SIOCSIFADDR:
+	case SIOCAIFADDR:
+		ifnet_set_flags(ifp, IFF_UP, IFF_UP);
+		return 0;
+	case SIOCSIFFLAGS:
+	case SIOCADDMULTI:
+	case SIOCDELMULTI:
+		return 0;
+	default:
+		return EOPNOTSUPP;
+	}
+}
+
+static void
+xzs_ue0_detach(ifnet_t ifp __unused)
+{
+}
+
+static void
+xzs_ue0_if_create(void)
+{
+	struct ifnet_init_eparams init;
+
+	bzero(&init, sizeof(init));
+	init.ver = IFNET_INIT_CURRENT_VERSION;
+	init.len = sizeof(init);
+	init.flags = IFNET_INIT_LEGACY;
+	init.uniqueid = "xzs-usb-ecm";
+	init.uniqueid_len = sizeof("xzs-usb-ecm") - 1;
+	init.name = "ue";
+	init.unit = 0;
+	init.family = IFNET_FAMILY_ETHERNET;
+	init.type = IFT_ETHER;
+	init.output = xzs_ue0_output;
+	init.demux = ether_demux;
+	init.add_proto = ether_add_proto;
+	init.del_proto = ether_del_proto;
+	init.check_multi = ether_check_multi;
+	init.framer_extended = ether_frameout_extended;
+	init.ioctl = xzs_ue0_ioctl;
+	init.detach = xzs_ue0_detach;
+	init.broadcast_addr = etherbroadcastaddr;
+	init.broadcast_len = ETHER_ADDR_LEN;
+	if (ifnet_allocate_extended(&init, &s_xzs_ue0_ifp) != 0) {
+		printf("XZS NET: ifnet_allocate failed\n");
+		s_xzs_ue0_ifp = NULL;
+		return;
+	}
+	ifnet_set_addrlen(s_xzs_ue0_ifp, ETHER_ADDR_LEN);
+	ifnet_set_hdrlen(s_xzs_ue0_ifp, sizeof(struct ether_header));
+	ifnet_set_mtu(s_xzs_ue0_ifp, ETHERMTU);
+	ifnet_set_baudrate(s_xzs_ue0_ifp, 480000000);
+	ifnet_set_flags(s_xzs_ue0_ifp, IFF_BROADCAST | IFF_SIMPLEX | IFF_MULTICAST, 0xffff);
+	if (ifnet_attach(s_xzs_ue0_ifp, NULL) != 0) {
+		printf("XZS NET: ifnet_attach failed\n");
+		s_xzs_ue0_ifp = NULL;
+		return;
+	}
+	ifnet_set_lladdr(s_xzs_ue0_ifp, s_xzs_phone_mac, ETHER_ADDR_LEN);
+
+	errno_t err = proto_plumb(PF_INET, s_xzs_ue0_ifp);
+	socket_t so = NULL;
+	if (err == 0) {
+		err = sock_socket(PF_INET, SOCK_DGRAM, 0, NULL, NULL, &so);
+	}
+	if (err == 0) {
+		struct ifaliasreq ifra;
+		bzero(&ifra, sizeof(ifra));
+		snprintf(ifra.ifra_name, sizeof(ifra.ifra_name), "ue0");
+		struct sockaddr_in *a = (struct sockaddr_in *)&ifra.ifra_addr;
+		a->sin_len = sizeof(*a);
+		a->sin_family = AF_INET;
+		a->sin_addr.s_addr = htonl(0xc0a80702); /* 192.168.7.2 */
+		a = (struct sockaddr_in *)&ifra.ifra_mask;
+		a->sin_len = sizeof(*a);
+		a->sin_family = AF_INET;
+		a->sin_addr.s_addr = htonl(0xffffff00);
+		a = (struct sockaddr_in *)&ifra.ifra_broadaddr;
+		a->sin_len = sizeof(*a);
+		a->sin_family = AF_INET;
+		a->sin_addr.s_addr = htonl(0xc0a807ff);
+		err = sock_ioctl(so, SIOCAIFADDR, &ifra);
+		sock_close(so);
+	}
+	ifnet_set_flags(s_xzs_ue0_ifp, IFF_UP | IFF_RUNNING, IFF_UP | IFF_RUNNING);
+	dlil_post_msg(s_xzs_ue0_ifp, KEV_DL_SUBCLASS, KEV_DL_LINK_ON, NULL, 0, FALSE);
+	printf("XZS NET: ue0 192.168.7.2/24 %s (err %d)\n", err ? "NOT configured" : "up", err);
+}
+
 extern void sweet_sample_task(const char *name, int pid, task_t task);
 volatile uint32_t g_xzs_sample_requested = 0;
 static char sweet_sample_names[128];
@@ -1440,6 +1576,7 @@ void
 sweet_sample_start(void)
 {
 	thread_t thread;
+	xzs_ue0_if_create();
 	if (kernel_thread_start(sweet_sample_thread, NULL, &thread) == KERN_SUCCESS) {
 		thread_deallocate(thread);
 	}

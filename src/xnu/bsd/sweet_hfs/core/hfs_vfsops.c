@@ -4016,6 +4016,7 @@ hfs_vfs_getattr(struct mount *mp, struct vfs_attr *fsap, __unused vfs_context_t 
 							   ATTR_VOL_SIZE			| \
 							   ATTR_VOL_SPACEFREE		| \
 							   ATTR_VOL_SPACEAVAIL		| \
+							   ATTR_VOL_SPACEUSED		| \
 							   ATTR_VOL_MINALLOCATION	| \
 							   ATTR_VOL_ALLOCATIONCLUMP	| \
 							   ATTR_VOL_IOBLOCKSIZE		| \

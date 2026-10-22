@@ -369,7 +369,17 @@ OSDefineMetaClassAndStructors(SweetHIDTouch, IOHIDEventService);
 
 static SweetHIDButtons *gSweetButtons;
 static SweetHIDTouch *gSweetTouch;
-extern "C" bool g_xzs_gui_presented;
+extern "C" {
+extern bool g_xzs_gui_presented;
+extern uint32_t xzs_fb_py_to_ly(uint32_t py);
+extern int xzs_spmi_read8(uint8_t sid, uint16_t addr, uint8_t *val);
+extern vm_offset_t ml_io_map(vm_offset_t phys_addr, vm_size_t size);
+void sweet_hid_key(int key, int down);
+void sweet_hid_touch(int finger, int down, int x, int y);
+}
+
+static void xzs_keys_start(void);
+static void xzs_touch_start(void);
 
 bool
 SweetHIDButtons::start(IOService *provider)
@@ -377,17 +387,16 @@ SweetHIDButtons::start(IOService *provider)
 	if (!IOHIDEventService::start(provider)) {
 		return false;
 	}
-	fTestSecs = 8;
+	fTestSecs = 0;
 	PE_parse_boot_argn("sweethidtest", &fTestSecs, sizeof(fTestSecs));
-	if (fTestSecs) {
-		fTest = IOTimerEventSource::timerEventSource(this, &SweetHIDButtons::testFired);
-		if (fTest && _hidWorkLoop->addEventSource(fTest) == kIOReturnSuccess) {
-			fTest->setTimeoutMS(2000);
-		}
+	fTest = IOTimerEventSource::timerEventSource(this, &SweetHIDButtons::testFired);
+	if (fTest && _hidWorkLoop->addEventSource(fTest) == kIOReturnSuccess) {
+		fTest->setTimeoutMS(2000);
 	}
 	gSweetButtons = this;
 	registerService();
-	IOLog("SWEET HID: buttons registered (test every %u s)\n", fTestSecs);
+	xzs_keys_start();
+	IOLog("SWEET HID: buttons registered (auto-unlock enabled, periodic test=%u s)\n", fTestSecs);
 	return true;
 }
 
@@ -417,21 +426,27 @@ SweetHIDButtons::testFired(OSObject *owner, IOTimerEventSource *sender)
 	/*
 	 * Once SpringBoard has presented its first frame on the LCD:
 	 * - On steps 2..6 (and 10..14), perform a bottom-edge swipe-up gesture
-	 *   (y=1910 -> 1500 -> 1000 -> 500 -> release) to unlock CoverSheet to the Home Screen.
-	 * - Otherwise, press/release Home (Menu) every fTestSecs seconds to keep
-	 *   SpringBoard's 30-second auto-lock/dim timer continuously reset.
+	 *   (y=1910 -> 1550 -> 1150 -> 700 -> release) to unlock CoverSheet to the Home Screen.
+	 * - After step 14, stop synthetic input unless boot-arg sweethidtest=N was explicitly set.
 	 */
 	UInt32 step = self->fTestCount++;
-	if ((step >= 2 && step <= 6) || (step >= 10 && step <= 14)) {
-		UInt32 sub = (step >= 10) ? (step - 10) : (step - 2);
-		static const int swipe_y[5] = { 1910, 1550, 1150, 700, 700 };
-		if (gSweetTouch) {
-			gSweetTouch->touch(0, sub < 4, 540, swipe_y[sub]);
+	if (step < 15) {
+		if ((step >= 2 && step <= 6) || (step >= 10 && step <= 14)) {
+			UInt32 sub = (step >= 10) ? (step - 10) : (step - 2);
+			static const int swipe_y[5] = { 1910, 1550, 1150, 700, 700 };
+			if (gSweetTouch) {
+				gSweetTouch->touch(0, sub < 4, 540, swipe_y[sub]);
+			}
+			sender->setTimeoutMS(sub < 4 ? 60 : 1500);
+			return;
 		}
-		sender->setTimeoutMS(sub < 4 ? 60 : self->fTestSecs * 1000);
+		sender->setTimeoutMS(1500);
 		return;
 	}
 
+	if (self->fTestSecs == 0) {
+		return;
+	}
 	bool press = (step & 1) == 0;
 	self->key(kHIDUsage_Csmr_Menu, press);
 	sender->setTimeoutMS(press ? 100 : self->fTestSecs * 1000);
@@ -450,6 +465,7 @@ SweetHIDTouch::start(IOService *provider)
 	setProperty("SurfaceHeight", (unsigned long long)(115 << 16), 32);
 	gSweetTouch = this;
 	registerService();
+	xzs_touch_start();
 	IOLog("SWEET HID: touch registered\n");
 	return true;
 }
@@ -469,8 +485,9 @@ SweetHIDTouch::touch(int finger, bool down, int x, int y)
 
 	IOLockLock(fLock);
 	bool was = fDown[finger];
+	uint32_t ly = xzs_fb_py_to_ly((uint32_t)y);
 	IOFixed nx = (IOFixed)(((int64_t)x << 16) / 1080);
-	IOFixed ny = (IOFixed)(((int64_t)y << 16) / 1920);
+	IOFixed ny = (IOFixed)(((int64_t)ly << 16) / 2436);
 	bool moved = down && (nx != fX[finger] || ny != fY[finger]);
 	if (was == down && !moved) {
 		IOLockUnlock(fLock);
@@ -561,5 +578,473 @@ sweet_hid_touch(int finger, int down, int x, int y)
 {
 	if (gSweetTouch) {
 		gSweetTouch->touch(finger, down != 0, x, y);
+	}
+}
+
+/* ============================================================================
+ * Sony Xperia XZs (MSM8996 / keyaki) Hardware Input Drivers:
+ *   1. Physical Keys via PM8994 SPMI (SID 0):
+ *      - Power (PON_RT_STS 0x0810 bit 0)         -> key 0 (Power)
+ *      - Volume Up (GPIO3_RT_STS 0xc210 bit 0)   -> key 1 (Volume Increment)
+ *      - Volume Down (GPIO2_RT_STS 0xc110 bit 0) -> key 2 (Volume Decrement)
+ *      - Camera Key (GPIO4_RT_STS 0xc310 bit 0)  -> key 3 (Home / Menu)
+ *   2. Synaptics ClearPad RMI4 In-Cell Touchscreen on BLSP2 QUP6 I2C (0x2c):
+ *      - GPIO87 (SDA), GPIO88 (SCL), GPIO125 (IRQ active-low)
+ *      - Strictly preserves In-Cell DDIC/Touch state (never touches GPIO89)
+ * ============================================================================
+ */
+
+static bool s_xzs_keys_started = false;
+static bool s_xzs_touch_started = false;
+
+static void
+xzs_keys_thread(void *arg __unused, wait_result_t wr __unused)
+{
+	while (!g_xzs_gui_presented) {
+		IOSleep(500);
+	}
+	IOSleep(500);
+
+	/* Capture resting baseline of each PM8994 button register */
+	static const uint16_t k_regs[4] = { 0x0810u, 0xc210u, 0xc110u, 0xc310u };
+	uint8_t base_bit[4] = { 0, 1, 1, 1 };
+	bool valid[4] = { false, false, false, false };
+	int state[4] = { 0, 0, 0, 0 };
+
+	for (int k = 0; k < 4; k++) {
+		uint8_t v = 0;
+		if (xzs_spmi_read8(0, k_regs[k], &v) == 0) {
+			base_bit[k] = v & 1u;
+			valid[k] = true;
+		}
+	}
+	IOLog("XZS KEYS: PM8994 baseline pon=%u/%d vol_up=%u/%d vol_dn=%u/%d cam_home=%u/%d\n",
+	    base_bit[0], valid[0], base_bit[1], valid[1], base_bit[2], valid[2], base_bit[3], valid[3]);
+
+	for (;;) {
+		for (int k = 0; k < 4; k++) {
+			if (!valid[k]) {
+				continue;
+			}
+			uint8_t v = 0;
+			if (xzs_spmi_read8(0, k_regs[k], &v) == 0) {
+				int down = ((v & 1u) != base_bit[k]) ? 1 : 0;
+				if (down != state[k]) {
+					state[k] = down;
+					IOLog("XZS KEYS: key %d %s (reg 0x%04x=0x%02x)\n",
+					    k, down ? "down" : "up", k_regs[k], v);
+					sweet_hid_key(k, down);
+				}
+			}
+		}
+		IOSleep(25);
+	}
+}
+
+static void
+xzs_keys_start(void)
+{
+	int enabled = 1;
+	if (s_xzs_keys_started) {
+		return;
+	}
+	s_xzs_keys_started = true;
+	(void)PE_parse_boot_argn("sweetkeys", &enabled, sizeof(enabled));
+	if (!enabled) {
+		IOLog("XZS KEYS: disabled by boot-arg\n");
+		return;
+	}
+	thread_t th = THREAD_NULL;
+	if (kernel_thread_start(xzs_keys_thread, NULL, &th) == KERN_SUCCESS) {
+		thread_deallocate(th);
+	}
+}
+
+/* Open-drain bit-banged I2C on MSM8996 TLMM GPIO87 (SDA) & GPIO88 (SCL) */
+#define XZS_TLMM_PA         0x01010000ULL
+#define XZS_TLMM_SIZE       0x00100000ULL
+#define XZS_GPIO_CFG(n)     ((uint32_t)(n) * 0x1000u)
+#define XZS_GPIO_IN_OUT(n)  ((uint32_t)(n) * 0x1000u + 4u)
+#define XZS_I2C_SDA_PIN     87u
+#define XZS_I2C_SCL_PIN     88u
+#define XZS_TOUCH_IRQ_PIN   125u
+
+static vm_offset_t s_tlmm_base = 0;
+
+static inline uint32_t
+xzs_tlmm_rd(uint32_t off)
+{
+	uint32_t v = *(volatile uint32_t *)(s_tlmm_base + off);
+	__asm__ volatile("dmb oshld" ::: "memory");
+	return v;
+}
+
+static inline void
+xzs_tlmm_wr(uint32_t off, uint32_t v)
+{
+	__asm__ volatile("dmb oshst" ::: "memory");
+	*(volatile uint32_t *)(s_tlmm_base + off) = v;
+	__asm__ volatile("dsb osh" ::: "memory");
+}
+
+/* CFG: FUNC_SEL=0 (GPIO), GPIO_PULL=3 (Pull-Up), DRV=2 (6mA); OE=bit 9 */
+#define XZS_I2C_PIN_HI_CFG  0x0083u
+#define XZS_I2C_PIN_LO_CFG  0x0283u
+
+static inline void
+xzs_sda_hi(void)
+{
+	xzs_tlmm_wr(XZS_GPIO_CFG(XZS_I2C_SDA_PIN), XZS_I2C_PIN_HI_CFG);
+}
+
+static inline void
+xzs_sda_lo(void)
+{
+	xzs_tlmm_wr(XZS_GPIO_IN_OUT(XZS_I2C_SDA_PIN), 0u);
+	xzs_tlmm_wr(XZS_GPIO_CFG(XZS_I2C_SDA_PIN), XZS_I2C_PIN_LO_CFG);
+}
+
+static inline uint32_t
+xzs_sda_in(void)
+{
+	return xzs_tlmm_rd(XZS_GPIO_IN_OUT(XZS_I2C_SDA_PIN)) & 1u;
+}
+
+static inline void
+xzs_scl_hi(void)
+{
+	xzs_tlmm_wr(XZS_GPIO_CFG(XZS_I2C_SCL_PIN), XZS_I2C_PIN_HI_CFG);
+	for (unsigned i = 0; i < 200; i++) {
+		if (xzs_tlmm_rd(XZS_GPIO_IN_OUT(XZS_I2C_SCL_PIN)) & 1u) {
+			break;
+		}
+		IODelay(1);
+	}
+}
+
+static inline void
+xzs_scl_lo(void)
+{
+	xzs_tlmm_wr(XZS_GPIO_IN_OUT(XZS_I2C_SCL_PIN), 0u);
+	xzs_tlmm_wr(XZS_GPIO_CFG(XZS_I2C_SCL_PIN), XZS_I2C_PIN_LO_CFG);
+}
+
+static void
+xzs_i2c_start_cond(void)
+{
+	xzs_sda_hi();
+	xzs_scl_hi();
+	IODelay(2);
+	xzs_sda_lo();
+	IODelay(2);
+	xzs_scl_lo();
+	IODelay(2);
+}
+
+static void
+xzs_i2c_stop_cond(void)
+{
+	xzs_sda_lo();
+	IODelay(2);
+	xzs_scl_hi();
+	IODelay(2);
+	xzs_sda_hi();
+	IODelay(2);
+}
+
+static bool
+xzs_i2c_tx_byte(uint8_t b)
+{
+	for (int bit = 7; bit >= 0; bit--) {
+		if ((b >> bit) & 1u) {
+			xzs_sda_hi();
+		} else {
+			xzs_sda_lo();
+		}
+		IODelay(1);
+		xzs_scl_hi();
+		IODelay(2);
+		xzs_scl_lo();
+		IODelay(1);
+	}
+	xzs_sda_hi();
+	IODelay(1);
+	xzs_scl_hi();
+	IODelay(2);
+	bool ack = (xzs_sda_in() == 0u);
+	xzs_scl_lo();
+	IODelay(1);
+	return ack;
+}
+
+static uint8_t
+xzs_i2c_rx_byte(bool ack)
+{
+	uint8_t b = 0;
+	xzs_sda_hi();
+	for (int bit = 7; bit >= 0; bit--) {
+		IODelay(1);
+		xzs_scl_hi();
+		IODelay(2);
+		if (xzs_sda_in()) {
+			b |= (uint8_t)(1u << bit);
+		}
+		xzs_scl_lo();
+		IODelay(1);
+	}
+	if (ack) {
+		xzs_sda_lo();
+	} else {
+		xzs_sda_hi();
+	}
+	IODelay(1);
+	xzs_scl_hi();
+	IODelay(2);
+	xzs_scl_lo();
+	xzs_sda_hi();
+	IODelay(1);
+	return b;
+}
+
+static bool
+xzs_rmi4_write(uint8_t slave, uint8_t reg, const uint8_t *buf, uint32_t len)
+{
+	xzs_i2c_start_cond();
+	if (!xzs_i2c_tx_byte((uint8_t)(slave << 1)) || !xzs_i2c_tx_byte(reg)) {
+		xzs_i2c_stop_cond();
+		return false;
+	}
+	for (uint32_t i = 0; i < len; i++) {
+		if (!xzs_i2c_tx_byte(buf[i])) {
+			xzs_i2c_stop_cond();
+			return false;
+		}
+	}
+	xzs_i2c_stop_cond();
+	return true;
+}
+
+static bool
+xzs_rmi4_read(uint8_t slave, uint8_t reg, uint8_t *buf, uint32_t len)
+{
+	xzs_i2c_start_cond();
+	if (!xzs_i2c_tx_byte((uint8_t)(slave << 1)) || !xzs_i2c_tx_byte(reg)) {
+		xzs_i2c_stop_cond();
+		return false;
+	}
+	xzs_i2c_start_cond();
+	if (!xzs_i2c_tx_byte((uint8_t)((slave << 1) | 1u))) {
+		xzs_i2c_stop_cond();
+		return false;
+	}
+	for (uint32_t i = 0; i < len; i++) {
+		buf[i] = xzs_i2c_rx_byte(i + 1u < len);
+	}
+	xzs_i2c_stop_cond();
+	return true;
+}
+
+static void
+xzs_touch_thread(void *arg __unused, wait_result_t wr __unused)
+{
+	while (!g_xzs_gui_presented) {
+		IOSleep(500);
+	}
+	IOSleep(500);
+
+	s_tlmm_base = ml_io_map(XZS_TLMM_PA, XZS_TLMM_SIZE);
+	if (s_tlmm_base == 0) {
+		IOLog("XZS TOUCH: failed to map TLMM\n");
+		return;
+	}
+
+	uint32_t orig_sda_cfg = xzs_tlmm_rd(XZS_GPIO_CFG(XZS_I2C_SDA_PIN));
+	uint32_t orig_scl_cfg = xzs_tlmm_rd(XZS_GPIO_CFG(XZS_I2C_SCL_PIN));
+	uint32_t orig_irq_cfg = xzs_tlmm_rd(XZS_GPIO_CFG(XZS_TOUCH_IRQ_PIN));
+
+	/* Configure GPIO125 (IRQ) as input with pull-up, and GPIO87/88 for open-drain I2C */
+	xzs_tlmm_wr(XZS_GPIO_CFG(XZS_TOUCH_IRQ_PIN), 0x0003u);
+	xzs_tlmm_wr(XZS_GPIO_IN_OUT(XZS_I2C_SDA_PIN), 0u);
+	xzs_tlmm_wr(XZS_GPIO_IN_OUT(XZS_I2C_SCL_PIN), 0u);
+	xzs_sda_hi();
+	xzs_scl_hi();
+	IODelay(50);
+
+	static const uint8_t k_addrs[3] = { 0x2cu, 0x20u, 0x70u };
+	uint8_t slave = 0;
+	for (unsigned a = 0; a < 3; a++) {
+		uint8_t zero = 0x00u;
+		if (xzs_rmi4_write(k_addrs[a], 0xffu, &zero, 1)) {
+			slave = k_addrs[a];
+			break;
+		}
+	}
+
+	if (slave == 0) {
+		IOLog("XZS TOUCH: no Synaptics RMI4 ACK on GPIO87/88 (orig_cfg sda=0x%x scl=0x%x irq=0x%x in=%u)\n",
+		    orig_sda_cfg, orig_scl_cfg, orig_irq_cfg,
+		    xzs_tlmm_rd(XZS_GPIO_IN_OUT(XZS_TOUCH_IRQ_PIN)) & 1u);
+		return;
+	}
+
+	uint8_t f01_ctrl = 0, f01_data = 0;
+	uint8_t f11_data = 0, f12_data = 0, f12_query = 0;
+	uint8_t f12_page = 0, f11_page = 0;
+
+	for (uint8_t page = 0; page < 2; page++) {
+		if (!xzs_rmi4_write(slave, 0xffu, &page, 1)) {
+			continue;
+		}
+		for (uint32_t addr = 0xe9u; addr >= 0xbfu; addr -= 6u) {
+			uint8_t pdt[6] = { 0 };
+			if (!xzs_rmi4_read(slave, (uint8_t)addr, pdt, 6)) {
+				break;
+			}
+			uint8_t fn = pdt[5];
+			if (fn == 0x00u || fn == 0xffu) {
+				break;
+			}
+			IOLog("XZS TOUCH: RMI4 addr=0x%02x page=%u F%02x q=0x%02x c=0x%02x ctrl=0x%02x data=0x%02x irqs=%u\n",
+			    slave, page, fn, pdt[0], pdt[1], pdt[2], pdt[3], pdt[4] & 7u);
+			if (fn == 0x01u && f01_data == 0) {
+				f01_ctrl = pdt[2];
+				f01_data = pdt[3];
+			} else if (fn == 0x12u && f12_data == 0) {
+				f12_query = pdt[0];
+				f12_data = pdt[3];
+				f12_page = page;
+			} else if (fn == 0x11u && f11_data == 0) {
+				f11_data = pdt[3];
+				f11_page = page;
+			}
+		}
+	}
+
+	uint8_t page0 = 0x00u;
+	(void)xzs_rmi4_write(slave, 0xffu, &page0, 1);
+
+	/* Ensure F01 is awake (SleepMode=00 Normal, Configured=1) and interrupts enabled */
+	if (f01_ctrl != 0) {
+		uint8_t ctrl[2] = { 0x80u, 0xffu };
+		if (xzs_rmi4_read(slave, f01_ctrl, ctrl, 2)) {
+			ctrl[0] = (uint8_t)((ctrl[0] & ~0x03u) | 0x80u);
+			ctrl[1] = 0xffu;
+			(void)xzs_rmi4_write(slave, f01_ctrl, ctrl, 2);
+		}
+	}
+	if (f01_data != 0) {
+		uint8_t st[2] = { 0 };
+		(void)xzs_rmi4_read(slave, f01_data, st, 2);
+		IOLog("XZS TOUCH: F01 status=0x%02x irq=0x%02x gpio125=%u\n",
+		    st[0], st[1], xzs_tlmm_rd(XZS_GPIO_IN_OUT(XZS_TOUCH_IRQ_PIN)) & 1u);
+	}
+
+	/* Determine F12 Data1 finger array offset (0 or 1..2 if Data0 exists) */
+	uint8_t f12_data1_off = 0;
+	if (f12_data != 0 && f12_query != 0) {
+		(void)xzs_rmi4_write(slave, 0xffu, &f12_page, 1);
+		uint8_t q5[5] = { 0 };
+		if (xzs_rmi4_read(slave, (uint8_t)(f12_query + 5u), q5, 5)) {
+			IOLog("XZS TOUCH: F12 query5=%02x %02x %02x %02x %02x\n",
+			    q5[0], q5[1], q5[2], q5[3], q5[4]);
+			if ((q5[1] & 0x01u) != 0u) {
+				f12_data1_off = 1u;
+			}
+		}
+		(void)xzs_rmi4_write(slave, 0xffu, &page0, 1);
+	}
+
+	if (f12_data == 0 && f11_data == 0) {
+		IOLog("XZS TOUCH: no F11/F12 2D touch sensor found on 0x%02x\n", slave);
+		return;
+	}
+
+	uint32_t active_mask = 0;
+	int last_x[SWEET_TOUCH_FINGERS] = { 0 };
+	int last_y[SWEET_TOUCH_FINGERS] = { 0 };
+	uint32_t poll_tick = 0;
+
+	for (;;) {
+		uint32_t irq_pin = xzs_tlmm_rd(XZS_GPIO_IN_OUT(XZS_TOUCH_IRQ_PIN)) & 1u;
+		poll_tick++;
+		if (irq_pin == 0u || active_mask != 0u || (poll_tick & 3u) == 0u) {
+			if (f01_data != 0) {
+				uint8_t st[2] = { 0 };
+				(void)xzs_rmi4_read(slave, f01_data, st, 2);
+			}
+			uint32_t next_mask = 0;
+			if (f12_data != 0) {
+				if (f12_page != 0) {
+					(void)xzs_rmi4_write(slave, 0xffu, &f12_page, 1);
+				}
+				uint8_t raw[40] = { 0 }; /* 5 fingers * 8 bytes */
+				if (xzs_rmi4_read(slave, (uint8_t)(f12_data + f12_data1_off), raw, sizeof(raw))) {
+					for (int i = 0; i < 5; i++) {
+						const uint8_t *fo = &raw[i * 8];
+						uint8_t type = fo[0] & 0x0fu;
+						bool down = (type == 1u || type == 2u || type == 6u);
+						int x = (int)(fo[1] | ((uint16_t)fo[2] << 8));
+						int y = (int)(fo[3] | ((uint16_t)fo[4] << 8));
+						if (down && x >= 0 && x <= 1200 && y >= 0 && y <= 2000) {
+							next_mask |= (1u << i);
+							last_x[i] = x;
+							last_y[i] = y;
+							sweet_hid_touch(i, 1, x, y);
+						} else if (active_mask & (1u << i)) {
+							sweet_hid_touch(i, 0, last_x[i], last_y[i]);
+						}
+					}
+					active_mask = next_mask;
+				}
+				if (f12_page != 0) {
+					(void)xzs_rmi4_write(slave, 0xffu, &page0, 1);
+				}
+			} else if (f11_data != 0) {
+				if (f11_page != 0) {
+					(void)xzs_rmi4_write(slave, 0xffu, &f11_page, 1);
+				}
+				uint8_t raw[28] = { 0 }; /* 3 state bytes + 5 fingers * 5 bytes */
+				if (xzs_rmi4_read(slave, f11_data, raw, sizeof(raw))) {
+					for (int i = 0; i < 5; i++) {
+						uint8_t fstate = (raw[i / 4] >> ((i % 4) * 2)) & 0x03u;
+						const uint8_t *fd = &raw[3 + i * 5];
+						int x = ((int)fd[0] << 4) | (fd[2] & 0x0fu);
+						int y = ((int)fd[1] << 4) | ((fd[2] >> 4) & 0x0fu);
+						if (fstate != 0u && x <= 1200 && y <= 2000) {
+							next_mask |= (1u << i);
+							last_x[i] = x;
+							last_y[i] = y;
+							sweet_hid_touch(i, 1, x, y);
+						} else if (active_mask & (1u << i)) {
+							sweet_hid_touch(i, 0, last_x[i], last_y[i]);
+						}
+					}
+					active_mask = next_mask;
+				}
+				if (f11_page != 0) {
+					(void)xzs_rmi4_write(slave, 0xffu, &page0, 1);
+				}
+			}
+		}
+		IOSleep(16);
+	}
+}
+
+static void
+xzs_touch_start(void)
+{
+	int enabled = 1;
+	if (s_xzs_touch_started) {
+		return;
+	}
+	s_xzs_touch_started = true;
+	(void)PE_parse_boot_argn("sweettouch", &enabled, sizeof(enabled));
+	if (!enabled) {
+		IOLog("XZS TOUCH: disabled by boot-arg\n");
+		return;
+	}
+	thread_t th = THREAD_NULL;
+	if (kernel_thread_start(xzs_touch_thread, NULL, &th) == KERN_SUCCESS) {
+		thread_deallocate(th);
 	}
 }

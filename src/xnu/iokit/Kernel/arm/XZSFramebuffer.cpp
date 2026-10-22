@@ -221,6 +221,112 @@ sweet_draw_apple_logo(uintptr_t base, uint32_t width, uint32_t height, uint32_t 
 	__asm__ volatile("dmb oshst" ::: "memory");
 }
 
+#define XZS_WP_W 270u
+#define XZS_WP_H 480u
+static uint32_t s_ios16_wallpaper[XZS_WP_W * XZS_WP_H];
+static bool s_ios16_wallpaper_ready = false;
+
+static void
+xzs_init_ios16_wallpaper(void)
+{
+	if (s_ios16_wallpaper_ready) {
+		return;
+	}
+	for (uint32_t wy = 0; wy < XZS_WP_H; wy++) {
+		int32_t v = (int32_t)((wy * 1000u) / XZS_WP_H); /* 0..1000 */
+		for (uint32_t wx = 0; wx < XZS_WP_W; wx++) {
+			int32_t u = (int32_t)((wx * 1000u) / XZS_WP_W); /* 0..1000 */
+
+			/* Base vertical sky-to-ocean gradient */
+			int32_t r = 16 + (v * 14) / 1000;
+			int32_t g = 54 + (v < 500 ? (v * 130) / 500 : ((1000 - v) * 130) / 500);
+			int32_t b = 142 + (v < 500 ? (v * 82) / 500 : ((1000 - v) * 62) / 500);
+
+			/* Wave 1: iOS 16 upper Cyan-Azure diagonal arch */
+			int32_t du1 = u - 480;
+			int32_t v1 = 300 - (u * 130) / 1000 + (du1 * du1) / 3200;
+			int32_t d1 = v > v1 ? v - v1 : v1 - v;
+			if (d1 < 250) {
+				int32_t w1 = 250 - d1;
+				w1 = (w1 * w1) / 250; /* smooth quadratic bell 0..250 */
+				r = (r * (250 - w1) + 42 * w1) / 250;
+				g = (g * (250 - w1) + 204 * w1) / 250;
+				b = (b * (250 - w1) + 252 * w1) / 250;
+			}
+
+			/* Wave 2: iOS 16 middle Indigo-Violet silk ribbon */
+			int32_t du2 = u - 420;
+			int32_t v2 = 590 - (u * 115) / 1000 - (du2 * du2) / 3600;
+			int32_t d2 = v > v2 ? v - v2 : v2 - v;
+			if (d2 < 260) {
+				int32_t w2 = 260 - d2;
+				w2 = (w2 * w2) / 260;
+				r = (r * (260 - w2) + 104 * w2) / 260;
+				g = (g * (260 - w2) + 68 * w2) / 260;
+				b = (b * (260 - w2) + 232 * w2) / 260;
+			}
+
+			/* Wave 3: iOS 16 lower Violet-Rose-Cyan accent wave */
+			int32_t du3 = u - 600;
+			int32_t v3 = 820 - (u * 90) / 1000 + (du3 * du3) / 4000;
+			int32_t d3 = v > v3 ? v - v3 : v3 - v;
+			if (d3 < 220) {
+				int32_t w3 = 220 - d3;
+				w3 = (w3 * w3) / 220;
+				r = (r * (220 - w3) + 148 * w3) / 220;
+				g = (g * (220 - w3) + 76 * w3) / 220;
+				b = (b * (220 - w3) + 210 * w3) / 220;
+			}
+
+			if (r < 0) r = 0; else if (r > 255) r = 255;
+			if (g < 0) g = 0; else if (g > 255) g = 255;
+			if (b < 0) b = 0; else if (b > 255) b = 255;
+
+			/* Packed in XZS MDP5 byte order (B0=R, B1=G, B2=B, B3=A) */
+			s_ios16_wallpaper[wy * XZS_WP_W + wx] =
+			    0xff000000u | ((uint32_t)b << 16) | ((uint32_t)g << 8) | (uint32_t)r;
+		}
+	}
+	s_ios16_wallpaper_ready = true;
+}
+
+/*
+ * Map physical scanline py (0..1919 on 1080x1920 16:9 panel) to logical scanline
+ * ly (0..2435 on 1125x2436 19.5:9 canvas) while preserving an exact 1:1 square
+ * pixel aspect ratio (step_y = step_x = 25/24) across all active UI content bands
+ * (Status Bar, Lock Screen Clock, all 5 Home Screen App Icon rows, and the Dock)
+ * and compressing only the empty vertical safe-area gaps.
+ */
+extern "C" uint32_t
+xzs_fb_py_to_ly(uint32_t py)
+{
+	if (py >= 1920u) {
+		py = 1919u;
+	}
+	uint32_t ly;
+	if (py < 108u) {
+		/* Band 0: Status bar (108 physical px -> 112 logical px at 1:1 25/24 scale) */
+		ly = (py * 25u) / 24u;
+	} else if (py < 144u) {
+		/* Band 1: Top safe-area gap below status bar (36 physical px -> 150 logical px) */
+		ly = 112u + ((py - 108u) * 150u) / 36u;
+	} else if (py < 1548u) {
+		/* Band 2: Main UI content — Lock Screen Clock & Home Screen Icon Rows 1..5
+		 * (1404 physical px -> 1462 logical px at exact 1:1 25/24 scale) */
+		ly = 262u + ((py - 144u) * 25u) / 24u;
+	} else if (py < 1620u) {
+		/* Band 3: Empty margin above Dock (72 physical px -> 388 logical px) */
+		ly = 1724u + ((py - 1548u) * 388u) / 72u;
+	} else {
+		/* Band 4: Bottom Dock & Home Bar (300 physical px -> 312 logical px at 1:1 25/24 scale) */
+		ly = 2112u + ((py - 1620u) * 25u) / 24u;
+	}
+	if (ly >= SWEET_FB_LOGICAL_H) {
+		ly = SWEET_FB_LOGICAL_H - 1u;
+	}
+	return ly;
+}
+
 bool
 AppleCLCD::start(IOService *provider)
 {
@@ -256,6 +362,7 @@ AppleCLCD::start(IOService *provider)
 	}
 	fOffX = (int32_t)(fLogicalW - fWidth) / 2;
 	fOffY = (int32_t)(fLogicalH - fHeight) / 2;
+	xzs_init_ios16_wallpaper();
 	fLock = IOLockAlloc();
 	fClients = OSArray::withCapacity(4);
 	fSurface = sweet_surface_create_physical(fPhys, fWidth, fHeight, fRowBytes, SWEET_FB_FORMAT_BGRA);
@@ -487,6 +594,8 @@ AppleCLCD::present(const uint8_t *rec)
 		}
 		if (src != 0 && bpe == 4) {
 			uint32_t non_black_samples = 0;
+			uint32_t black_samples = 0;
+			uint32_t total_samples = 0;
 			uint32_t max_rgb = 0;
 			uint32_t sample_rgb = 0;
 			uint32_t step_check_y = sh > 64 ? (uint32_t)(sh / 64) : 1u;
@@ -494,6 +603,7 @@ AppleCLCD::present(const uint8_t *rec)
 				const uint32_t *crow = (const uint32_t *)(src + s->offset + (uint64_t)cy * s->bytesPerRow);
 				for (int32_t cx = sx; cx < sx + sw; cx += 8) {
 					uint32_t rgb = crow[cx] & 0x00ffffffu;
+					total_samples++;
 					if (rgb != 0) {
 						non_black_samples++;
 						if (sample_rgb == 0) {
@@ -505,6 +615,8 @@ AppleCLCD::present(const uint8_t *rec)
 						if (c0 > max_rgb) max_rgb = c0;
 						if (c1 > max_rgb) max_rgb = c1;
 						if (c2 > max_rgb) max_rgb = c2;
+					} else {
+						black_samples++;
 					}
 				}
 			}
@@ -551,21 +663,69 @@ AppleCLCD::present(const uint8_t *rec)
 				}
 			}
 
+			bool use_1to1_map = (fWidth == 1080u && fHeight == 1920u &&
+			    fLogicalW == SWEET_FB_LOGICAL_W && fLogicalH == SWEET_FB_LOGICAL_H &&
+			    sy == 0 && sh == (int32_t)SWEET_FB_LOGICAL_H &&
+			    py0 == 0 && py1 == 1920);
+			bool use_wallpaper = s_ios16_wallpaper_ready &&
+			    g_xzs_springboard_surface_ready &&
+			    total_samples > 0 && (black_samples * 3u > total_samples);
+
 			uint32_t step_x = ((uint32_t)sw << 16) / (uint32_t)pw;
 			uint32_t step_y = ((uint32_t)sh << 16) / (uint32_t)ph;
 			uint32_t acc_y = (uint32_t)sy << 16;
+			uint32_t s_w_max = s->width > 0 ? s->width - 1u : 0u;
 			for (int32_t py = py0; py < py1; py++) {
-				uint32_t src_y = acc_y >> 16;
-				acc_y += step_y;
+				uint32_t src_y;
+				if (use_1to1_map) {
+					src_y = xzs_fb_py_to_ly((uint32_t)py);
+				} else {
+					src_y = acc_y >> 16;
+					acc_y += step_y;
+				}
 				if (src_y >= s->height) {
 					src_y = s->height - 1;
 				}
 				const uint32_t *src_row = (const uint32_t *)(src + s->offset + (uint64_t)src_y * s->bytesPerRow);
 				uint32_t *dst_row = (uint32_t *)(fPixels + (uint64_t)py * fRowBytes);
+				const uint32_t *wp_row = use_wallpaper ?
+				    &s_ios16_wallpaper[((uint32_t)py >> 2) * XZS_WP_W] : NULL;
 				uint32_t acc_x = (uint32_t)sx << 16;
 				for (int32_t px = px0; px < px1; px++) {
-					uint32_t p = src_row[acc_x >> 16];
+					uint32_t lx = acc_x >> 16;
+					uint32_t p = src_row[lx];
 					acc_x += step_x;
+					if (wp_row != NULL) {
+						uint32_t b = p & 0xffu;
+						uint32_t g = (p >> 8) & 0xffu;
+						uint32_t r = (p >> 16) & 0xffu;
+						uint32_t max_c = r > g ? (r > b ? r : b) : (g > b ? g : b);
+						if (max_c < 28u) {
+							/* Preserve dark text inside bright white icons (e.g. Calendar) */
+							uint32_t nl = src_row[lx > 14u ? lx - 14u : 0u];
+							uint32_t nr = src_row[lx + 14u <= s_w_max ? lx + 14u : s_w_max];
+							bool inside_white_icon =
+							    ((nl & 0x00c0c0c0u) == 0x00c0c0c0u) &&
+							    ((nr & 0x00c0c0c0u) == 0x00c0c0c0u);
+							if (!inside_white_icon) {
+								uint32_t wp = wp_row[(uint32_t)px >> 2];
+								if (max_c == 0u) {
+									dst_row[px] = wp;
+									continue;
+								}
+								uint32_t wf = max_c * 9u; /* 9..243 */
+								uint32_t ww = 256u - wf;
+								uint32_t wr = wp & 0xffu;
+								uint32_t wg = (wp >> 8) & 0xffu;
+								uint32_t wb = (wp >> 16) & 0xffu;
+								uint32_t or_c = (wr * ww + r * wf) >> 8;
+								uint32_t og_c = (wg * ww + g * wf) >> 8;
+								uint32_t ob_c = (wb * ww + b * wf) >> 8;
+								dst_row[px] = 0xff000000u | (ob_c << 16) | (og_c << 8) | or_c;
+								continue;
+							}
+						}
+					}
 					/* Convert iOS BGRA (B0=B, B1=G, B2=R, B3=A) to XZS MDP5 unpack (B0=R, B1=G, B2=B, B3=A) */
 					dst_row[px] = (p & 0xff00ff00u) | ((p & 0x00ff0000u) >> 16) | ((p & 0x000000ffu) << 16);
 				}

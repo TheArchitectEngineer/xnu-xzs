@@ -418,10 +418,10 @@ bindfs_vfs_getattr(struct mount * mp, struct vfs_attr * vfap, vfs_context_t ctx)
 
 			/* dont' support interfaces that only make sense on a writable file system
 			 * or one with specific vnops implemented */
-			capabilities.capabilities[VOL_CAPABILITIES_INTERFACES] = 0;
+			capabilities.capabilities[VOL_CAPABILITIES_INTERFACES] = VOL_CAP_INT_ATTRLIST;
 
 			capabilities.valid[VOL_CAPABILITIES_INTERFACES] &=
-			    ~(VOL_CAP_INT_SEARCHFS | VOL_CAP_INT_ATTRLIST | VOL_CAP_INT_READDIRATTR | VOL_CAP_INT_EXCHANGEDATA |
+			    ~(VOL_CAP_INT_SEARCHFS | VOL_CAP_INT_READDIRATTR | VOL_CAP_INT_EXCHANGEDATA |
 			    VOL_CAP_INT_COPYFILE | VOL_CAP_INT_ALLOCATE | VOL_CAP_INT_VOL_RENAME | VOL_CAP_INT_ADVLOCK | VOL_CAP_INT_FLOCK);
 		}
 	}
@@ -486,17 +486,22 @@ bindfs_vfs_getattr(struct mount * mp, struct vfs_attr * vfap, vfs_context_t ctx)
 
 	if (VFSATTR_IS_ACTIVE(vfap, f_attributes)) {
 		vol_attributes_attr_t * volattr = &vfap->f_attributes;
+		attrgroup_t bvol = ATTR_VOL_FSTYPE | ATTR_VOL_SIZE | ATTR_VOL_SPACEFREE |
+		    ATTR_VOL_SPACEAVAIL | ATTR_VOL_SPACEUSED | ATTR_VOL_MINALLOCATION |
+		    ATTR_VOL_ALLOCATIONCLUMP | ATTR_VOL_IOBLOCKSIZE | ATTR_VOL_MOUNTPOINT |
+		    ATTR_VOL_NAME | ATTR_VOL_MOUNTFLAGS | ATTR_VOL_MOUNTEDDEVICE |
+		    ATTR_VOL_CAPABILITIES | ATTR_VOL_ATTRIBUTES;
 
-		volattr->validattr.commonattr = 0;
-		volattr->validattr.volattr    = ATTR_VOL_NAME | ATTR_VOL_CAPABILITIES | ATTR_VOL_ATTRIBUTES;
-		volattr->validattr.dirattr    = 0;
-		volattr->validattr.fileattr   = 0;
+		volattr->validattr.commonattr = ATTR_CMN_VALIDMASK;
+		volattr->validattr.volattr    = bvol;
+		volattr->validattr.dirattr    = ATTR_DIR_VALIDMASK;
+		volattr->validattr.fileattr   = ATTR_FILE_VALIDMASK;
 		volattr->validattr.forkattr   = 0;
 
-		volattr->nativeattr.commonattr = 0;
-		volattr->nativeattr.volattr    = ATTR_VOL_NAME | ATTR_VOL_CAPABILITIES | ATTR_VOL_ATTRIBUTES;
-		volattr->nativeattr.dirattr    = 0;
-		volattr->nativeattr.fileattr   = 0;
+		volattr->nativeattr.commonattr = ATTR_CMN_VALIDMASK;
+		volattr->nativeattr.volattr    = bvol;
+		volattr->nativeattr.dirattr    = ATTR_DIR_VALIDMASK;
+		volattr->nativeattr.fileattr   = ATTR_FILE_VALIDMASK;
 		volattr->nativeattr.forkattr   = 0;
 
 		VFSATTR_SET_SUPPORTED(vfap, f_attributes);
