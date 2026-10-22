@@ -214,12 +214,12 @@ uint32_t adt_build_tree_at(uint64_t base_addr) {
     adt_put_u32("clock-frequency", 2150000000U);    /* 2.15 GHz Kryo Gold */
     adt_put_u32("memory-frequency", 1866000000U);   /* 1.866 GHz LPDDR4 */
 
-    /* Child 4: /arm-io -> 5 children (uart, gic, timer, wdt, disp0) */
+    /* Child 4: /arm-io -> 7 children (uart, gic, timer, wdt, disp0, sgx, m2scaler) */
     /* ranges: child_bus_base=0, parent_phys_base=0x01000000, size=0x10000000 (256MB)
      * pe_arm_get_soc_base_phys() returns ranges[1] = 0x01000000 (non-zero).
      */
     uint64_t ranges[] = { 0ULL, 0x01000000ULL, 0x10000000ULL };
-    adt_put_node(3, 5);
+    adt_put_node(3, 7);
     adt_put_str("name", "arm-io");
     adt_put_str("device_type", "arm-io");
     adt_put_u64_array("ranges", ranges, 3);
@@ -270,6 +270,22 @@ uint32_t adt_build_tree_at(uint64_t base_addr) {
     adt_put_str("compatible", "xzs,display");
     adt_put_u32("canvas-width", 1125);
     adt_put_u32("canvas-height", 2436);
+
+    /* Child 4.6: /arm-io/sgx -> 0 children */
+    /* Matches XZSAccelerator (AGXAcceleratorG10P / IOAcceleratorES / Adreno 530) */
+    adt_put_node(5, 0);
+    adt_put_str("name", "sgx");
+    adt_put_str("device_type", "sgx");
+    adt_put_str("compatible", "xzs,gpu");
+    adt_put_u32("gpu-chip-id", 0x05030002U);
+    adt_put_u32("gmem-size", 0x00100000U);
+
+    /* Child 4.7: /arm-io/m2scaler -> 0 children */
+    /* AppleM2ScalerCSCDriver hardware blitter/CSC DeviceTree node */
+    adt_put_node(3, 0);
+    adt_put_str("name", "m2scaler");
+    adt_put_str("device_type", "m2scaler");
+    adt_put_str("compatible", "xzs,m2scaler");
 
     /* Child 5: /buttons -> 0 children */
     static const char button_names[] = "volup\0voldown\0hold";

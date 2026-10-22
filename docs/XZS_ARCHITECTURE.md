@@ -242,6 +242,8 @@ By isolating platform drivers in `XZSPlatform`, the project preserves the abilit
 | **MPM Sleep Timer** | `0x010b3000` | 4 KB | Qualcomm multi-processor sleep timer | `adt.c` |
 | **Qualcomm SDCC1 / SDHCI Controller** | `0x07464900` | 4 KB | SDC1 eMMC 5.1 Host Controller (Samsung BJNB4R) | `xzs_sdhci.c` (Phase D2) |
 | **Qualcomm SDCC1 Core Vendor Spec** | `0x07464A00` | 4 KB | SDCC1 vendor-specific register aperture | `xzs_sdhci.c` (Phase D2) |
+| **Qualcomm Adreno 530 GPU (`KGSL_3D0`)** | `0x00b00000` | 256 KB | Adreno 530 (`A530v2`, `chipid = 0x05030002`) register file | `xzs_gpu.h`, `XZSGPU.cpp` (Phase D13) |
+| **Adreno 530 CP Ringbuffer & Scratch** | `0x90f00000` | 1 MB | 32 KB `CP_RB` ringbuffer (`+0x0000`), RPTR scratch (`+0x8000`) | `xzs_gpu.h`, `XZSGPU.cpp` (Phase D13) |
 
 ### 3.3 Diagnostic Memory & Persistent SRAM
 

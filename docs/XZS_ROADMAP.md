@@ -25,6 +25,7 @@ Progress is strictly gated by physical hardware verification. Speculative percen
 | **Phase D10**| 14 GB HFS+ iOS 16.7.16 RootFS on `/dev/disk0s54`, `/sbin/launchd`, `backboardd` & `SpringBoard` Home Screen | **COMPLETE / SEALED** |
 | **Phase D11**| Synaptics RMI4 125 Hz multi-touch, edge gestures, PON/GPIO keys & WLED sleep/wake | **COMPLETE / SEALED** |
 | **Phase D12**| 60 Hz 4-core 1:1 LUT compositor, non-blocking USB console & stock iOS 16 apps/widgets | **COMPLETE / SEALED** |
+| **Phase D13**| Adreno 530 (`A530v2`) GPU bring-up, `AppleM2ScalerCSCDriver` (`IOSurfaceAccelerator`), `IOSurfaceSharedEvent`, `XZSAccelerator` (`IOAcceleratorES` / Metal bridge) & 64-bit SWAR compositor | **COMPLETE / VERIFIED** |
 
 
 ---
@@ -520,7 +521,24 @@ Progress is strictly gated by physical hardware verification. Speculative percen
 
 ---
 
-### Phase D13 — Darwin / iOS Userland Compatibility
+### Phase D13 — GPU & Graphics Accelerator Stack (Adreno 530 + `IOSurfaceAccelerator` + `IOSurfaceSharedEvent` + `IOAcceleratorES` / Metal Bridge)
+* **Goal**: Bring up the physical Qualcomm Adreno 530 (`A530v2`) GPU on MSM8996, reverse-engineer Apple's `IOSurfaceAccelerator`, `IOSurfaceSharedEvent`, and `IOAccelerator` / Metal user-client ABIs from iOS 16.7.16 (`20H392`), and implement kernel-accelerated surface blitting, color-space conversion, event synchronization, and 64-bit SWAR framebuffer presentation.
+* **Status**: **COMPLETE & VERIFIED (`PAC=0`, branch `xzs-d13-gpu-adreno-metal`)**
+* **Completed Milestones**:
+  - **D13-M1 (Bare-Metal Qualcomm Adreno 530 `A530v2` Driver in `xzs_gpu.h`)**:
+    - Enables `VDD_GFX` (`pmi8994_s2` on SPMI `SID 3 @ 0x1700`), uncollapses `MMCC_GPU_GDSC` (`0x008c4034`) and `MMCC_GPU_GX_GDSC` (`0x008c4024`), enables `MMCC`/`GCC` GFX3D & BIMC clocks, programs `VBIF`, `RBBM`, `UCHE`, and all 25 `a530_hwcg` clock-gating registers, and initializes a 32 KB `CP_RB` Command Processor Ringbuffer at `0x90f00000`.
+  - **D13-M2 (`AppleM2ScalerCSCDriver` / `IOSurfaceAccelerator` Backend in `XZSGPU.cpp`)**:
+    - Implements selectors `0..9` (`TransformSurface`, `CaptureSurface`, `GetHistogram`, `FillSurface`) with 64-bit SWAR 2-pixel-at-a-time blitting, fixed-point crop/scale (`srcX/Y >> 16`, `srcW/H >> 14`), `BGRA <-> RGBA` swap, multi-plane `NV12` (`420v`/`420f`) -> `BGRA` CSC, and `OSAsyncReference64` completion callbacks.
+  - **D13-M3 (`IOSurface` Value Cache, Bulk Attachments & `IOSurfaceSharedEvent` in `XZSSurface.cpp`)**:
+    - Implements `SetYCbCrMatrix` (`sel 5`), `SetValue` (`sel 9`), `CopyValue` (`sel 10`), `RemoveValue` (`sel 11`), `SetBulkAttachments` (`sel 27`), and `IOSurfaceSharedEvent` + `IOSurfaceSharedEventListener` (`sel 36, 37, 38, 39, 40, 41, 45`).
+  - **D13-M4 (`XZSAccelerator` / `IOAcceleratorES` Metal Bridge & 64-Bit SWAR `XZSFramebuffer`)**:
+    - Implements `IOAccelerator -> IOAcceleratorES -> IOGraphicsAccelerator2 -> AGXAcceleratorG10P -> XZSAccelerator` on `/arm-io/sgx` and all 4 user client classes (`Device` type 1, `Shared` type 2, `Context` types 0/3, `CommandQueue` types 4/8) bridged to the Adreno 530 CP Ringbuffer.
+    - Accelerates `AppleCLCD::renderSlice` in `XZSFramebuffer.cpp` with 4 worker threads @ 60 Hz using 64-bit SWAR (`xzs_bgra_to_mdp5_swar2`).
+* **Detailed Architecture Reference**: [`docs/XZS_D13_GPU_ADRENO_METAL_ARCHITECTURE.md`](file:///Users/lechaukha12/Desktop/xnu-xzs/docs/XZS_D13_GPU_ADRENO_METAL_ARCHITECTURE.md).
+
+---
+
+### Phase D14 — Darwin / iOS Userland Compatibility
 * **Goal**: Research and implement missing OS primitives and ABI contracts required to run genuine Darwin/iOS userland binaries.
 * **Target Research Areas**:
   - Mach traps and ARM64 Mach system call table.

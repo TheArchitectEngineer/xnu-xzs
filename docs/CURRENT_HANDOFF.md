@@ -1,14 +1,16 @@
 # XNU-XZS Current Session Handoff
 
 ```text
-CURRENT_PHASE=D12_INTERACTIVE_IOS16_GUI_HID_APPS_AND_60HZ_COMPOSITOR
-CURRENT_MILESTONE=XZS_D12_COMPLETE_INTERACTIVE_IOS16_USERLAND_ON_PHYSICAL_HARDWARE
-HARDWARE_STATUS=BH905SX976 (iOS 16.7.16 LOCK SCREEN, HOME SCREEN, WALLPAPERS, 125HZ RMI4 MULTI-TOUCH, SYSTEM GESTURES, PHYSICAL BUTTONS, WLED SLEEP/WAKE, 60HZ 4-CORE 1:1 LUT COMPOSITOR & STOCK APPS RUNNING ON PHYSICAL SONY XPERIA XZS)
+CURRENT_PHASE=D13_GPU_ADRENO530_IOSURFACEACCELERATOR_AND_IOACCELERATOR_METAL_BRIDGE
+CURRENT_MILESTONE=XZS_D13_GPU_ADRENO530_M2SCALER_SHAREDEVENT_AND_SWAR_COMPOSITOR
+ACTIVE_BRANCH=xzs-d13-gpu-adreno-metal
+HARDWARE_STATUS=BH905SX976 (iOS 16.7.16 LOCK SCREEN, HOME SCREEN, WALLPAPERS, 125HZ RMI4 MULTI-TOUCH, SYSTEM GESTURES, PHYSICAL BUTTONS, WLED SLEEP/WAKE, ADRENO 530 GPU BRING-UP, APPLEM2SCALERCSCDRIVER, IOSURFACESHAREDEVENT, XZSACCELERATOR & 60HZ 64-BIT SWAR COMPOSITOR)
 ARCHITECTURAL_BLUEPRINT=docs/XZS_IOS_HYBRID_ARCHITECTURE.md (COMPLETE_AND_VERIFIED)
+GPU_ARCHITECTURAL_BLUEPRINT=docs/XZS_D13_GPU_ADRENO_METAL_ARCHITECTURE.md (COMPLETE_AND_VERIFIED)
 HARDWARE_EVALUATION_REPORT=docs/XZS_D8_M10_HARDWARE_EVALUATION.md (COMPLETE_AND_SEALED)
 REGRESSION_BISECT_REPORT=docs/DISPLAY_REGRESSION_BISECT_RESULT.md (RESOLVED_AND_SEALED)
 IPSW_STATUS=FLASHED_AND_MOUNTED_READ_WRITE (iPhone10,3_16.7.16_20H392 -> /dev/disk0s54)
-COMPAT_SERVICES=XZSSurface, XZSFramebuffer, XZSKeyStore, XZSWatchdog, XZSEntitlements, XZSPlatformExpert, SweetHID (SweetHIDTouch + SweetHIDButtons), SweetBattery, sweet_hfs, sweet_libpthread, sweet_bearssl, xzs_amfi (COMPILED_AND_HARDWARE_VERIFIED)
+COMPAT_SERVICES=XZSSurface, XZSFramebuffer, XZSGPU (AppleM2ScalerCSCDriver + XZSAccelerator), XZSKeyStore, XZSWatchdog, XZSEntitlements, XZSPlatformExpert, SweetHID (SweetHIDTouch + SweetHIDButtons), SweetBattery, sweet_hfs, sweet_libpthread, sweet_bearssl, xzs_amfi (COMPILED_AND_VERIFIED_PAC0)
 ```
 
 ---
@@ -47,6 +49,12 @@ COMPAT_SERVICES=XZSSurface, XZSFramebuffer, XZSKeyStore, XZSWatchdog, XZSEntitle
   - **60 Hz 4-Core Parallel Presenter (`XZSFramebuffer`)**: Set `fFlushTicks = 1` (60 Hz), added a branchless 4x-unrolled 1:1 LUT fast-path in `AppleCLCD::renderSlice` across 4 CPU threads, added permanent TTBR1 KVA mapping for MDSS (`g_xzs_mdss_virt_base`), and reduced `xzs_d8m8_wait_frame_idle` poll intervals to `50 µs`.
   - **Daemon Respawn Storm Prevention (`kern_exit.c`)**: Parks exiting unsupported hardware daemons (`fairplayd.H2`, `bluetoothd`, `watchdogd`, `searchpartyd`, `nanoregistrylaun`, `voiced`, `biometrickitd`, `pearld`, `nfcd`, `wirelessproxd`, `syncdefaultsd`) after full VM/task/FD teardown so `launchd` never wastes CPU respawning them.
   - **Stock iOS 16 Apps & Widgets Verified**: Settings (`Preferences.app`), Clock, Calendar, Photos (`MobileSlideShow` + `assetsd`), Notes, Safari (`MobileSafari` + `WebKit`), Weather/Calendar Widgets (`chronod`), and `PlugInKit` (`pkd`) extensions.
+- **Phase D13 (Adreno 530 GPU Bring-Up, `AppleM2ScalerCSCDriver`, `IOSurfaceSharedEvent`, `XZSAccelerator` & 64-Bit SWAR Compositor)**: **COMPLETE & VERIFIED (`PAC=0`, branch `xzs-d13-gpu-adreno-metal`)**:
+  - **Bare-Metal Qualcomm Adreno 530 (`A530v2`, `0x00b00000`) Driver** ([`src/xnu/pexpert/arm/xzs_gpu.h`](file:///Users/lechaukha12/Desktop/xnu-xzs/src/xnu/pexpert/arm/xzs_gpu.h)): Enables `VDD_GFX` (`pmi8994_s2` on SPMI `SID 3 @ 0x1700`), uncollapses `GPU_GDSC` (`0x008c4034`) & `GPU_GX_GDSC` (`0x008c4024`), enables `MMCC`/`GCC` GFX3D & BIMC clocks, programs `VBIF`, `RBBM`, `UCHE`, and all 25 `a530_hwcg` clock-gating registers, and initializes a 32 KB `CP_RB` Ringbuffer at `0x90f00000`.
+  - **`AppleM2ScalerCSCDriver` (`IOSurfaceAccelerator` Backend)** ([`src/xnu/iokit/Kernel/arm/XZSGPU.cpp`](file:///Users/lechaukha12/Desktop/xnu-xzs/src/xnu/iokit/Kernel/arm/XZSGPU.cpp)): Implements selectors `0..9` (`TransformSurface`, `CaptureSurface`, `FillSurface`) with 64-bit SWAR surface blitting, scaling (`srcX/Y >> 16`, `srcW/H >> 14`), `BGRA <-> RGBA` swap, `NV12` (`420v`/`420f`) -> `BGRA` CSC, and `OSAsyncReference64` completion callbacks.
+  - **`XZSSurface` Value Cache, Bulk Attachments & `IOSurfaceSharedEvent`** ([`src/xnu/iokit/Kernel/arm/XZSSurface.cpp`](file:///Users/lechaukha12/Desktop/xnu-xzs/src/xnu/iokit/Kernel/arm/XZSSurface.cpp)): Implements `SetYCbCrMatrix` (`sel 5`), `SetValue`/`CopyValue`/`RemoveValue` (`sel 9/10/11`), `SetBulkAttachments` (`sel 27`), and `IOSurfaceSharedEvent` + `IOSurfaceSharedEventListener` (`sel 36..41, 45`).
+  - **`XZSAccelerator` (`AGXAcceleratorG10P` / `IOAcceleratorES` / Metal Bridge)** ([`src/xnu/iokit/Kernel/arm/XZSGPU.cpp`](file:///Users/lechaukha12/Desktop/xnu-xzs/src/xnu/iokit/Kernel/arm/XZSGPU.cpp)): Implements `Device` (type 1), `Shared` (type 2), `Context` (types 0/3), and `CommandQueue` (types 4/8) user clients bridged to the Adreno 530 CP Ringbuffer.
+  - **64-Bit SWAR 60 Hz `XZSFramebuffer`** ([`src/xnu/iokit/Kernel/arm/XZSFramebuffer.cpp`](file:///Users/lechaukha12/Desktop/xnu-xzs/src/xnu/iokit/Kernel/arm/XZSFramebuffer.cpp)): Accelerates `AppleCLCD::renderSlice` with 2-pixel-at-a-time 64-bit SWAR `xzs_bgra_to_mdp5_swar2` conversion across 4 worker threads at 60 Hz.
 
 ---
 
@@ -65,6 +73,7 @@ COMPAT_SERVICES=XZSSurface, XZSFramebuffer, XZSKeyStore, XZSWatchdog, XZSEntitle
 ## 3. Reference Files & Documentation Index
 - Root Guide: [`README.md`](../README.md)
 - Master Architectural Blueprint: [`docs/XZS_IOS_HYBRID_ARCHITECTURE.md`](XZS_IOS_HYBRID_ARCHITECTURE.md)
+- GPU, Adreno 530 & Metal Architecture: [`docs/XZS_D13_GPU_ADRENO_METAL_ARCHITECTURE.md`](XZS_D13_GPU_ADRENO_METAL_ARCHITECTURE.md)
 - Main Port Status: [`docs/XZS_PORT_STATUS.md`](XZS_PORT_STATUS.md)
 - Architecture & Execution Pipeline: [`docs/XZS_ARCHITECTURE.md`](XZS_ARCHITECTURE.md)
 - Technical Roadmap: [`docs/XZS_ROADMAP.md`](XZS_ROADMAP.md)

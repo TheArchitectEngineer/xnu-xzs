@@ -48,6 +48,7 @@ All phases from bare-metal EL1 kernel entry, 4-core Kryo SMP, eMMC 5.1 storage, 
 | **Root Filesystem** | 14 GB Case-Sensitive Journaled HFS+ iOS 16.7.16 RootFS on `userdata` (`/dev/disk0s54`) |
 | **Display Panel** | 5.2" 1080x1920 Sharp/Synaptics in-cell command-mode MIPI DSI LCD (`somc,sharp_synaptics_cmd_9_panel`) |
 | **Display Engine** | Qualcomm MDSS MDP5 v1.7 (`0x00900000`) + 4-lane DSI0 Host (`0x00994000`) + 14nm DSI PHY + PMI8996 LAB/IBB (`±5.6V`) & WLED |
+| **GPU / Accelerator** | Qualcomm Adreno 530 (`A530v2`, `0x00b00000`, `chipid = 0x05030002`, 1 MB GMEM, 32 KB CP Ringbuffer at `0x90f00000`) + `AppleM2ScalerCSCDriver` (`IOSurfaceAccelerator`) + `XZSAccelerator` (`IOAcceleratorES`) |
 | **Touch Controller** | Synaptics ClearPad S3330 / RMI4 F12 over BLSP12 QUP5 I2C (`0x075B7000`, `GPIO 87/88`, `INT GPIO 125`, `RST GPIO 89`) |
 | **Interrupt Controller** | ARM GICv3 Distributor (`0x09BC0000`) + 4 Per-Core Redistributors (`0x09C00000..0x09C60000`) |
 | **Boot Mechanism** | Sony S1 Fastboot (`fastboot boot boot.img`) -> `xzs-bootshim` -> `kernel.development.vmapple` |
@@ -122,8 +123,12 @@ All phases from bare-metal EL1 kernel entry, 4-core Kryo SMP, eMMC 5.1 storage, 
   * Configures MMCC clocks, 14nm DSI0 PLL & PHY, PMI8996 `LAB` (`0xDE00`) & `IBB` (`0xDC00`) `±5.6V` LCD bias rails, `WLED` (`0xD800`) backlight, and Sharp/Synaptics Panel 9 DCS initialization ([`src/xnu/pexpert/arm/xzs_d8m8.h`](file:///Users/lechaukha12/Desktop/xnu-xzs/src/xnu/pexpert/arm/xzs_d8m8.h), [`src/xnu/pexpert/arm/xzs_d8p1.h`](file:///Users/lechaukha12/Desktop/xnu-xzs/src/xnu/pexpert/arm/xzs_d8p1.h), [`src/xnu/pexpert/arm/xzs_d8p2.h`](file:///Users/lechaukha12/Desktop/xnu-xzs/src/xnu/pexpert/arm/xzs_d8p2.h)).
   * Uses a permanent TTBR1 kernel virtual mapping (`g_xzs_mdss_virt_base` in [`src/xnu/pexpert/arm/xzs_diag.c`](file:///Users/lechaukha12/Desktop/xnu-xzs/src/xnu/pexpert/arm/xzs_diag.c)) for zero-overhead MMIO access during 60 Hz frame kicks (`CTL_FLUSH = 0x40022048` + `CTL_START`).
 * **`XZSFramebuffer` (`AppleCLCD` / `IOMobileFramebuffer`) & `XZSSurface` (`IOCoreSurfaceRoot`)**:
-  * Implements wired multi-plane `IOSurface` management ([`src/xnu/iokit/Kernel/arm/XZSSurface.cpp`](file:///Users/lechaukha12/Desktop/xnu-xzs/src/xnu/iokit/Kernel/arm/XZSSurface.cpp)) and `IOMobileFramebuffer` swap notifications ([`src/xnu/iokit/Kernel/arm/XZSFramebuffer.cpp`](file:///Users/lechaukha12/Desktop/xnu-xzs/src/xnu/iokit/Kernel/arm/XZSFramebuffer.cpp)).
-  * **Multi-Threaded 60 Hz LUT Presenter**: Splits the `1080x1920` output across **4 parallel CPU threads** (`3` worker threads + `1` flush thread, 480 rows each) using branchless 4x-unrolled 1:1 LUT loops (`renderSlice`) directly into write-combining (`VM_WIMG_WCOMB`) physical scanout memory at `0x98000000`.
+  * Implements wired multi-plane `IOSurface` management, non-bulk value dictionary cache (`SetValue`/`CopyValue`/`RemoveValue` selectors `9/10/11`), `SetBulkAttachments` (`sel 27`), `SetYCbCrMatrix` (`sel 5`), and `IOSurfaceSharedEvent` + `IOSurfaceSharedEventListener` (`sel 36..41, 45`) ([`src/xnu/iokit/Kernel/arm/XZSSurface.cpp`](file:///Users/lechaukha12/Desktop/xnu-xzs/src/xnu/iokit/Kernel/arm/XZSSurface.cpp)).
+  * **Multi-Threaded 60 Hz 64-Bit SWAR LUT Presenter**: Splits the `1080x1920` output across **4 parallel worker threads** (`renderSlice` with 2-pixel-at-a-time 64-bit SWAR `xzs_bgra_to_mdp5_swar2` conversion) directly into write-combining (`VM_WIMG_WCOMB`) physical scanout memory at `0x98000000` ([`src/xnu/iokit/Kernel/arm/XZSFramebuffer.cpp`](file:///Users/lechaukha12/Desktop/xnu-xzs/src/xnu/iokit/Kernel/arm/XZSFramebuffer.cpp)).
+* **Qualcomm Adreno 530 (`A530v2`) GPU, `AppleM2ScalerCSCDriver` (`IOSurfaceAccelerator`) & `XZSAccelerator` (`IOAcceleratorES` / Metal Bridge)**:
+  * **Bare-Metal Adreno 530 Driver** ([`src/xnu/pexpert/arm/xzs_gpu.h`](file:///Users/lechaukha12/Desktop/xnu-xzs/src/xnu/pexpert/arm/xzs_gpu.h)): Enables `VDD_GFX` (`pmi8994_s2` on SPMI `SID 3 @ 0x1700`), uncollapses `GPU_GDSC` (`0x008c4034`) & `GPU_GX_GDSC` (`0x008c4024`), enables `MMCC`/`GCC` GFX3D & BIMC clocks, programs `VBIF`, `RBBM`, `UCHE`, and all 25 `a530_hwcg` clock-gating registers, and initializes a 32 KB `CP_RB` Ringbuffer at `0x90f00000`.
+  * **`AppleM2ScalerCSCDriver`** ([`src/xnu/iokit/Kernel/arm/XZSGPU.cpp`](file:///Users/lechaukha12/Desktop/xnu-xzs/src/xnu/iokit/Kernel/arm/XZSGPU.cpp)): Backs `IOSurfaceAccelerator.framework` (`TransformSurface`, `CaptureSurface`, `FillSurface`) with 64-bit SWAR surface blitting, fixed-point scaling, `BGRA <-> RGBA` swap, `NV12` (`420v`/`420f`) -> `BGRA` CSC, and `OSAsyncReference64` completion callbacks.
+  * **`XZSAccelerator` (`AGXAcceleratorG10P` / `IOAcceleratorES`)** ([`src/xnu/iokit/Kernel/arm/XZSGPU.cpp`](file:///Users/lechaukha12/Desktop/xnu-xzs/src/xnu/iokit/Kernel/arm/XZSGPU.cpp)): Implements the full `IOAccelerator` user client stack (`Device` type 1, `Shared` type 2, `Context` types 0/3, `CommandQueue` types 4/8) bridged to the Adreno 530 CP Ringbuffer.
 
 ### 3.4 Human Interface Devices: Multi-Touch & Physical Keys (`SweetHID`)
 * **`SweetHIDTouch` (`AppleHydroTouch` / `IOHIDEventService`)**:
@@ -156,6 +161,7 @@ All phases from bare-metal EL1 kernel entry, 4-core Kryo SMP, eMMC 5.1 storage, 
 | **Phase D10** | 14 GB HFS+ iOS 16.7.16 RootFS on `/dev/disk0s54`, `/sbin/launchd`, `backboardd` & `SpringBoard` GUI | **COMPLETE & SEALED** |
 | **Phase D11** | Synaptics RMI4 125Hz multi-touch, edge gestures, PON/GPIO keys & WLED sleep/wake | **COMPLETE & SEALED** |
 | **Phase D12** | 60Hz multi-threaded 1:1 LUT compositor, non-blocking USB console & stock iOS 16 apps/widgets | **COMPLETE & SEALED** |
+| **Phase D13** | Adreno 530 (`A530v2`) GPU bring-up, `AppleM2ScalerCSCDriver` (`IOSurfaceAccelerator`), `IOSurfaceSharedEvent`, `XZSAccelerator` (`IOAcceleratorES` / Metal bridge) & 64-bit SWAR compositor | **COMPLETE & VERIFIED** |
 
 ---
 
@@ -218,6 +224,7 @@ fastboot flash userdata artifacts/builds/ios16-root.simg
 * [Port Status Overview](docs/XZS_PORT_STATUS.md) — Milestone verification checklist and hardware status.
 * [Architecture & Execution Pipeline](docs/XZS_ARCHITECTURE.md) — End-to-end boot flow, memory map, and MMIO register reference.
 * [iOS Compatibility Architecture Blueprint](docs/XZS_IOS_HYBRID_ARCHITECTURE.md) — Detailed specification of `XZSAppleCompat` services (`XZSFramebuffer`, `XZSSurface`, `SweetHID`, `xzs_amfi`, `sweet_hfs`).
-* [Technical Roadmap](docs/XZS_ROADMAP.md) — Complete Phase A through Phase D12 milestone specifications.
+* [Technical Roadmap](docs/XZS_ROADMAP.md) — Complete Phase A through Phase D13 milestone specifications.
+* [GPU, Adreno 530 & Metal Architecture](docs/XZS_D13_GPU_ADRENO_METAL_ARCHITECTURE.md) — Complete technical reference for the Adreno 530 (`A530v2`) driver, `AppleM2ScalerCSCDriver` (`IOSurfaceAccelerator`), `IOSurfaceSharedEvent`, and `IOAcceleratorES` / Metal bridge.
 * [Physical Display Evaluation Report](docs/XZS_D8_M10_HARDWARE_EVALUATION.md) — Root-cause resolution and hardware verification of the Sharp/Synaptics 1080x1920 MIPI DSI pipeline.
 * [Build Guide](docs/XZS_BUILD.md) — Detailed toolchain and build flags reference.

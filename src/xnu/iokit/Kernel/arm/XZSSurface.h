@@ -13,6 +13,7 @@
 #if defined(SWEET) || defined(XZS)
 #include <IOKit/IOMemoryDescriptor.h>
 #include <IOKit/IOBufferMemoryDescriptor.h>
+#include <libkern/c++/OSDictionary.h>
 #include <libkern/c++/OSObject.h>
 #include <mach/mach_types.h>
 
@@ -33,12 +34,14 @@ public:
 	uint16_t bytesPerElement;
 	uint8_t  elementWidth, elementHeight;
 	uint32_t cacheMode, planeCount, parentID;
+	uint32_t ycbcrMatrix, valueSeed;
 	struct sweet_surface_plane planes[SWEET_SURFACE_MAX_PLANES];
 
 	IOMemoryDescriptor       *memory;       /* pixels (buffer or physical) */
 	IOOptionBits              mapCache;     /* cache mode for user mappings */
 	IOBufferMemoryDescriptor *state;        /* shared state page, read-only for users */
 	IOMemoryMap              *kernelMap;    /* lazily created for kernel copies */
+	OSDictionary             *values;       /* surface attachments (SetValue/CopyValue) */
 
 	bool init() APPLE_KEXT_OVERRIDE { return OSObject::init(); }
 	void free() APPLE_KEXT_OVERRIDE;

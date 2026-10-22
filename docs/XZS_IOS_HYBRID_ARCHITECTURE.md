@@ -31,8 +31,9 @@ This document defines the authoritative architecture for running an authentic **
 | **SoC / CPU** | Qualcomm MSM8996 Pro (Snapdragon 820)<br>`ARMv8.0-A`, 4 cores Kryo (2x Silver + 2x Gold) | Pure `arm64` kernel (`-mno-ptrauth`, `PAC=0`) + 4-core Mach SMP (`pset0`) | **COMPLETE & VERIFIED** |
 | **DRAM Layout** | 4 GB LPDDR4 (`0x80000000` base)<br>`1,368 MB` XPU-safe contiguous RAM | Kernel VM / `pmap` / wired `IOBufferMemoryDescriptor` pools | **COMPLETE & VERIFIED** |
 | **Boot & Device Tree** | Sony S1 ABOOT (`fastboot boot boot.img`) + Qualcomm DTB | `xzs-bootshim` constructs `D22AP` (`iPhone10,3`) ADT at `0x81810000` | **COMPLETE & VERIFIED** |
-| **Display Engine** | Sharp/Synaptics 1080x1920 Command-Mode LCD<br>MDSS MDP5 + DSI0 + PMI8996 LAB/IBB/WLED | `XZSFramebuffer` (`AppleCLCD` / `IOMobileFramebuffer`) + `XZSSurface` (`IOSurface`) | **COMPLETE & VERIFIED** |
-| **Aspect Ratio & Blit** | Physical `1080x1920` (16:9) scanout buffer at `0x98000000` | Logical `1125x2436` (`@3x`) mapped via 1:1 square-pixel LUT across 4 CPU threads @ 60 Hz | **COMPLETE & VERIFIED** |
+| **Display Engine** | Sharp/Synaptics 1080x1920 Command-Mode LCD<br>MDSS MDP5 + DSI0 + PMI8996 LAB/IBB/WLED | `XZSFramebuffer` (`AppleCLCD` / `IOMobileFramebuffer`) + `XZSSurface` (`IOSurface` + `IOSurfaceSharedEvent`) | **COMPLETE & VERIFIED** |
+| **GPU & Accelerator** | Qualcomm Adreno 530 (`A530v2`, `0x00b00000`, `chipid = 0x05030002`, 1 MB GMEM, 32 KB CP Ringbuffer `0x90f00000`) | `XZSGPU` (`AppleM2ScalerCSCDriver` `IOSurfaceAccelerator` + `XZSAccelerator` `AGXAcceleratorG10P` / `IOAcceleratorES`) | **COMPLETE & VERIFIED** |
+| **Aspect Ratio & Blit** | Physical `1080x1920` (16:9) scanout buffer at `0x98000000` | Logical `1125x2436` (`@3x`) mapped via 64-bit SWAR (`xzs_bgra_to_mdp5_swar2`) across 4 CPU threads @ 60 Hz | **COMPLETE & VERIFIED** |
 | **Storage & RootFS** | Samsung `BJNB4R` 32 GB eMMC 5.1 (`SDCC1` `0x07464900`, 19.2 MHz 8-bit) | `sweet_hfs` R/W Journaled HFS+ on `/dev/disk0s54` (`HFS_SSD`, 64-bit `clonefile`, volume quotas) | **COMPLETE & VERIFIED** |
 | **Security & Sandbox** | Kernel BSD MAC framework | `xzs_amfi.c`: `"Sandbox"` + `"AMFI"` policies, syscalls `0x5a`/`0x60`, container paths (`call == 4`) | **COMPLETE & VERIFIED** |
 | **KeyStore / SEP** | Software stub | `XZSKeyStore.cpp`: `AppleKeyStore` & `AppleSEPManager` userclients unlocking `keybagd` & `datamigrator` | **COMPLETE & VERIFIED** |
@@ -42,16 +43,19 @@ This document defines the authoritative architecture for running an authentic **
 
 ## 3. Subsystem Architectural Blueprints
 
-### 3.1 Display Subsystem: `XZSFramebuffer` & `XZSSurface`
+### 3.1 Display & GPU Accelerator Subsystem: `XZSFramebuffer`, `XZSSurface` & `XZSGPU`
 1. **`XZSSurface` (`IOCoreSurfaceRoot`)** ([`src/xnu/iokit/Kernel/arm/XZSSurface.cpp`](file:///Users/lechaukha12/Desktop/xnu-xzs/src/xnu/iokit/Kernel/arm/XZSSurface.cpp)):
-   - Implements userclient external methods `0 (Create)`, `1 (Release)`, `2 (Lock)`, `3 (Unlock)`, `4 (Lookup)`, `13 (Limits)`, `34 (LookupFromPort)`, `35 (CreatePort)` and fast traps.
-   - Allocates wired kernel pages mapped into calling processes (`backboardd`, `RenderServer`, `SpringBoard`, apps) with full multi-plane stride/offset metadata.
-2. **`XZSFramebuffer` (`AppleCLCD` / `IOMobileFramebuffer`)** ([`src/xnu/iokit/Kernel/arm/XZSFramebuffer.cpp`](file:///Users/lechaukha12/Desktop/xnu-xzs/src/xnu/iokit/Kernel/arm/XZSFramebuffer.cpp)):
+   - Implements userclient external methods `0 (Create)`, `4 (Lookup)`, `5 (SetYCbCrMatrix)`, `9 (SetValue)`, `10 (CopyValue)`, `11 (RemoveValue)`, `13 (Limits)`, `27 (SetBulkAttachments)`, `34 (LookupFromPort)`, `35 (CreatePort)`, and `36..41, 45` (`IOSurfaceSharedEvent` & `IOSurfaceSharedEventListener`) plus fast traps `0..5`.
+   - Allocates wired kernel pages mapped into calling processes (`backboardd`, `RenderServer`, `SpringBoard`, apps) with full multi-plane stride/offset metadata and non-bulk value seed synchronization (`state + 0x20`).
+2. **`XZSGPU` (`AppleM2ScalerCSCDriver` & `XZSAccelerator`)** ([`src/xnu/iokit/Kernel/arm/XZSGPU.cpp`](file:///Users/lechaukha12/Desktop/xnu-xzs/src/xnu/iokit/Kernel/arm/XZSGPU.cpp), [`src/xnu/pexpert/arm/xzs_gpu.h`](file:///Users/lechaukha12/Desktop/xnu-xzs/src/xnu/pexpert/arm/xzs_gpu.h)):
+   - Brings up the physical **Qualcomm Adreno 530 (`A530v2`, `0x00b00000`)** GPU (`VDD_GFX` `pmi8994_s2` on SPMI `SID 3 @ 0x1700`, `GPU_GDSC`, `GPU_GX_GDSC`, `MMCC`/`GCC` GFX3D & BIMC clocks, `a530_hwcg` clock gating, and 32 KB `CP_RB` Ringbuffer at `0x90f00000`).
+   - Implements `AppleM2ScalerCSCDriver` (`IOSurfaceAccelerator.framework` backend) with 64-bit SWAR surface blitting, fixed-point scaling, `BGRA <-> RGBA` swap, `NV12` (`420v`/`420f`) -> `BGRA` CSC, and `OSAsyncReference64` completion notifications.
+   - Implements `XZSAccelerator` (`AGXAcceleratorG10P` / `IOGraphicsAccelerator2` / `IOAcceleratorES`) on `/arm-io/sgx` with all 4 user client classes (`Device` type 1, `Shared` type 2, `Context` types 0/3, `CommandQueue` types 4/8).
+3. **`XZSFramebuffer` (`AppleCLCD` / `IOMobileFramebuffer`)** ([`src/xnu/iokit/Kernel/arm/XZSFramebuffer.cpp`](file:///Users/lechaukha12/Desktop/xnu-xzs/src/xnu/iokit/Kernel/arm/XZSFramebuffer.cpp)):
    - Matches `IODeviceTree:/arm-io/disp0` and advertises `1125x2436` (`@3x` iPhone X canvas).
-   - Runs a 60 Hz display presenter loop (`fFlushTicks = 1`) backed by `3` dedicated worker threads + the flush thread (`4` slices of `480` rows each).
-   - Uses precomputed 1:1 square-pixel LUTs (`s_px_to_lx_lut`, `s_py_to_ly_lut`) to map `1125x2070` (centered within `1125x2436`) onto `1080x1920` with zero vertical squishing.
+   - Runs a 60 Hz display presenter loop (`fFlushTicks = 1`) backed by 4 parallel worker threads (`renderSlice`) using 2-pixel-at-a-time 64-bit SWAR (`xzs_bgra_to_mdp5_swar2`) conversion.
    - Triggers hardware MIPI DSI frame transfer via direct TTBR1 MDSS MMIO (`g_xzs_mdss_virt_base` -> `xzs_d8m8_kick_frame_ex`).
-   - Handles selector `18` (`kSweetFBRequestPowerChange`) to turn the physical PMI8996 WLED backlight off on sleep and back on upon wake (`xzs_fb_set_backlight`).
+   - Handles selector `12` (`kSweetFBRequestPowerChange`) to turn the physical PMI8996 WLED backlight off on sleep and back on upon wake (`xzs_fb_set_backlight`).
 
 ### 3.2 Input Subsystem: `SweetHIDTouch` & `SweetHIDButtons`
 1. **`SweetHIDTouch` (`AppleHydroTouch`)** ([`src/xnu/iokit/Kernel/arm/hid/SweetHID.cpp`](file:///Users/lechaukha12/Desktop/xnu-xzs/src/xnu/iokit/Kernel/arm/hid/SweetHID.cpp)):

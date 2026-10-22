@@ -208,6 +208,14 @@ xzs_bgra_to_mdp5(uint32_t p)
 	return (p & 0xff00ff00u) | ((p & 0x00ff0000u) >> 16) | ((p & 0x000000ffu) << 16);
 }
 
+static inline uint64_t
+xzs_bgra_to_mdp5_swar2(uint64_t p2)
+{
+	return (p2 & 0xff00ff00ff00ff00ULL) |
+	       ((p2 & 0x00ff000000ff0000ULL) >> 16) |
+	       ((p2 & 0x000000ff000000ffULL) << 16);
+}
+
 /*
  * Where the center of the i-th of `out` pixels falls among `in` source pixels,
  * in 256ths of a pixel, clamped to [0, (in - 1) * 256].
@@ -286,7 +294,7 @@ AppleCLCD::start(IOService *provider)
 		IOLog("SWEET FB: no vsync timer\n");
 		return false;
 	}
-	uint32_t hz = 30;
+	uint32_t hz = 60;
 	PE_parse_boot_argn("sweetfb_hz", &hz, sizeof(hz));
 	fFlushTicks = (hz == 0 || hz >= 60) ? 1 : 60 / hz;
 
@@ -427,7 +435,17 @@ AppleCLCD::renderSlice(uint32_t worker_id, uint32_t total_workers)
 		uint32_t *to = (uint32_t *)(fPixels + (size_t)y * fRowBytes);
 		if (job.unscaled) {
 			const uint32_t *src_row = (const uint32_t *)(pixels + (size_t)(sy + y - py0) * stride) + sx;
-			for (int32_t x = cx0; x < cx1; x++) {
+			int32_t x = cx0;
+			if ((x & 1) != 0 && x < cx1) {
+				to[x] = xzs_bgra_to_mdp5(src_row[x - cx0]);
+				x++;
+			}
+			for (; x + 1 < cx1; x += 2) {
+				uint64_t p2;
+				memcpy(&p2, &src_row[x - cx0], sizeof(p2));
+				*(uint64_t *)&to[x] = xzs_bgra_to_mdp5_swar2(p2);
+			}
+			if (x < cx1) {
 				to[x] = xzs_bgra_to_mdp5(src_row[x - cx0]);
 			}
 			continue;
@@ -464,7 +482,24 @@ AppleCLCD::renderSlice(uint32_t worker_id, uint32_t total_workers)
 		}
 
 		if (filter) {
-			for (int32_t x = cx0; x < cx1; x++) {
+			int32_t x = cx0;
+			if ((x & 1) != 0 && x < cx1) {
+				uint32_t c = fColumn[x];
+				uint32_t w = fColumnWeight[x];
+				uint32_t a = from[c];
+				uint32_t p = (w == 0 || a == from[c + 1u]) ? a : xzs_fb_blend(a, from[c + 1u], w);
+				to[x] = xzs_bgra_to_mdp5(p);
+				x++;
+			}
+			for (; x + 1 < cx1; x += 2) {
+				uint32_t c0 = fColumn[x], w0 = fColumnWeight[x], a0 = from[c0];
+				uint32_t p0 = (w0 == 0 || a0 == from[c0 + 1u]) ? a0 : xzs_fb_blend(a0, from[c0 + 1u], w0);
+				uint32_t c1 = fColumn[x + 1], w1 = fColumnWeight[x + 1], a1 = from[c1];
+				uint32_t p1 = (w1 == 0 || a1 == from[c1 + 1u]) ? a1 : xzs_fb_blend(a1, from[c1 + 1u], w1);
+				uint64_t pair = (uint64_t)p0 | ((uint64_t)p1 << 32);
+				*(uint64_t *)&to[x] = xzs_bgra_to_mdp5_swar2(pair);
+			}
+			if (x < cx1) {
 				uint32_t c = fColumn[x];
 				uint32_t w = fColumnWeight[x];
 				uint32_t a = from[c];
@@ -472,7 +507,16 @@ AppleCLCD::renderSlice(uint32_t worker_id, uint32_t total_workers)
 				to[x] = xzs_bgra_to_mdp5(p);
 			}
 		} else {
-			for (int32_t x = cx0; x < cx1; x++) {
+			int32_t x = cx0;
+			if ((x & 1) != 0 && x < cx1) {
+				to[x] = xzs_bgra_to_mdp5(from[fColumn[x]]);
+				x++;
+			}
+			for (; x + 1 < cx1; x += 2) {
+				uint64_t pair = (uint64_t)from[fColumn[x]] | ((uint64_t)from[fColumn[x + 1]] << 32);
+				*(uint64_t *)&to[x] = xzs_bgra_to_mdp5_swar2(pair);
+			}
+			if (x < cx1) {
 				to[x] = xzs_bgra_to_mdp5(from[fColumn[x]]);
 			}
 		}

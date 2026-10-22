@@ -875,6 +875,7 @@ xzs_d8m2_critical_on(const char *action, uint32_t offset, int parent)
 #define XZS_FBCON_IMPL 1
 #include "xzs_fbcon.h"
 #include "xzs_d8m8.h"
+#include "xzs_gpu.h"
 
 void
 xzs_diag_dispatch(uint64_t which, uint64_t arg1, uint64_t arg2, uint64_t arg3)
@@ -1087,6 +1088,13 @@ xzs_diag_dispatch(uint64_t which, uint64_t arg1, uint64_t arg2, uint64_t arg3)
 	case 70:
 		xzs_display_bringup_auto();
 		break;
+	case 80:
+		xzs_gpu_dump_status();
+		break;
+	case 81:
+		(void)xzs_gpu_hw_init();
+		xzs_gpu_dump_status();
+		break;
 	default:
 		xzs_diag_emit("[XZS-D8M1] unknown diag\n");
 		break;
@@ -1217,4 +1225,84 @@ xzs_display_quiesce_for_reboot(void)
 		d8p1_write32(0x00971030u, 0x00000000u);
 		d8p1_write32(0x00994040u, 0x00000000u);
 	}
+}
+
+/*
+ * Milestone D13: C-callable Qualcomm Adreno 530 (A530v2) Hardware Interface
+ * Used by IOKit XZSGPU (AppleM2ScalerCSCDriver / XZSAccelerator).
+ */
+bool
+xzs_gpu_boot_init(void)
+{
+	if (g_xzs_gpu_virt_base == 0) {
+		g_xzs_gpu_virt_base = (uintptr_t)ml_io_map(XZS_GPU_KGSL_PHYS_BASE, XZS_GPU_MMIO_MAP_SIZE);
+	}
+	if (g_xzs_gpu_vram_va == 0) {
+		g_xzs_gpu_vram_va = (uintptr_t)ml_io_map_unmappable(XZS_GPU_VRAM_PHYS_BASE, XZS_GPU_VRAM_PHYS_SIZE, 0x6u);
+		if (g_xzs_gpu_vram_va != 0) {
+			memset((void *)g_xzs_gpu_vram_va, 0, 0x10000u);
+		}
+	}
+	bool ok = xzs_gpu_hw_init();
+	xzs_gpu_dump_status();
+	return ok;
+}
+
+bool
+xzs_gpu_is_ready(void)
+{
+	return g_xzs_gpu_state.hw_initialized;
+}
+
+uint32_t
+xzs_gpu_get_hw_version(void)
+{
+	return g_xzs_gpu_state.hw_version;
+}
+
+uint32_t
+xzs_gpu_get_rbbm_status(void)
+{
+	if (g_xzs_gpu_state.mmio_accessible) {
+		g_xzs_gpu_state.rbbm_status = xzs_gpu_reg_read(A5XX_RBBM_STATUS);
+	}
+	return g_xzs_gpu_state.rbbm_status;
+}
+
+uint32_t
+xzs_gpu_get_speed_bin(void)
+{
+	return g_xzs_gpu_state.speed_bin;
+}
+
+uintptr_t
+xzs_gpu_get_vram_va(void)
+{
+	return g_xzs_gpu_vram_va;
+}
+
+uint32_t
+xzs_gpu_submit_cp_ring(const uint32_t *dwords, uint32_t count)
+{
+	return xzs_gpu_ring_submit_packets(dwords, count);
+}
+
+void
+xzs_gpu_record_blit(uint64_t bytes)
+{
+	__atomic_add_fetch(&g_xzs_gpu_state.blit_count, 1ULL, __ATOMIC_RELAXED);
+	__atomic_add_fetch(&g_xzs_gpu_state.blit_bytes, bytes, __ATOMIC_RELAXED);
+}
+
+void
+xzs_gpu_record_fill(uint64_t bytes)
+{
+	__atomic_add_fetch(&g_xzs_gpu_state.fill_count, 1ULL, __ATOMIC_RELAXED);
+	__atomic_add_fetch(&g_xzs_gpu_state.blit_bytes, bytes, __ATOMIC_RELAXED);
+}
+
+void
+xzs_gpu_record_event(void)
+{
+	__atomic_add_fetch(&g_xzs_gpu_state.event_signals, 1ULL, __ATOMIC_RELAXED);
 }

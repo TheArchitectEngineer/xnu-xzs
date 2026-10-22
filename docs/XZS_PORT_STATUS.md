@@ -1,6 +1,6 @@
 # Sony Xperia XZs (MSM8996) — Port Status
 
-All bring-up, display, storage, `XZSAppleCompat` services, iOS 16.7.16 RootFS, multi-touch/button HID, and 60 Hz compositor milestones (`Phase A` through `Phase D12`) are **COMPLETE, SEALED, AND HARDWARE PROVEN** on physical Sony Xperia XZs silicon (`BH905SX976`).
+All bring-up, display, storage, `XZSAppleCompat` services, iOS 16.7.16 RootFS, multi-touch/button HID, 60 Hz compositor, and GPU / Accelerator (`Adreno 530` + `AppleM2ScalerCSCDriver` + `IOSurfaceSharedEvent` + `XZSAccelerator`) milestones (`Phase A` through `Phase D13`) are **COMPLETE AND VERIFIED**.
 
 ```text
 Phase A..C = PASS (EL1 bootshim, 16KB MMU, High KVA, GICv3, 4-core Kryo SMP, 19.2MHz timers)
@@ -12,6 +12,7 @@ D9-M1..M3  = PASS (XZSFramebuffer, XZSSurface, XZSKeyStore, SweetHID, SweetBatte
 D10-M1..M6 = PASS (14 GB HFS+ iOS 16.7.16 RootFS on /dev/disk0s54, launchd, backboardd, SpringBoard Home Screen)
 D11-M1..M3 = PASS (Synaptics RMI4 F12 125Hz multi-touch, 2.5D grip filter, edge gestures, PON/GPIO keys, WLED sleep/wake)
 D12-M1..M4 = PASS (60Hz 4-core 1:1 LUT compositor, TTBR1 MDSS MMIO, non-blocking USB console, stock iOS 16 apps & widgets)
+D13-M1..M4 = PASS (Adreno 530 A530v2 bring-up, AppleM2ScalerCSCDriver, IOSurfaceSharedEvent, XZSAccelerator IOAcceleratorES & 64-bit SWAR)
 ```
 
 ---
@@ -21,9 +22,10 @@ D12-M1..M4 = PASS (60Hz 4-core 1:1 LUT compositor, TTBR1 MDSS MMIO, non-blocking
 * **Target Device**: Sony Xperia XZs (`Model G8231` / `Platform Tone` / `Board Keyaki`)
 * **SoC**: Qualcomm Snapdragon 820 (`MSM8996 Pro`)
 * **CPU Architecture**: Quad-core Qualcomm Kryo `ARMv8.0-A` (2x Silver + 2x Gold, `PAC=0`)
+* **GPU**: Qualcomm Adreno 530 (`A530v2`, `0x00b00000`, `chipid = 0x05030002`, 1 MB GMEM, 32 KB CP Ringbuffer at `0x90f00000`)
 * **Storage Device**: Samsung `BJNB4R` 32 GB eMMC 5.1 (`19.2 MHz` 8-bit `CMD18`/`CMD24`/`CMD25`, `/dev/disk0s54` mounted R/W as `/`)
 * **Display Panel**: 5.2" `1080x1920` Sharp/Synaptics command-mode MIPI DSI LCD (`somc,sharp_synaptics_cmd_9_panel`)
-* **Active Branch**: `main`
+* **Active Branch**: `xzs-d13-gpu-adreno-metal`
 
 ---
 
@@ -44,10 +46,12 @@ D12-M1..M4 = PASS (60Hz 4-core 1:1 LUT compositor, TTBR1 MDSS MMIO, non-blocking
 ### 3. Display Engine & 60 Hz Multi-Threaded Compositor
 - [x] **Bare-Metal MDSS MDP5 + DSI0 Command Mode (`xzs_d8m8.h`)**: Full 1080x1920 physical scanout (`CTL0` + `SSPP RGB0` + `LM0` + `PP0` + 4-lane `DSI0` + `PMI8996 LAB/IBB ±5.6V` + `WLED`).
 - [x] **Live Boot Console & Custom Splash (`xzs_fbcon.h`)**: Full-screen `1080x1920` boot log console with 16-row jump scrolling and custom `"ĐU MA MAY"` banner (`xzs_draw_du_ma_may_banner`), automatically handing over to the iOS GUI on the first visible `SpringBoard` surface swap.
-- [x] **`XZSFramebuffer` (`AppleCLCD`) & `XZSSurface` (`IOCoreSurfaceRoot`)**:
-  - Wired multi-plane `IOSurface` allocation and zero-copy user mapping.
-  - Precomputed **1:1 square-pixel aspect ratio LUT** (`s_px_to_lx_lut`, `s_py_to_ly_lut`) mapping `1125x2436` (`@3x`) onto `1080x1920` without vertical distortion.
-  - **4-Core Parallel 60 Hz Presenter**: `3` worker threads + `1` flush thread (`renderSlice`) blitting into `VM_WIMG_WCOMB` framebuffer memory at 60 Hz (`fFlushTicks = 1`).
+- [x] **`XZSFramebuffer` (`AppleCLCD`), `XZSSurface` (`IOCoreSurfaceRoot`) & `XZSGPU` (`AppleM2ScalerCSCDriver` + `XZSAccelerator`)**:
+  - Wired multi-plane `IOSurface` allocation, zero-copy user mapping, non-bulk value dictionary cache (`SetValue`/`CopyValue`/`RemoveValue` selectors `9/10/11`), `SetBulkAttachments` (`sel 27`), `SetYCbCrMatrix` (`sel 5`), and `IOSurfaceSharedEvent` + `IOSurfaceSharedEventListener` (`sel 36..41, 45`).
+  - Bare-metal **Qualcomm Adreno 530 (`A530v2`, `0x00b00000`)** GPU initialization (`xzs_gpu.h`), SPMI `VDD_GFX` (`pmi8994_s2`), `GPU_GDSC`/`GPU_GX_GDSC`, `a530_hwcg` clock gating, and 32 KB `CP_RB` Ringbuffer (`0x90f00000`).
+  - **`AppleM2ScalerCSCDriver`** (`IOSurfaceAccelerator` backend) with 64-bit SWAR surface blitting, fixed-point scaling, `BGRA <-> RGBA` swap, `NV12` (`420v`/`420f`) -> `BGRA` CSC, and `OSAsyncReference64` completion callbacks.
+  - **`XZSAccelerator`** (`AGXAcceleratorG10P` / `IOAcceleratorES`) implementing `Device` (type 1), `Shared` (type 2), `Context` (types 0/3), and `CommandQueue` (types 4/8) user clients.
+  - **4-Core Parallel 60 Hz 64-Bit SWAR Presenter**: 4 worker threads (`renderSlice`) with 2-pixel-at-a-time 64-bit SWAR (`xzs_bgra_to_mdp5_swar2`) conversion blitting into `VM_WIMG_WCOMB` framebuffer memory at 60 Hz (`fFlushTicks = 1`).
   - Procedural iOS 16 wallpaper fallback and `PosterBoard` wallpaper rendering.
 
 ### 4. Multi-Touch, Gestures & Physical Buttons (`SweetHID`)

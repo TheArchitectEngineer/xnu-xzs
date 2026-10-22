@@ -10,6 +10,7 @@ iokit/Kernel/arm/AppleARMSMP.cpp    					optional iokitcpp
 iokit/Kernel/arm/XZSPlatformExpert.cpp				optional iokitcpp
 iokit/Kernel/arm/XZSSurface.cpp					optional iokitcpp
 iokit/Kernel/arm/XZSFramebuffer.cpp				optional iokitcpp
+iokit/Kernel/arm/XZSGPU.cpp					optional iokitcpp
 iokit/Kernel/arm/XZSKeyStore.cpp				optional iokitcpp
 iokit/Kernel/arm/XZSWatchdog.cpp				optional iokitcpp
 iokit/Kernel/arm/XZSEntitlements.cpp				optional iokitcpp

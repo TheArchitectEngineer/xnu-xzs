@@ -37,17 +37,33 @@
 #include <libkern/c++/OSArray.h>
 #include <libkern/c++/OSDictionary.h>
 #include <libkern/c++/OSNumber.h>
+#include <libkern/c++/OSSerialize.h>
+#include <libkern/c++/OSString.h>
+#include <libkern/c++/OSSymbol.h>
 #include <libkern/c++/OSUnserialize.h>
 #include <sys/proc.h>
 
 extern "C" bool g_xzs_springboard_surface_ready;
+extern "C" void xzs_gpu_record_event(void);
 
 enum {
 	kSweetSurfaceCreate             = 0,
 	kSweetSurfaceLookup             = 4,
+	kSweetSurfaceSetYCbCrMatrix     = 5,
+	kSweetSurfaceSetValue           = 9,
+	kSweetSurfaceCopyValue          = 10,
+	kSweetSurfaceRemoveValue        = 11,
 	kSweetSurfaceLimits             = 13,
+	kSweetSurfaceSetBulkAttachments = 27,
 	kSweetSurfaceLookupFromPort     = 34,
 	kSweetSurfaceCreatePort         = 35,
+	kSweetSurfaceCreateSharedEvent  = 36,
+	kSweetSurfaceSignalSharedEvent  = 37,
+	kSweetSurfaceOpenSharedEvent    = 38,
+	kSweetSurfaceNotifySharedEvent  = 39,
+	kSweetSurfaceAddEventListener   = 40,
+	kSweetSurfaceRemoveEventListener= 41,
+	kSweetSurfaceWaitSharedEvent    = 45,
 };
 
 enum {
@@ -88,6 +104,7 @@ SweetSurface::free()
 	OSSafeReleaseNULL(kernelMap);
 	OSSafeReleaseNULL(memory);
 	OSSafeReleaseNULL(state);
+	OSSafeReleaseNULL(values);
 	OSObject::free();
 }
 
@@ -208,11 +225,16 @@ sweet_surface_alloc(void)
 	}
 	s->state = IOBufferMemoryDescriptor::inTaskWithOptions(kernel_task,
 	    kIODirectionInOut | kIOMemoryKernelUserShared, page_size, page_size);
-	if (s->state == NULL) {
+	s->values = OSDictionary::withCapacity(8);
+	if (s->state == NULL || s->values == NULL) {
 		s->release();
 		return NULL;
 	}
 	bzero(s->state->getBytesNoCopy(), page_size);
+	s->valueSeed = 1;
+	uint8_t *stateBytes = (uint8_t *)s->state->getBytesNoCopy();
+	*(uint32_t *)(stateBytes + 0x20) = s->valueSeed;
+	*(uint32_t *)(stateBytes + 0x28) = 256;
 	return s;
 }
 
@@ -388,6 +410,50 @@ SweetSurfaceRef::free()
 	OSObject::free();
 }
 
+class SweetSharedEvent : public OSObject {
+	OSDeclareDefaultStructors(SweetSharedEvent);
+
+public:
+	uint32_t                  eventID;
+	IOBufferMemoryDescriptor *sharedMem;
+
+	bool init() APPLE_KEXT_OVERRIDE { return OSObject::init(); }
+	void free() APPLE_KEXT_OVERRIDE;
+	volatile uint64_t *valuePtr() const {
+		return sharedMem != NULL ? (volatile uint64_t *)sharedMem->getBytesNoCopy() : NULL;
+	}
+};
+
+OSDefineMetaClassAndStructors(SweetSharedEvent, OSObject);
+
+static uint32_t sweet_shared_event_next_id = 1;
+
+void
+SweetSharedEvent::free()
+{
+	OSSafeReleaseNULL(sharedMem);
+	OSObject::free();
+}
+
+static SweetSharedEvent *
+sweet_shared_event_alloc(void)
+{
+	SweetSharedEvent *ev = OSTypeAlloc(SweetSharedEvent);
+	if (ev == NULL || !ev->init()) {
+		OSSafeReleaseNULL(ev);
+		return NULL;
+	}
+	ev->eventID = OSIncrementAtomic((volatile SInt32 *)&sweet_shared_event_next_id) + 1;
+	ev->sharedMem = IOBufferMemoryDescriptor::inTaskWithOptions(kernel_task,
+	    kIODirectionInOut | kIOMemoryKernelUserShared, page_size, page_size);
+	if (ev->sharedMem == NULL) {
+		ev->release();
+		return NULL;
+	}
+	bzero(ev->sharedMem->getBytesNoCopy(), page_size);
+	return ev;
+}
+
 class IOCoreSurfaceRoot : public IOService {
 	OSDeclareDefaultStructors(IOCoreSurfaceRoot);
 
@@ -413,14 +479,21 @@ IOCoreSurfaceRoot::start(IOService *provider)
 class IOSurfaceRootUserClient : public IOUserClient {
 	OSDeclareDefaultStructors(IOSurfaceRootUserClient);
 
-	task_t   fTask;
-	IOLock  *fLock;
-	OSArray *fRefs;
+	task_t             fTask;
+	IOLock            *fLock;
+	OSArray           *fRefs;
+	OSArray           *fEventMaps;
+	OSAsyncReference64 fEventAsyncRef;
+	bool               fHasEventAsyncRef;
 
 	SweetSurfaceRef *findRef(uint32_t id, unsigned int *index);
 	IOReturn addRef(SweetSurface *s, SweetSurfaceRef **refOut, bool *existing);
 	IOReturn returnSurface(SweetSurface *s, IOExternalMethodArguments *args);
 	IOReturn create(IOExternalMethodArguments *args);
+	IOReturn setValue(IOExternalMethodArguments *args);
+	IOReturn copyValue(IOExternalMethodArguments *args);
+	IOReturn removeValue(IOExternalMethodArguments *args);
+	IOReturn setBulkAttachments(IOExternalMethodArguments *args);
 
 public:
 	bool initWithTask(task_t owningTask, void *securityID, UInt32 type) APPLE_KEXT_OVERRIDE;
@@ -463,13 +536,17 @@ IOSurfaceRootUserClient::initWithTask(task_t owningTask, void *securityID, UInt3
 	fTask = owningTask;
 	fLock = IOLockAlloc();
 	fRefs = OSArray::withCapacity(16);
-	return fLock != NULL && fRefs != NULL;
+	fEventMaps = OSArray::withCapacity(8);
+	bzero(fEventAsyncRef, sizeof(fEventAsyncRef));
+	fHasEventAsyncRef = false;
+	return fLock != NULL && fRefs != NULL && fEventMaps != NULL;
 }
 
 void
 IOSurfaceRootUserClient::free()
 {
 	OSSafeReleaseNULL(fRefs);
+	OSSafeReleaseNULL(fEventMaps);
 	if (fLock != NULL) {
 		IOLockFree(fLock);
 		fLock = NULL;
@@ -482,6 +559,10 @@ IOSurfaceRootUserClient::clientClose(void)
 {
 	IOLockLock(fLock);
 	fRefs->flushCollection();
+	if (fEventMaps != NULL) {
+		fEventMaps->flushCollection();
+	}
+	fHasEventAsyncRef = false;
 	IOLockUnlock(fLock);
 	terminate();
 	return kIOReturnSuccess;
@@ -737,6 +818,262 @@ IOSurfaceRootUserClient::create(IOExternalMethodArguments *args)
 	return ret;
 }
 
+static void
+sweet_surface_update_value_seed_locked(SweetSurface *s)
+{
+	s->valueSeed = (s->valueSeed + 2) | 1u;
+	uint32_t approxBytes = 256;
+	OSSerialize *ser = OSSerialize::binaryWithCapacity(256);
+	if (ser != NULL) {
+		if (s->values != NULL && s->values->serialize(ser)) {
+			approxBytes = ser->getLength() + 64;
+			if (approxBytes < 256) {
+				approxBytes = 256;
+			}
+		}
+		ser->release();
+	}
+	uint8_t *stateBytes = (uint8_t *)s->state->getBytesNoCopy();
+	*(uint32_t *)(stateBytes + 0x20) = s->valueSeed;
+	*(uint32_t *)(stateBytes + 0x28) = approxBytes;
+}
+
+IOReturn
+IOSurfaceRootUserClient::setValue(IOExternalMethodArguments *args)
+{
+	const char *buf = (const char *)args->structureInput;
+	uint32_t len = args->structureInputSize;
+	char *copy = NULL;
+
+	if (args->structureInputDescriptor != NULL) {
+		len = (uint32_t)args->structureInputDescriptor->getLength();
+		if (len <= 8 || len > SWEET_SURFACE_MAX_PROPS) {
+			return kIOReturnBadArgument;
+		}
+		copy = (char *)IOMallocData(len);
+		if (copy == NULL) {
+			return kIOReturnNoMemory;
+		}
+		args->structureInputDescriptor->readBytes(0, copy, len);
+		buf = copy;
+	}
+	if (buf == NULL || len <= 8) {
+		if (copy != NULL) {
+			IOFreeData(copy, len);
+		}
+		return kIOReturnBadArgument;
+	}
+
+	uint32_t surfaceID = 0;
+	memcpy(&surfaceID, buf, 4);
+	OSObject *obj = OSUnserializeXML(buf + 8, len - 8);
+	if (copy != NULL) {
+		IOFreeData(copy, len);
+	}
+	if (obj == NULL) {
+		return kIOReturnBadArgument;
+	}
+
+	SweetSurface *s = sweet_surface_copy(surfaceID);
+	if (s == NULL) {
+		obj->release();
+		return kIOReturnNotFound;
+	}
+
+	uint32_t newSeed = 1;
+	IOLockLock(sweet_surface_lock);
+	if (s->values != NULL) {
+		OSArray *arr = OSDynamicCast(OSArray, obj);
+		OSDictionary *dict = OSDynamicCast(OSDictionary, obj);
+		if (arr != NULL) {
+			if (arr->getCount() == 1) {
+				OSDictionary *d = OSDynamicCast(OSDictionary, arr->getObject(0));
+				if (d != NULL) {
+					s->values->merge(d);
+				}
+			} else {
+				for (unsigned int i = 0; i + 1 < arr->getCount(); i += 2) {
+					OSObject *val = arr->getObject(i);
+					OSString *key = OSDynamicCast(OSString, arr->getObject(i + 1));
+					if (key != NULL && val != NULL) {
+						s->values->setObject(key, val);
+					}
+				}
+			}
+		} else if (dict != NULL) {
+			s->values->merge(dict);
+		}
+		sweet_surface_update_value_seed_locked(s);
+		newSeed = s->valueSeed;
+	}
+	IOLockUnlock(sweet_surface_lock);
+	obj->release();
+	s->release();
+
+	if (args->structureOutput != NULL && args->structureOutputSize >= 4) {
+		memcpy(args->structureOutput, &newSeed, 4);
+		args->structureOutputSize = 4;
+	}
+	return kIOReturnSuccess;
+}
+
+IOReturn
+IOSurfaceRootUserClient::copyValue(IOExternalMethodArguments *args)
+{
+	const char *buf = (const char *)args->structureInput;
+	uint32_t len = args->structureInputSize;
+	char *copy = NULL;
+
+	if (args->structureInputDescriptor != NULL) {
+		len = (uint32_t)args->structureInputDescriptor->getLength();
+		if (len < 9 || len > SWEET_SURFACE_MAX_PROPS) {
+			return kIOReturnBadArgument;
+		}
+		copy = (char *)IOMallocData(len);
+		if (copy == NULL) {
+			return kIOReturnNoMemory;
+		}
+		args->structureInputDescriptor->readBytes(0, copy, len);
+		buf = copy;
+	}
+	if (buf == NULL || len < 9) {
+		if (copy != NULL) {
+			IOFreeData(copy, len);
+		}
+		return kIOReturnBadArgument;
+	}
+
+	uint32_t surfaceID = 0;
+	memcpy(&surfaceID, buf, 4);
+	char keyBuf[128];
+	size_t keyMax = len - 8 < sizeof(keyBuf) - 1 ? len - 8 : sizeof(keyBuf) - 1;
+	memcpy(keyBuf, buf + 8, keyMax);
+	keyBuf[keyMax] = '\0';
+	if (copy != NULL) {
+		IOFreeData(copy, len);
+	}
+
+	SweetSurface *s = sweet_surface_copy(surfaceID);
+	if (s == NULL) {
+		return kIOReturnNotFound;
+	}
+
+	OSSerialize *ser = OSSerialize::binaryWithCapacity(256);
+	if (ser == NULL) {
+		s->release();
+		return kIOReturnNoMemory;
+	}
+
+	bool ok = false;
+	uint32_t curSeed = 1;
+	IOLockLock(sweet_surface_lock);
+	curSeed = s->valueSeed;
+	if (s->values != NULL) {
+		if (keyBuf[0] == '\0') {
+			ok = s->values->serialize(ser);
+		} else {
+			OSObject *val = s->values->getObject(keyBuf);
+			if (val != NULL) {
+				ok = val->serialize(ser);
+			}
+		}
+	}
+	IOLockUnlock(sweet_surface_lock);
+	s->release();
+
+	if (!ok) {
+		ser->release();
+		if (args->structureOutput != NULL) {
+			args->structureOutputSize = 0;
+		}
+		return kIOReturnSuccess;
+	}
+
+	uint32_t serLen = ser->getLength();
+	uint32_t totalLen = 8 + serLen;
+	uint8_t *outBuf = (uint8_t *)IOMallocZeroData(totalLen);
+	if (outBuf == NULL) {
+		ser->release();
+		return kIOReturnNoMemory;
+	}
+	put32(outBuf, 0, curSeed);
+	put32(outBuf, 4, 0);
+	memcpy(outBuf + 8, ser->text(), serLen);
+	ser->release();
+
+	IOReturn ret = sweet_struct_out(args, outBuf, totalLen);
+	IOFreeData(outBuf, totalLen);
+	if (ret == kIOReturnNoSpace) {
+		return (IOReturn)0xe00002db; /* kIOReturnMessageTooLarge */
+	}
+	return ret;
+}
+
+IOReturn
+IOSurfaceRootUserClient::removeValue(IOExternalMethodArguments *args)
+{
+	const char *buf = (const char *)args->structureInput;
+	uint32_t len = args->structureInputSize;
+	if (buf == NULL || len < 9) {
+		return kIOReturnBadArgument;
+	}
+	uint32_t surfaceID = 0;
+	memcpy(&surfaceID, buf, 4);
+	char keyBuf[128];
+	size_t keyMax = len - 8 < sizeof(keyBuf) - 1 ? len - 8 : sizeof(keyBuf) - 1;
+	memcpy(keyBuf, buf + 8, keyMax);
+	keyBuf[keyMax] = '\0';
+
+	SweetSurface *s = sweet_surface_copy(surfaceID);
+	if (s == NULL) {
+		return kIOReturnNotFound;
+	}
+
+	uint32_t newSeed = 1;
+	IOLockLock(sweet_surface_lock);
+	if (s->values != NULL) {
+		if (keyBuf[0] == '\0') {
+			s->values->flushCollection();
+		} else {
+			s->values->removeObject(keyBuf);
+		}
+		sweet_surface_update_value_seed_locked(s);
+		newSeed = s->valueSeed;
+	}
+	IOLockUnlock(sweet_surface_lock);
+	s->release();
+
+	if (args->structureOutput != NULL && args->structureOutputSize >= 4) {
+		memcpy(args->structureOutput, &newSeed, 4);
+		args->structureOutputSize = 4;
+	}
+	return kIOReturnSuccess;
+}
+
+IOReturn
+IOSurfaceRootUserClient::setBulkAttachments(IOExternalMethodArguments *args)
+{
+	const uint8_t *buf = (const uint8_t *)args->structureInput;
+	uint32_t len = args->structureInputSize;
+	if (buf == NULL || len < 0x84) {
+		return kIOReturnSuccess;
+	}
+	uint32_t surfaceID = 0;
+	memcpy(&surfaceID, buf + 0x80, 4);
+	SweetSurface *s = sweet_surface_copy(surfaceID);
+	if (s == NULL) {
+		return kIOReturnNotFound;
+	}
+	IOLockLock(sweet_surface_lock);
+	if (s->state != NULL) {
+		uint8_t *stateBytes = (uint8_t *)s->state->getBytesNoCopy();
+		memcpy(stateBytes + 0x30, buf, 0x70);
+	}
+	IOLockUnlock(sweet_surface_lock);
+	s->release();
+	return kIOReturnSuccess;
+}
+
 IOReturn
 IOSurfaceRootUserClient::externalMethod(uint32_t selector, IOExternalMethodArguments *args,
     __unused IOExternalMethodDispatch *dispatch, __unused OSObject *target,
@@ -765,6 +1102,30 @@ IOSurfaceRootUserClient::externalMethod(uint32_t selector, IOExternalMethodArgum
 		sweet_surf_log_once("sel", selector);
 		return ret;
 	}
+	case kSweetSurfaceSetYCbCrMatrix: {
+		SweetSurface *s = sweet_surface_copy((uint32_t)arg0);
+		if (s != NULL) {
+			s->ycbcrMatrix = args->scalarInputCount > 1 ? (uint32_t)args->scalarInput[1] : 0;
+			if (s->state != NULL) {
+				*(uint32_t *)((uint8_t *)s->state->getBytesNoCopy() + 0x24) = s->ycbcrMatrix;
+			}
+			s->release();
+		}
+		sweet_surf_log_once("sel", selector);
+		return kIOReturnSuccess;
+	}
+	case kSweetSurfaceSetValue:
+		sweet_surf_log_once("sel", selector);
+		return setValue(args);
+	case kSweetSurfaceCopyValue:
+		sweet_surf_log_once("sel", selector);
+		return copyValue(args);
+	case kSweetSurfaceRemoveValue:
+		sweet_surf_log_once("sel", selector);
+		return removeValue(args);
+	case kSweetSurfaceSetBulkAttachments:
+		sweet_surf_log_once("sel", selector);
+		return setBulkAttachments(args);
 	case kSweetSurfaceLookupFromPort: {
 		OSObject *obj = NULL;
 		IOReturn ret = IOUserClient::copyObjectForPortNameInTask(fTask, (mach_port_name_t)arg0, &obj);
@@ -788,8 +1149,162 @@ IOSurfaceRootUserClient::externalMethod(uint32_t selector, IOExternalMethodArgum
 		sweet_surf_log_once("sel", selector);
 		return kIOReturnSuccess;
 	}
+	case kSweetSurfaceCreateSharedEvent: {
+		SweetSharedEvent *ev = sweet_shared_event_alloc();
+		if (ev == NULL) {
+			return kIOReturnNoMemory;
+		}
+		IOMemoryMap *map = ev->sharedMem->createMappingInTask(fTask, 0, kIOMapAnywhere | kIOMapDefaultCache);
+		mach_port_name_t portName = 0;
+		IOReturn ret = IOUserClient::copyPortNameForObjectInTask(fTask, ev, &portName);
+		if (map == NULL || ret != kIOReturnSuccess || portName == 0) {
+			OSSafeReleaseNULL(map);
+			ev->release();
+			return kIOReturnVMError;
+		}
+		IOLockLock(fLock);
+		if (fEventMaps != NULL) {
+			fEventMaps->setObject(map);
+		}
+		IOLockUnlock(fLock);
+		if (args->scalarOutput != NULL) {
+			if (args->scalarOutputCount >= 1) args->scalarOutput[0] = portName;
+			if (args->scalarOutputCount >= 2) args->scalarOutput[1] = map->getAddress();
+			if (args->scalarOutputCount >= 3) args->scalarOutput[2] = ev->eventID;
+		}
+		map->release();
+		ev->release();
+		xzs_gpu_record_event();
+		sweet_surf_log_once("sel", selector);
+		return kIOReturnSuccess;
+	}
+	case kSweetSurfaceOpenSharedEvent: {
+		OSObject *obj = NULL;
+		IOReturn ret = IOUserClient::copyObjectForPortNameInTask(fTask, (mach_port_name_t)arg0, &obj);
+		SweetSharedEvent *ev = OSDynamicCast(SweetSharedEvent, obj);
+		if (ret != kIOReturnSuccess || ev == NULL) {
+			OSSafeReleaseNULL(obj);
+			return kIOReturnBadArgument;
+		}
+		IOMemoryMap *map = ev->sharedMem->createMappingInTask(fTask, 0, kIOMapAnywhere | kIOMapDefaultCache);
+		if (map == NULL) {
+			obj->release();
+			return kIOReturnVMError;
+		}
+		IOLockLock(fLock);
+		if (fEventMaps != NULL) {
+			fEventMaps->setObject(map);
+		}
+		IOLockUnlock(fLock);
+		if (args->scalarOutput != NULL) {
+			if (args->scalarOutputCount >= 1) args->scalarOutput[0] = 0;
+			if (args->scalarOutputCount >= 2) args->scalarOutput[1] = map->getAddress();
+			if (args->scalarOutputCount >= 3) args->scalarOutput[2] = ev->eventID;
+		}
+		map->release();
+		obj->release();
+		xzs_gpu_record_event();
+		sweet_surf_log_once("sel", selector);
+		return kIOReturnSuccess;
+	}
+	case kSweetSurfaceSignalSharedEvent: {
+		uint64_t val = args->scalarInputCount > 1 ? args->scalarInput[1] : 0;
+		OSObject *obj = NULL;
+		if (IOUserClient::copyObjectForPortNameInTask(fTask, (mach_port_name_t)arg0, &obj) == kIOReturnSuccess) {
+			SweetSharedEvent *ev = OSDynamicCast(SweetSharedEvent, obj);
+			if (ev != NULL && ev->valuePtr() != NULL) {
+				*ev->valuePtr() = val;
+			}
+			obj->release();
+		}
+		xzs_gpu_record_event();
+		sweet_surf_log_once("sel", selector);
+		return kIOReturnSuccess;
+	}
+	case kSweetSurfaceAddEventListener: {
+		if (args->asyncWakePort != MACH_PORT_NULL && args->asyncReferenceCount >= 3) {
+			IOLockLock(fLock);
+			setAsyncReference64(fEventAsyncRef, args->asyncWakePort,
+			    args->asyncReference[kIOAsyncCalloutFuncIndex],
+			    args->asyncReference[kIOAsyncCalloutRefconIndex]);
+			fHasEventAsyncRef = true;
+			IOLockUnlock(fLock);
+		}
+		sweet_surf_log_once("sel", selector);
+		return kIOReturnSuccess;
+	}
+	case kSweetSurfaceRemoveEventListener: {
+		IOLockLock(fLock);
+		fHasEventAsyncRef = false;
+		bzero(fEventAsyncRef, sizeof(fEventAsyncRef));
+		IOLockUnlock(fLock);
+		sweet_surf_log_once("sel", selector);
+		return kIOReturnSuccess;
+	}
+	case kSweetSurfaceNotifySharedEvent: {
+		/*
+		 * scalarInput[0] = eventPort
+		 * scalarInput[1] = listenerSelf
+		 * scalarInput[2] = eventSelf (CFRetained by caller)
+		 * scalarInput[3] = blockPtr (_Block_copied by caller)
+		 * scalarInput[4] = targetValue
+		 */
+		uint64_t eventSelf   = args->scalarInputCount > 2 ? args->scalarInput[2] : 0;
+		uint64_t blockPtr    = args->scalarInputCount > 3 ? args->scalarInput[3] : 0;
+		uint64_t targetValue = args->scalarInputCount > 4 ? args->scalarInput[4] : 0;
+		uint64_t finalValue  = targetValue;
+
+		OSObject *obj = NULL;
+		if (IOUserClient::copyObjectForPortNameInTask(fTask, (mach_port_name_t)arg0, &obj) == kIOReturnSuccess) {
+			SweetSharedEvent *ev = OSDynamicCast(SweetSharedEvent, obj);
+			if (ev != NULL && ev->valuePtr() != NULL) {
+				uint64_t cur = *ev->valuePtr();
+				if (cur < targetValue) {
+					*ev->valuePtr() = targetValue;
+				} else {
+					finalValue = cur;
+				}
+			}
+			obj->release();
+		}
+
+		OSAsyncReference64 asyncRefCopy;
+		bool hasAsync = false;
+		IOLockLock(fLock);
+		if (fHasEventAsyncRef) {
+			memcpy(asyncRefCopy, fEventAsyncRef, sizeof(asyncRefCopy));
+			hasAsync = true;
+		}
+		IOLockUnlock(fLock);
+
+		if (hasAsync && blockPtr != 0) {
+			io_user_reference_t notifyArgs[3] = {
+				(io_user_reference_t)eventSelf,
+				(io_user_reference_t)blockPtr,
+				(io_user_reference_t)finalValue
+			};
+			sendAsyncResult64(asyncRefCopy, kIOReturnSuccess, notifyArgs, 3);
+		}
+		xzs_gpu_record_event();
+		sweet_surf_log_once("sel", selector);
+		return kIOReturnSuccess;
+	}
+	case kSweetSurfaceWaitSharedEvent: {
+		uint64_t targetValue = args->scalarInputCount > 1 ? args->scalarInput[1] : 0;
+		OSObject *obj = NULL;
+		if (IOUserClient::copyObjectForPortNameInTask(fTask, (mach_port_name_t)arg0, &obj) == kIOReturnSuccess) {
+			SweetSharedEvent *ev = OSDynamicCast(SweetSharedEvent, obj);
+			if (ev != NULL && ev->valuePtr() != NULL && *ev->valuePtr() < targetValue) {
+				*ev->valuePtr() = targetValue;
+			}
+			obj->release();
+		}
+		xzs_gpu_record_event();
+		sweet_surf_log_once("sel", selector);
+		return kIOReturnSuccess;
+	}
 	default:
-		/* Values, notifications, ownership, timestamps...: accept and ignore. */
+		/* Remaining notifications, ownership, timestamps...: accept and ignore. */
 		for (uint32_t i = 0; i < args->scalarOutputCount; i++) {
 			args->scalarOutput[i] = 0;
 		}
