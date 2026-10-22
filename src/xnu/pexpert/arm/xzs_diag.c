@@ -1163,11 +1163,27 @@ xzs_display_bringup_auto(void)
 	}
 }
 
+uintptr_t
+xzs_fb_kernel_va(void)
+{
+	if (g_m8_fb_va == 0) {
+		g_m8_fb_va = (uintptr_t)ml_io_map_unmappable(g_m8_fb_pa, g_m8_fb_size, 0x6u);
+	}
+	return g_m8_fb_va;
+}
+
+uint32_t
+xzs_fb_kick_count(void)
+{
+	return g_m8_ctl_start_count;
+}
+
 void
 xzs_fb_present_kick(void)
 {
+	__asm__ volatile("dsb sy" ::: "memory");
 	if (g_m8_ctl_configured && g_m8_stream_configured) {
-		(void)xzs_d8m8_kick_frame_ex(false);
+		(void)xzs_d8m8_kick_frame_ex(true);
 	}
 }
 

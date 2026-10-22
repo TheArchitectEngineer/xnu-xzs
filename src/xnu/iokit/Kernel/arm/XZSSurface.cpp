@@ -40,6 +40,8 @@
 #include <libkern/c++/OSUnserialize.h>
 #include <sys/proc.h>
 
+extern "C" bool g_xzs_springboard_surface_ready;
+
 enum {
 	kSweetSurfaceCreate             = 0,
 	kSweetSurfaceLookup             = 4,
@@ -228,6 +230,7 @@ SweetSurface *
 sweet_surface_create_physical(uint64_t phys, uint32_t width, uint32_t height,
     uint32_t bytesPerRow, uint32_t pixelFormat)
 {
+	(void)phys;
 	SweetSurface *s = sweet_surface_alloc();
 	if (s == NULL) {
 		return NULL;
@@ -239,9 +242,17 @@ sweet_surface_create_physical(uint64_t phys, uint32_t width, uint32_t height,
 	s->elementWidth = s->elementHeight = 1;
 	s->pixelFormat = pixelFormat;
 	s->allocSize = (uint32_t)round_page(bytesPerRow * height);
-	s->memory = IOMemoryDescriptor::withPhysicalAddress(phys, s->allocSize, kIODirectionInOut);
+	s->memory = IOBufferMemoryDescriptor::inTaskWithOptions(kernel_task,
+	    kIODirectionInOut | kIOMemoryKernelUserShared | kIOMapWriteCombineCache,
+	    s->allocSize, page_size);
 	s->mapCache = kIOMapWriteCombineCache;
-	if (s->memory == NULL || !sweet_surface_publish(s)) {
+	if (s->memory == NULL) {
+		s->release();
+		return NULL;
+	}
+	OSAddAtomic64(s->allocSize, (volatile SInt64 *)&sweet_surface_wired);
+	bzero(((IOBufferMemoryDescriptor *)s->memory)->getBytesNoCopy(), s->allocSize);
+	if (!sweet_surface_publish(s)) {
 		s->release();
 		return NULL;
 	}
@@ -703,13 +714,18 @@ IOSurfaceRootUserClient::create(IOExternalMethodArguments *args)
 			}
 		}
 	}
-	if (ret != kIOReturnSuccess || sweet_surface_creates_logged < 64) {
+	{
 		char name[32];
 		proc_selfname(name, sizeof(name));
-		sweet_surface_creates_logged++;
-		IOLog("SWEET SURF: %s create id %u %ux%u fmt 0x%x bpe %u bpr %u planes %u size %u keys %u -> 0x%x\n",
-		    name, s->id, s->width, s->height, s->pixelFormat, s->bytesPerElement,
-		    s->bytesPerRow, s->planeCount, s->allocSize, props->getCount(), ret);
+		if (ret == kIOReturnSuccess && strncmp(name, "SpringBoard", 11) == 0) {
+			g_xzs_springboard_surface_ready = true;
+		}
+		if (ret != kIOReturnSuccess || sweet_surface_creates_logged < 64) {
+			sweet_surface_creates_logged++;
+			IOLog("SWEET SURF: %s create id %u %ux%u fmt 0x%x bpe %u bpr %u planes %u size %u keys %u -> 0x%x\n",
+			    name, s->id, s->width, s->height, s->pixelFormat, s->bytesPerElement,
+			    s->bytesPerRow, s->planeCount, s->allocSize, props->getCount(), ret);
+		}
 	}
 	props->release();
 	if (ret != kIOReturnSuccess) {

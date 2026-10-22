@@ -2,15 +2,15 @@
 
 ```text
 CURRENT_PHASE=D10_IOS_ROOTFS_AND_LAUNCHD_BRINGUP
-CURRENT_MILESTONE=XZS_D10_M4_FIRST_IOS16_GUI_FRAMES_AND_SPRINGBOARD_ON_PHYSICAL_LCD
-HARDWARE_STATUS=BH905SX976 (1080x1920 FULL-SCREEN CONSOLE + FIRST VISIBLE iOS 16 GUI FRAMES 1125x2436->1080x1920 ON LCD, 4-CORE SMP + SDCC1 19.2MHz 8-BIT CMD18 PIO, ZERO PANICS PAST t=550s, PAC=0 VERIFIED)
+CURRENT_MILESTONE=XZS_D10_M6_SPRINGBOARD_HOMESCREEN_UNLOCKED_ON_PHYSICAL_LCD
+HARDWARE_STATUS=BH905SX976 (iOS 16.7.16 SPRINGBOARD LOCK SCREEN & HOME SCREEN UNLOCKED ON 1080x1920 PHYSICAL LCD, LSD <5s, SKYWALK ENABLED, 4-CORE SMP, ZERO PANICS, PAC=0 VERIFIED)
 REFERENCE_PROJECT_INTEGRATED=ios-sweet (MIRRORED_AND_GITIGNORED)
 ARCHITECTURAL_BLUEPRINT=docs/XZS_IOS_HYBRID_ARCHITECTURE.md (CREATED_AND_APPROVED)
 HARDWARE_EVALUATION_REPORT=docs/XZS_D8_M10_HARDWARE_EVALUATION.md (COMPLETE_AND_SEALED)
 REGRESSION_BISECT_REPORT=docs/DISPLAY_REGRESSION_BISECT_RESULT.md (RESOLVED_AND_SEALED)
 IPSW_STATUS=DOWNLOADED_EXTRACTED_AND_FLASHED_TO_USERDATA (iPhone10,3_16.7.16_20H392 -> /dev/disk0s54)
 COMPAT_SERVICES=XZSSurface, XZSFramebuffer, XZSKeyStore, XZSWatchdog, XZSEntitlements, XZSPlatformExpert, SweetHID, SweetBattery, sweet_hfs, sweet_libpthread, sweet_bearssl, xzs_amfi (COMPILED_AND_INTEGRATED)
-NEXT_OBJECTIVE=Unblock lsd LaunchServices database seeding (MobileInstallation / installd) so SpringBoard transitions to Home Screen
+NEXT_OBJECTIVE=Hardware touch/button driver integration (Synaptics ClearPad I2C touch & PMIC/GPIO keys) and USB networking
 ```
 
 ---
@@ -55,6 +55,18 @@ NEXT_OBJECTIVE=Unblock lsd LaunchServices database seeding (MobileInstallation /
   - Fixed `/usr/libexec/logd` `SIGTRAP` (`firehose_buffer_private.h`) and `execve()` `old_proc` leak (`kern_exec.c`, `kern_memorystatus.c`).
   - Aligned `/arm-io/disp0` ADT `canvas-width=1125` / `canvas-height=2436` with `AppleCLCD` and implemented `1125x2436 -> 1080x1920` fixed-point scaling with `BGRA -> RGBA` swizzle in `XZSFramebuffer.cpp`.
   - Verified live on `BH905SX976`: zero panics past `t=550s`, over 360 userland processes spawned, `com.apple.datamigrator` exited cleanly (`0x0`), and `backboardd` + `SpringBoard` presented visible `1125x2436` `BGRA` GUI frames (`surface 2` & `surface 3`, swaps 1..4) onto the physical LCD panel.
+- **D10-M5 & D10-M6 (`lsd` DB Seeding, Skywalk Init, Fast `CAMetalContextCreate` & Full `SpringBoard` Home Screen Unlock on Physical LCD)**: **COMPLETE & VERIFIED on physical silicon (`BH905SX976`)**:
+  - Added `udid-version = 2` to `/product` (`d22ap_product_node.h`), `serial-number` to `/`, and `mac-address-wifi0`, `mac-address-bluetooth0`, `mlb-serial-number` to `/chosen` (`adt.c`), eliminating `MobileGestalt`'s 5s-per-bundle `UniqueDeviceID` timeout so `lsd` loads its persistent database from `userdata` in `< 5s`.
+  - Enabled `skywalk_init()`, `gif_init()`, `ether_family_init()`, and `tcp_ccdbg_control_register()`, fixed `skmem_cache_init` (`ncpu = ml_wait_max_cpus()`), and set `max_kfs_events = 2048` (`vfs_fsevents.c`).
+  - Enabled `DKIOCISSOLIDSTATE = 1` (`HFS_SSD`) in `xzs_sdhci.c` and fixed 32-bit `writebase` overflow in `hfs_clonefile` (`hfs_readwrite.c`), eliminating spinning-disk hotfile relocation on eMMC.
+  - Accelerated `xzs_fbcon_scroll_up` (`xzs_fbcon.h`) with 16-row jump-scrolling + cell diffing and fast-forwarded `backboardd`'s 300x 100ms `IOAcceleratorES` wait in `__semwait_signal_nocancel` (`kern_sig.c`).
+  - Updated `XZSSurface.cpp`, `XZSFramebuffer.cpp`, and `SweetHID.cpp` (`kIOHIDDigitizerEventFromEdgeTip` edge flag + automated bottom-edge swipe-up `(540,1910)->(540,700)` and periodic `kHIDUsage_Csmr_Menu` keep-awake).
+  - Resolved 4 physical LCD scanout & cache-coherency bugs preventing the Apple boot logo, Lock Screen, and Home Screen from appearing on the physical LCD:
+    1. Disabled XNU's conflicting `video_console.c` (`vcputc_options`) in `serial_console.c` and `video_console.c` so it never overwrites `0x98000000` with live console text.
+    2. Masked `AppleCLCD::fPhys` (`video.v_baseAddr & ~3ULL` -> `0x98000000`), unified `AppleCLCD::fPixels` with the uncached `VM_WIMG_WCOMB` mapping `xzs_fb_kernel_va()` (`g_m8_fb_va`), and allocated `fSurface` as a clean wired `IOBufferMemoryDescriptor` instead of a cacheable `VM_WIMG_DEFAULT` alias of `0x98000001`.
+    3. Rendered the centered white Apple boot logo on pure black directly in `xzs_d8m8_fb_init()` (`FB_PATTERN = APPLE_BOOT_LOGO_WHITE_ON_BLACK`, `center_px = 0xffffffff`) and bypassed `xzs_fbcon_attach()` during iOS RootFS boots (`!is_md0 && keep_console == 0`).
+    4. Added atomic spinlock `g_m8_kick_lock` around `xzs_d8m8_kick_frame_ex()` so 4-core SMP callers never double-trigger `CTL_START` mid-frame or wedge `DSI_STATUS` (`0x00994008`).
+  - Verified on `BH905SX976` that the physical LCD immediately displays the centered white Apple boot logo (`kicks=1..6`, `center_px=0xffffffff`), transitions to the `SpringBoard` Lock Screen (`swap 15..20`, `sample=0x34c759`, `kicks=10..15`), and unlocks directly to the **`SpringBoard` Home Screen** (`swap 21..37`, `non_black=2816..2829, max_rgb=0xff`, `kicks=16..28`) on the physical `1080x1920` LCD!
 
 ### 1.2 Display Pipeline Architecture (CPU vs. GPU / Hardware Display Engine)
 - **Pixel Rendering (vẽ vào RAM Framebuffer `0x98000000`)**: Hiện thực hiện bằng **CPU** (nhân ARM64 Kryo ghi font chữ 8x16 và dải màu 32-bit `XRGB8888` vào vùng nhớ Framebuffer; ở tầng iOS `backboardd` / `SpringBoard` / `RenderServer` theo kiến trúc `ios-sweet` cũng sử dụng CPU software rasterization qua `IOSurface` + `IOMobileFramebuffer`). GPU Adreno 530 chưa cần dùng ở giai đoạn này.

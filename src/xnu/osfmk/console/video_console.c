@@ -1230,6 +1230,10 @@ gc_update_color(int color, boolean_t fore)
 void
 vcputc_options(char c, __unused bool poll)
 {
+#if CONFIG_XZS_BRINGUP
+	(void)c;
+	return;
+#endif
 	if (gc_initialized && gc_enabled) {
 		VCPUTC_LOCK_LOCK();
 		if (gc_enabled) {
@@ -3056,6 +3060,10 @@ void
 vcattach(void)
 {
 	vm_initialized = TRUE;
+#if CONFIG_XZS_BRINGUP
+	simple_lock_init(&vc_progress_lock, 0);
+	return;
+#endif
 
 #if defined(CONFIG_VC_PROGRESS_METER_SUPPORT)
 	const boot_args * bootargs  = (typeof(bootargs))PE_state.bootArgs;

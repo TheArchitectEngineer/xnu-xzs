@@ -38,9 +38,14 @@
 
 #if defined(SWEET) || defined(XZS)
 extern "C" {
+uintptr_t xzs_fb_kernel_va(void);
+uint32_t xzs_fb_kick_count(void);
 void xzs_fb_present_kick(void);
 void xzs_fbcon_detach(void);
 bool xzs_fbcon_is_active(void);
+void xzs_watchdog_pet(void);
+bool g_xzs_springboard_surface_ready = false;
+bool g_xzs_gui_presented = false;
 }
 #include <IOKit/IOService.h>
 #include <IOKit/IOUserClient.h>
@@ -152,6 +157,70 @@ public:
 
 OSDefineMetaClassAndStructors(IOMobileFramebufferUserClient, IOUserClient);
 
+static void
+sweet_draw_apple_logo(uintptr_t base, uint32_t width, uint32_t height, uint32_t rowBytes)
+{
+	if (base == 0 || width == 0 || height == 0 || rowBytes < width * 4) {
+		return;
+	}
+	int32_t cx = (int32_t)(width / 2);
+	int32_t cy = (int32_t)(height / 2);
+	const int32_t radius = 90; /* ~180x220 Apple boot logo at 1080x1920 */
+
+	for (uint32_t y = 0; y < height; y++) {
+		if ((y & 63u) == 0u) {
+			xzs_watchdog_pet();
+		}
+		uint32_t *row = (uint32_t *)(base + (uint64_t)y * rowBytes);
+		int32_t dy = (int32_t)y - cy;
+		int32_t v = (dy * 1000) / radius;
+		bool in_v_band = (v >= -1450 && v <= 950);
+
+		for (uint32_t x = 0; x < width; x++) {
+			uint32_t pixel = 0xff000000u;
+			if (in_v_band) {
+				int32_t dx = (int32_t)x - cx;
+				int32_t u = (dx * 1000) / radius;
+				if (u >= -1000 && u <= 1000) {
+					bool on = false;
+					/* Tilted lens leaf at top: center (160, -960), angle -42 deg */
+					int32_t du = u - 160;
+					int32_t dv = v + 960;
+					int32_t lu = (du * 743 - dv * 669) / 1000;
+					int32_t lv = (du * 669 + dv * 743) / 1000;
+					int32_t d1 = lu * lu + (lv - 290) * (lv - 290);
+					int32_t d2 = lu * lu + (lv + 290) * (lv + 290);
+					if (d1 <= 420 * 420 && d2 <= 420 * 420) {
+						on = true;
+					}
+					/* Apple body: two tapered lobes minus circular right-side bite */
+					int32_t bdx = u - 940;
+					int32_t bdy = v + 60;
+					if (!on && (bdx * bdx + bdy * bdy > 430 * 430) && v >= -820 && v <= 900) {
+						int32_t au = u < 0 ? -u : u;
+						int32_t uc = 330 - (v * 95) / 1000;
+						int32_t rx = 530 - (v * 145) / 1000;
+						int32_t ry = 800;
+						int32_t vc = 50;
+						if (rx > 100) {
+							int32_t nx = ((au - uc) * 1000) / rx;
+							int32_t ny = ((v - vc) * 1000) / ry;
+							if (nx * nx + ny * ny <= 1000 * 1000) {
+								on = true;
+							}
+						}
+					}
+					if (on) {
+						pixel = 0xffffffffu;
+					}
+				}
+			}
+			row[x] = pixel;
+		}
+	}
+	__asm__ volatile("dmb oshst" ::: "memory");
+}
+
 bool
 AppleCLCD::start(IOService *provider)
 {
@@ -161,7 +230,7 @@ AppleCLCD::start(IOService *provider)
 		return false;
 	}
 	PE_current_console(&video);
-	fPhys = video.v_baseAddr;
+	fPhys = video.v_baseAddr & ~3ULL;
 	fWidth = (uint32_t)video.v_width;
 	fHeight = (uint32_t)video.v_height;
 	fRowBytes = (uint32_t)video.v_rowBytes;
@@ -190,9 +259,15 @@ AppleCLCD::start(IOService *provider)
 	fLock = IOLockAlloc();
 	fClients = OSArray::withCapacity(4);
 	fSurface = sweet_surface_create_physical(fPhys, fWidth, fHeight, fRowBytes, SWEET_FB_FORMAT_BGRA);
-	fPixels = fSurface != NULL ? fSurface->kernelAddress() : 0;
+	if (fSurface != NULL && fSurface->kernelAddress() != 0) {
+		sweet_draw_apple_logo(fSurface->kernelAddress(), fWidth, fHeight, fRowBytes);
+	}
+	fPixels = xzs_fb_kernel_va();
+	if (fPixels == 0 && fSurface != NULL) {
+		fPixels = fSurface->kernelAddress();
+	}
 	fWorkLoop = IOWorkLoop::workLoop();
-	if (fLock == NULL || fClients == NULL || fPixels == 0 || fWorkLoop == NULL) {
+	if (fLock == NULL || fClients == NULL || fSurface == NULL || fPixels == 0 || fWorkLoop == NULL) {
 		IOLog("SWEET FB: setup failed\n");
 		OSSafeReleaseNULL(fSurface);    /* stays published: also held by the table */
 		OSSafeReleaseNULL(fWorkLoop);
@@ -208,12 +283,27 @@ AppleCLCD::start(IOService *provider)
 	fFlushTicks = (hz == 0 || hz >= 60) ? 1 : 60 / hz;
 	fVsync->setTimeoutUS(SWEET_FB_VSYNC_US);
 
+	/* For iOS RootFS boot (non-md0), detach boot console and present centered white Apple boot logo on physical LCD */
+	char rd_arg[32] = "";
+	int keep_console = 0;
+	(void)PE_parse_boot_argn("sweetfb_console", &keep_console, sizeof(keep_console));
+	bool is_md0 = !PE_parse_boot_argn("rd", rd_arg, sizeof(rd_arg)) ||
+	    strncmp(rd_arg, "md", 2) == 0;
+	if (!is_md0 && keep_console == 0) {
+		fConsolePaused = true;
+		xzs_fbcon_detach();
+		sweet_draw_apple_logo(fPixels, fWidth, fHeight, fRowBytes);
+		xzs_fb_present_kick();
+		IOLog("SWEET FB: detached boot console and presented Apple boot logo at 0x%llx (va=0x%lx kicks=%u)\n",
+		    fPhys, (unsigned long)fPixels, xzs_fb_kick_count());
+	}
+
 	setProperty(kIOUserClientClassKey, "IOMobileFramebufferUserClient");
 	setProperty("external", false);
 	setProperty("DisplayPipePlaneBaseAlignment", 64ULL, 32);
 	registerService();
-	IOLog("SWEET FB: AppleCLCD %ux%u stride %u at 0x%llx, default surface %u, presented as %ux%u\n",
-	    fWidth, fHeight, fRowBytes, fPhys, fSurface->id, fLogicalW, fLogicalH);
+	IOLog("SWEET FB: AppleCLCD %ux%u stride %u at 0x%llx (va=0x%lx), default surface %u, presented as %ux%u\n",
+	    fWidth, fHeight, fRowBytes, fPhys, (unsigned long)fPixels, fSurface->id, fLogicalW, fLogicalH);
 	return true;
 }
 
@@ -333,7 +423,7 @@ AppleCLCD::present(const uint8_t *rec)
 			continue;
 		}
 		SweetSurface *s = sweet_surface_copy(id);
-		if (sweet_fb_swaps_logged < 16) {
+		if (sweet_fb_swaps_logged < 64) {
 			sweet_fb_swaps_logged++;
 			IOLog("SWEET FB: swap %u layer %u surface %u %ux%u fmt 0x%x bpr %u a %d,%d %dx%d b %d,%d %dx%d\n",
 			    get32(rec, 0x50), layer, id, s ? s->width : 0, s ? s->height : 0,
@@ -396,32 +486,68 @@ AppleCLCD::present(const uint8_t *rec)
 			src = 0;
 		}
 		if (src != 0 && bpe == 4) {
-			/* If fbcon is still active, check if this surface has any non-black pixels
-			 * before replacing the full-screen boot console log. */
-			if (!fConsolePaused) {
-				bool has_pixels = false;
-				uint32_t step_check_y = sh > 64 ? (uint32_t)(sh / 64) : 1u;
-				for (int32_t cy = sy; cy < sy + sh && !has_pixels; cy += (int32_t)step_check_y) {
-					const uint32_t *crow = (const uint32_t *)(src + s->offset + (uint64_t)cy * s->bytesPerRow);
-					for (int32_t cx = sx; cx < sx + sw; cx += 8) {
-						if ((crow[cx] & 0x00ffffffu) != 0) {
-							has_pixels = true;
-							break;
+			uint32_t non_black_samples = 0;
+			uint32_t max_rgb = 0;
+			uint32_t sample_rgb = 0;
+			uint32_t step_check_y = sh > 64 ? (uint32_t)(sh / 64) : 1u;
+			for (int32_t cy = sy; cy < sy + sh; cy += (int32_t)step_check_y) {
+				const uint32_t *crow = (const uint32_t *)(src + s->offset + (uint64_t)cy * s->bytesPerRow);
+				for (int32_t cx = sx; cx < sx + sw; cx += 8) {
+					uint32_t rgb = crow[cx] & 0x00ffffffu;
+					if (rgb != 0) {
+						non_black_samples++;
+						if (sample_rgb == 0) {
+							sample_rgb = rgb;
 						}
+						uint32_t c0 = rgb & 0xffu;
+						uint32_t c1 = (rgb >> 8) & 0xffu;
+						uint32_t c2 = (rgb >> 16) & 0xffu;
+						if (c0 > max_rgb) max_rgb = c0;
+						if (c1 > max_rgb) max_rgb = c1;
+						if (c2 > max_rgb) max_rgb = c2;
 					}
 				}
-				if (has_pixels) {
+			}
+
+			/* If fbcon is still active, wait until SpringBoard has created its UI surfaces
+			 * and presented a non-black frame before detaching the boot console. */
+			if (!fConsolePaused) {
+				if (g_xzs_springboard_surface_ready && non_black_samples > 0 && max_rgb >= 0x20u) {
 					int keep_console = 0;
 					fConsolePaused = true;
-					IOLog("SWEET FB: first visible GUI frame presented (surface %u %ux%u -> %ux%u), switching LCD to iOS GUI\n",
-					    s->id, s->width, s->height, fWidth, fHeight);
+					g_xzs_gui_presented = true;
+					IOLog("SWEET FB: first visible SpringBoard GUI frame presented (swap %u surface %u %ux%u -> %ux%u non_black=%u max_rgb=0x%02x sample=0x%06x), switching LCD to iOS GUI\n",
+					    get32(rec, 0x50), s->id, s->width, s->height, fWidth, fHeight,
+					    non_black_samples, max_rgb, sample_rgb);
 					if (!PE_parse_boot_argn("sweetfb_console", &keep_console, sizeof(keep_console)) || keep_console == 0) {
 						xzs_fbcon_detach();
 					}
 				} else if (xzs_fbcon_is_active()) {
-					/* Keep full-screen console visible while GUI surface is still all-black */
+					if (sweet_fb_swaps_logged <= 64) {
+						IOLog("SWEET FB: swap %u keeping boot console active (sb_ready=%d non_black=%u max_rgb=0x%02x)\n",
+						    get32(rec, 0x50), g_xzs_springboard_surface_ready ? 1 : 0, non_black_samples, max_rgb);
+					}
 					s->release();
 					continue;
+				}
+			} else {
+				/* Never overwrite the rendered iOS GUI on the physical LCD with an all-black or dimming fade-out frame */
+				if (non_black_samples == 0 || max_rgb < 0x20u) {
+					if (sweet_fb_swaps_logged <= 64) {
+						IOLog("SWEET FB: swap %u skipping dim/black surface %u (non_black=%u max_rgb=0x%02x) to preserve GUI on LCD\n",
+						    get32(rec, 0x50), s->id, non_black_samples, max_rgb);
+					}
+					s->release();
+					continue;
+				}
+				if (g_xzs_springboard_surface_ready && !g_xzs_gui_presented) {
+					g_xzs_gui_presented = true;
+					IOLog("SWEET FB: first visible SpringBoard GUI frame presented (swap %u surface %u %ux%u -> %ux%u non_black=%u max_rgb=0x%02x sample=0x%06x), switching LCD to iOS GUI\n",
+					    get32(rec, 0x50), s->id, s->width, s->height, fWidth, fHeight,
+					    non_black_samples, max_rgb, sample_rgb);
+				} else if (sweet_fb_swaps_logged <= 64) {
+					IOLog("SWEET FB: swap %u presented surface %u (non_black=%u max_rgb=0x%02x sample=0x%06x)\n",
+					    get32(rec, 0x50), s->id, non_black_samples, max_rgb, sample_rgb);
 				}
 			}
 
@@ -450,6 +576,11 @@ AppleCLCD::present(const uint8_t *rec)
 	}
 	if (any_drawn) {
 		xzs_fb_present_kick();
+		if (sweet_fb_swaps_logged <= 64) {
+			uint32_t center_px = *(volatile uint32_t *)(fPixels + (uint64_t)(fHeight / 2) * fRowBytes + (fWidth / 2) * 4);
+			IOLog("SWEET FB: swap %u kicked MDP5 (kicks=%u center_px=0x%08x)\n",
+			    get32(rec, 0x50), xzs_fb_kick_count(), center_px);
+		}
 	}
 }
 
@@ -587,6 +718,12 @@ IOMobileFramebufferUserClient::externalMethod(uint32_t selector, IOExternalMetho
 	case kSweetFBRequestPowerChange:
 		if (args->scalarInputCount >= 1) {
 			bool off = args->scalarInput[0] == 0;
+			int allow_off = 0;
+			PE_parse_boot_argn("sweetfb_allow_off", &allow_off, sizeof(allow_off));
+			if (off && !allow_off) {
+				IOLog("SWEET FB: ignoring display off request (keeping LCD active)\n");
+				break;
+			}
 			IOLockLock(fFB->fLock);
 			if (off != fFB->fPowerOff) {
 				fFB->fPowerOff = off;

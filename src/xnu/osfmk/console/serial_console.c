@@ -251,6 +251,12 @@ get_cons_ops_index(void)
 static inline void
 _cnputc(char c, bool poll)
 {
+#if CONFIG_XZS_BRINGUP
+	extern void xzs_bringup_console_write(const void *buf, int len);
+	xzs_bringup_console_write(&c, 1);
+	(void)poll;
+	return;
+#endif
 	bool in_debugger = (kernel_debugger_entry_count > 0);
 	const uint32_t idx = get_cons_ops_index();
 
@@ -287,6 +293,8 @@ _cnputs(char *c, int size, bool poll)
 #if CONFIG_XZS_BRINGUP
 	extern void xzs_bringup_console_write(const void *buf, int len);
 	xzs_bringup_console_write(c, size);
+	(void)poll;
+	return;
 #endif
 
 	while (size-- > 0) {
