@@ -40,6 +40,7 @@
 extern "C" {
 uintptr_t xzs_fb_kernel_va(void);
 uint32_t xzs_fb_kick_count(void);
+void xzs_fb_wait_idle(void);
 void xzs_fb_present_kick(void);
 void xzs_fb_set_backlight(bool on);
 void xzs_fbcon_detach(void);
@@ -375,6 +376,12 @@ AppleCLCD::presenterMain(void *arg, __unused wait_result_t wr)
 		while (!fb->fPresentReady) {
 			IOLockSleep(fb->fLock, &fb->fPresentReady, THREAD_UNINT);
 		}
+		IOLockUnlock(fb->fLock);
+
+		/* Wait for any in-flight DSI scanout before latching latest swap & writing 0x98000000 */
+		xzs_fb_wait_idle();
+
+		IOLockLock(fb->fLock);
 		memcpy(rec, fb->fPending, SWEET_FB_SWAP_REC_SIZE);
 		fb->fPresentReady = false;
 		fb->fDirty = false;
@@ -494,6 +501,18 @@ AppleCLCD::renderSlice(uint32_t worker_id, uint32_t total_workers)
 				uint32_t a = from[c];
 				to[x] = (w == 0 || a == from[c + 1u]) ? a : xzs_fb_blend(a, from[c + 1u], w);
 			}
+		} else if (cx0 == 0 && cx1 == 1080 && sw == 1125) {
+			/*
+			 * Exact 25:24 ratio (1125 -> 1080): every 24 output pixels (96 bytes)
+			 * map 1:1 to 24 contiguous source pixels, skipping every 25th pixel.
+			 */
+			uint32_t *d = to;
+			const uint32_t *s = from;
+			for (int32_t blk = 0; blk < 45; blk++) {
+				memcpy(d, s, 24 * sizeof(uint32_t));
+				d += 24;
+				s += 25;
+			}
 		} else {
 			int32_t x = cx0;
 			if ((x & 1) != 0 && x < cx1) {
@@ -543,13 +562,17 @@ get32(const uint8_t *p, uint32_t off)
 static uint32_t sweet_fb_swaps_logged;
 static uint64_t sweet_fb_swap_count;
 
-/* Queue the swap for presentation on the next vsync tick. */
+/* Present the swap immediately via presenterMain (and re-arm on vsync if needed). */
 void
 AppleCLCD::swap(const uint8_t *rec)
 {
 	IOLockLock(fLock);
 	memcpy(fPending, rec, SWEET_FB_SWAP_REC_SIZE);
 	fDirty = true;
+	if (!fPowerOff) {
+		fPresentReady = true;
+		IOLockWakeup(fLock, &fPresentReady, true);
+	}
 	IOLockUnlock(fLock);
 	if ((++sweet_fb_swap_count % 1000) == 0) {
 		IOLog("XZS FB: %llu swaps\n", sweet_fb_swap_count);

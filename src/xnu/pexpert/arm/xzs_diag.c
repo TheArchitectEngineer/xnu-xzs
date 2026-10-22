@@ -1215,6 +1215,14 @@ xzs_fb_kick_count(void)
 }
 
 void
+xzs_fb_wait_idle(void)
+{
+	if (g_m8_ctl_configured && g_m8_stream_configured && g_m8_frame_in_flight) {
+		(void)xzs_d8m8_wait_frame_idle(16000u);
+	}
+}
+
+void
 xzs_fb_present_kick(void)
 {
 	__asm__ volatile("dsb sy" ::: "memory");

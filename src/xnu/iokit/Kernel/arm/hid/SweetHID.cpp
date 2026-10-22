@@ -286,7 +286,7 @@ IOHIDEventService::getProductID()
 UInt32
 IOHIDEventService::getReportInterval()
 {
-	return 10000;	/* us */
+	return 4000;	/* us (250 Hz digitizer report interval) */
 }
 
 IOReturn
@@ -429,30 +429,10 @@ SweetHIDButtons::testFired(OSObject *owner, IOTimerEventSource *sender)
 		return;
 	}
 
-	/*
-	 * Once SpringBoard has presented its first frame on the LCD:
-	 * - On steps 2..6 (unless real user touch already occurred), perform a single
-	 *   bottom-edge swipe-up gesture to unlock CoverSheet to the Home Screen.
-	 * - After step 6, stop synthetic input unless boot-arg sweethidtest=N was explicitly set.
-	 */
-	UInt32 step = self->fTestCount++;
-	if (step < 7 && !s_real_touch_seen) {
-		if (step >= 2 && step <= 6) {
-			UInt32 sub = step - 2;
-			static const int swipe_y[5] = { 1910, 1550, 1150, 700, 700 };
-			if (gSweetTouch) {
-				gSweetTouch->touch(0, sub < 4, 540, swipe_y[sub]);
-			}
-			sender->setTimeoutMS(sub < 4 ? 60 : 1500);
-			return;
-		}
-		sender->setTimeoutMS(1500);
-		return;
-	}
-
 	if (self->fTestSecs == 0) {
 		return;
 	}
+	UInt32 step = self->fTestCount++;
 	bool press = (step & 1) == 0;
 	self->key(kHIDUsage_Csmr_Menu, press);
 	sender->setTimeoutMS(press ? 100 : self->fTestSecs * 1000);
@@ -757,7 +737,7 @@ static inline void
 xzs_scl_hi(void)
 {
 	xzs_tlmm_wr(XZS_GPIO_CFG(XZS_I2C_SCL_PIN), XZS_I2C_PIN_HI_CFG);
-	for (unsigned i = 0; i < 200; i++) {
+	for (unsigned i = 0; i < 4000; i++) {
 		if (xzs_tlmm_rd(XZS_GPIO_IN_OUT(XZS_I2C_SCL_PIN)) & 1u) {
 			break;
 		}
@@ -875,6 +855,7 @@ xzs_rmi4_read(uint8_t slave, uint8_t reg, uint8_t *buf, uint32_t len)
 		xzs_i2c_stop_cond();
 		return false;
 	}
+	IODelay(5);
 	xzs_i2c_start_cond();
 	if (!xzs_i2c_tx_byte((uint8_t)((slave << 1) | 1u))) {
 		xzs_i2c_stop_cond();
@@ -1064,6 +1045,7 @@ xzs_touch_thread(void *arg __unused, wait_result_t wr __unused)
 	uint32_t active_mask = 0;
 	int last_x[SWEET_TOUCH_FINGERS] = { 0 };
 	int last_y[SWEET_TOUCH_FINGERS] = { 0 };
+	uint8_t lift_streak[SWEET_TOUCH_FINGERS] = { 0 };
 	uint32_t poll_tick = 0;
 	uint32_t irq_events_logged = 0;
 	uint32_t fail_streak = 0;
@@ -1072,7 +1054,7 @@ xzs_touch_thread(void *arg __unused, wait_result_t wr __unused)
 		uint32_t irq_pin = xzs_tlmm_rd(XZS_GPIO_IN_OUT(XZS_TOUCH_IRQ_PIN)) & 1u;
 		poll_tick++;
 		uint8_t st[2] = { 0 };
-		if (irq_pin == 0u || (poll_tick & 7u) == 0u) {
+		if (irq_pin == 0u || (poll_tick & 15u) == 0u) {
 			if (f01_data != 0) {
 				(void)xzs_rmi4_read(slave, f01_data, st, 2);
 				/* If device reset/unconfigured bit 7 set, re-assert F01 Configured */
@@ -1082,7 +1064,7 @@ xzs_touch_thread(void *arg __unused, wait_result_t wr __unused)
 				}
 			}
 		}
-		if (irq_pin == 0u || st[1] != 0u || active_mask != 0u || (poll_tick & 3u) == 0u) {
+		if (irq_pin == 0u || st[1] != 0u || active_mask != 0u) {
 			uint32_t next_mask = 0;
 			if (f12_data != 0) {
 				if (f12_page != 0) {
@@ -1090,6 +1072,12 @@ xzs_touch_thread(void *arg __unused, wait_result_t wr __unused)
 				}
 				uint8_t raw[16] = { 0 }; /* 2 fingers * 8 bytes */
 				bool ok = xzs_rmi4_read(slave, (uint8_t)(f12_data + f12_data1_off), raw, sizeof(raw));
+				/* If finger is active during an IRQ and In-Cell FIFO returned transient 00, retry once after 150us */
+				if (ok && active_mask != 0u && (irq_pin == 0u || st[1] != 0u) &&
+				    raw[0] == 0u && raw[8] == 0u) {
+					IODelay(150);
+					ok = xzs_rmi4_read(slave, (uint8_t)(f12_data + f12_data1_off), raw, sizeof(raw));
+				}
 				if ((irq_pin == 0u || st[1] != 0u) && irq_events_logged < 32) {
 					irq_events_logged++;
 					IOLog("XZS TOUCH IRQ: gpio125=%u st=%02x/%02x reg=0x%02x raw=%02x %02x %02x %02x %02x %02x %02x %02x\n",
@@ -1117,19 +1105,27 @@ xzs_touch_thread(void *arg __unused, wait_result_t wr __unused)
 						}
 						if (down && x >= 0 && x <= 1079 && y >= 0 && y <= 1919) {
 							s_real_touch_seen = true;
+							lift_streak[i] = 0;
 							next_mask |= (1u << i);
 							last_x[i] = x;
 							last_y[i] = y;
 							sweet_hid_touch(i, 1, x, y);
 						} else if (active_mask & (1u << i)) {
-							sweet_hid_touch(i, 0, last_x[i], last_y[i]);
+							/* Require 3 consecutive lift samples (~12ms) to prevent mid-swipe dropout */
+							if (++lift_streak[i] < 3u) {
+								next_mask |= (1u << i);
+							} else {
+								lift_streak[i] = 0;
+								sweet_hid_touch(i, 0, last_x[i], last_y[i]);
+							}
 						}
 					}
 					active_mask = next_mask;
 				} else if (active_mask != 0u) {
-					if (++fail_streak >= 2u) {
+					if (++fail_streak >= 3u) {
 						for (int i = 0; i < 2; i++) {
 							if (active_mask & (1u << i)) {
+								lift_streak[i] = 0;
 								sweet_hid_touch(i, 0, last_x[i], last_y[i]);
 							}
 						}
@@ -1167,7 +1163,7 @@ xzs_touch_thread(void *arg __unused, wait_result_t wr __unused)
 				}
 			}
 		}
-		IOSleep(active_mask != 0u ? 8 : 12);
+		IOSleep(active_mask != 0u ? 4 : 6);
 	}
 }
 

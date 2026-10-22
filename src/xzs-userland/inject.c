@@ -1183,6 +1183,8 @@ xzs_install_wallpaper_into_window(id win, id ui_img, bool bring_to_front)
 	}
 }
 
+static bool g_sb_wallpaper_logged = false;
+
 static void
 xzs_sb_ensure_wallpaper(void)
 {
@@ -1227,7 +1229,10 @@ xzs_sb_ensure_wallpaper(void)
 			}
 		}
 	}
-	xzs_log("[XZS-INJECT] SpringBoard: installed raster iOS 16 WWDC22 UIImage wallpaper (375x812 BMP)\n");
+	if (!g_sb_wallpaper_logged) {
+		g_sb_wallpaper_logged = true;
+		xzs_log("[XZS-INJECT] SpringBoard: installed raster iOS 16 WWDC22 UIImage wallpaper (375x812 BMP)\n");
+	}
 }
 
 static void
@@ -1372,11 +1377,16 @@ xzs_sb_ensure_all_apps(id model)
 	    ws_cnt, sb_cnt, missing_cnt, registered_cnt, added_proxy_cnt, model_added_cnt);
 }
 
+static bool g_sb_homescreen_settled = false;
+
 static void
 xzs_sb_post_boot_check(__unused void *ctx)
 {
 	/* 0. Ensure iOS 16 WWDC22 wallpaper is visible in _SBWallpaperSecureWindow */
 	xzs_sb_ensure_wallpaper();
+	if (g_sb_homescreen_settled) {
+		return;
+	}
 
 	/* 1. Auto-unlock Lock Screen unless autounlock=0 is set in boot-args */
 	char bootargs[512] = "";
@@ -1386,6 +1396,7 @@ xzs_sb_post_boot_check(__unused void *ctx)
 	    strstr(bootargs, "autounlock=0") != NULL) {
 		autounlock = false;
 	}
+	BOOL is_unlocked = NO;
 	Class cls_lsm = objc_getClass("SBLockScreenManager");
 	SEL sel_shared = sel_registerName("sharedInstance");
 	SEL sel_locked = sel_registerName("isUILocked");
@@ -1397,13 +1408,16 @@ xzs_sb_post_boot_check(__unused void *ctx)
 			if (locked && autounlock && class_respondsToSelector(object_getClass(lsm), sel_unlock)) {
 				BOOL ok = ((BOOL (*)(id, SEL, long, id))objc_msgSend)(lsm, sel_unlock, 24L, NULL);
 				xzs_log("[XZS-INJECT] SpringBoard: SBLockScreenManager unlockUIFromSource:24 -> %d\n", ok ? 1 : 0);
+				is_unlocked = ok;
 			} else {
 				xzs_log("[XZS-INJECT] SpringBoard: SBLockScreenManager isUILocked=%d\n", locked ? 1 : 0);
+				is_unlocked = !locked;
 			}
 		}
 	}
 
 	/* 2. Inspect SBIconController Home Screen pages & ensure all 39 apps are present */
+	long final_page_cnt = 0;
 	Class cls_ic = objc_getClass("SBIconController");
 	if (cls_ic && class_getClassMethod(cls_ic, sel_shared)) {
 		id ic = ((id (*)(Class, SEL))objc_msgSend)(cls_ic, sel_shared);
@@ -1411,8 +1425,6 @@ xzs_sb_post_boot_check(__unused void *ctx)
 		SEL sel_rf = sel_registerName("rootFolder");
 		id model = (ic && class_respondsToSelector(object_getClass(ic), sel_model)) ?
 		    ((id (*)(id, SEL))objc_msgSend)(ic, sel_model) : NULL;
-
-		xzs_sb_ensure_all_apps(model);
 
 		id rf = (ic && class_respondsToSelector(object_getClass(ic), sel_rf)) ?
 		    ((id (*)(id, SEL))objc_msgSend)(ic, sel_rf) :
@@ -1435,6 +1447,7 @@ xzs_sb_post_boot_check(__unused void *ctx)
 				}
 			}
 			if (page_cnt < 2 && model) {
+				xzs_sb_ensure_all_apps(model);
 				if (class_respondsToSelector(object_getClass(model), sel_registerName("clearDesiredIconStateWithOptions:"))) {
 					((void (*)(id, SEL, unsigned long))objc_msgSend)(model,
 					    sel_registerName("clearDesiredIconStateWithOptions:"), 0UL);
@@ -1460,23 +1473,24 @@ xzs_sb_post_boot_check(__unused void *ctx)
 						p1_icons = ((long (*)(id, SEL))objc_msgSend)(l1, sel_registerName("numberOfIcons"));
 					}
 				}
+				if (model && class_respondsToSelector(object_getClass(model), sel_registerName("saveIconStateIfNeeded"))) {
+					((void (*)(id, SEL))objc_msgSend)(model, sel_registerName("saveIconStateIfNeeded"));
+				}
+				SEL sel_relayout = sel_registerName("layoutIconLists:domino:forceRelayout:");
+				if (ic && class_respondsToSelector(object_getClass(ic), sel_relayout)) {
+					((void (*)(id, SEL, double, BOOL, BOOL))objc_msgSend)(ic, sel_relayout, 0.0, NO, YES);
+				}
 				xzs_log("[XZS-INJECT] SpringBoard: rebuilt SBIconModel -> pages=%ld (page0=%ld icons, page1=%ld icons)\n",
 				    page_cnt, p0_icons, p1_icons);
 			} else {
 				xzs_log("[XZS-INJECT] SpringBoard: HomeScreen rootFolder pages=%ld (page0=%ld icons, page1=%ld icons)\n",
 				    page_cnt, p0_icons, p1_icons);
 			}
-		}
-		if (model && class_respondsToSelector(object_getClass(model), sel_registerName("saveIconStateIfNeeded"))) {
-			((void (*)(id, SEL))objc_msgSend)(model, sel_registerName("saveIconStateIfNeeded"));
-		}
-		SEL sel_relayout = sel_registerName("layoutIconLists:domino:forceRelayout:");
-		if (ic && class_respondsToSelector(object_getClass(ic), sel_relayout)) {
-			((void (*)(id, SEL, double, BOOL, BOOL))objc_msgSend)(ic, sel_relayout, 0.0, NO, YES);
+			final_page_cnt = page_cnt;
 		}
 	}
 
-	/* 3. Log visible UIWindow count & schedule a follow-up check if first pass */
+	/* 3. Log visible UIWindow count & mark settled once 2 pages + unlocked */
 	Class cls_win = objc_getClass("UIWindow");
 	SEL sel_all = sel_registerName("allWindowsIncludingInternalWindows:onlyVisibleWindows:");
 	if (cls_win && class_getClassMethod(cls_win, sel_all)) {
@@ -1484,8 +1498,12 @@ xzs_sb_post_boot_check(__unused void *ctx)
 		long wcnt = wins ? ((long (*)(id, SEL))objc_msgSend)(wins, sel_registerName("count")) : 0;
 		xzs_log("[XZS-INJECT] SpringBoard: visible UIWindows=%ld\n", wcnt);
 	}
+	if (final_page_cnt >= 2 && (is_unlocked || !autounlock)) {
+		g_sb_homescreen_settled = true;
+		return;
+	}
 	if (ctx == NULL) {
-		dispatch_after_f(dispatch_time(DISPATCH_TIME_NOW, 8ULL * NSEC_PER_SEC),
+		dispatch_after_f(dispatch_time(DISPATCH_TIME_NOW, 6ULL * NSEC_PER_SEC),
 		    &_dispatch_main_q, (void *)1, xzs_sb_post_boot_check);
 	}
 }
@@ -1556,18 +1574,14 @@ xzs_init_springboard(void)
 		    getpid());
 		usleep(6000000);
 	} else {
-		xzs_log("[XZS-INJECT] SpringBoard[%d]: hooks active (plain_vibrancy=1, JPEG snapshots=1); waiting 3.0s for lsd\n",
+		xzs_log("[XZS-INJECT] SpringBoard[%d]: hooks active (plain_vibrancy=1, JPEG snapshots=1); waiting 1.0s for lsd\n",
 		    getpid());
-		usleep(3000000);
+		usleep(1000000);
 	}
 
-	dispatch_after_f(dispatch_time(DISPATCH_TIME_NOW, 4ULL * NSEC_PER_SEC),
+	dispatch_after_f(dispatch_time(DISPATCH_TIME_NOW, 3ULL * NSEC_PER_SEC),
 	    &_dispatch_main_q, NULL, xzs_sb_post_boot_check);
-	dispatch_after_f(dispatch_time(DISPATCH_TIME_NOW, 10ULL * NSEC_PER_SEC),
-	    &_dispatch_main_q, NULL, xzs_sb_post_boot_check);
-	dispatch_after_f(dispatch_time(DISPATCH_TIME_NOW, 20ULL * NSEC_PER_SEC),
-	    &_dispatch_main_q, NULL, xzs_sb_post_boot_check);
-	dispatch_after_f(dispatch_time(DISPATCH_TIME_NOW, 35ULL * NSEC_PER_SEC),
+	dispatch_after_f(dispatch_time(DISPATCH_TIME_NOW, 12ULL * NSEC_PER_SEC),
 	    &_dispatch_main_q, NULL, xzs_sb_post_boot_check);
 }
 
