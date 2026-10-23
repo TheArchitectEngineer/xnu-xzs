@@ -126,13 +126,13 @@ class AppleCLCD : public IOMobileFramebuffer {
 
 	IOWorkLoop         *fWorkLoop;
 	IOTimerEventSource *fVsync;
-	uint64_t            fVsyncCount;
 
 	static void vsyncFired(OSObject *owner, IOTimerEventSource *sender);
 	static void presenterMain(void *arg, wait_result_t wr);
 	static void helperMain(void *arg, wait_result_t wr);
 
 public:
+	uint64_t      fVsyncCount;
 	uint64_t      fPhys;
 	uint32_t      fWidth, fHeight, fRowBytes;
 	uint32_t      fLogicalW, fLogicalH;     /* size reported to userland */
@@ -147,6 +147,9 @@ public:
 	uint8_t       fPending[SWEET_FB_SWAP_REC_SIZE];     /* latest swap, not yet shown */
 	bool          fDirty;
 	bool          fPresentReady;
+	uint64_t      fLastWaitVsync;
+	uint32_t      fLastPresentedID;
+	uint64_t      fLastPresentedCRC;
 	uint32_t      fFlushTicks;    /* vsync ticks between panel copies */
 	bool          fPowerOff;      /* RequestPowerChange(0) */
 	uint32_t      fFadeStep;      /* fade-out steps done while off */
@@ -357,6 +360,7 @@ AppleCLCD::vsyncFired(OSObject *owner, IOTimerEventSource *sender)
 		    (IOMobileFramebufferUserClient *)fb->fClients->getObject(i);
 		client->notify(SWEET_FB_NOTIFY_VSYNC, values, 6);
 	}
+	IOLockWakeup(fb->fLock, &fb->fVsyncCount, false);
 	if (!fb->fPowerOff && fb->fDirty && (count % fb->fFlushTicks) == 0) {
 		fb->fPresentReady = true;
 		IOLockWakeup(fb->fLock, &fb->fPresentReady, true);
@@ -376,12 +380,6 @@ AppleCLCD::presenterMain(void *arg, __unused wait_result_t wr)
 		while (!fb->fPresentReady) {
 			IOLockSleep(fb->fLock, &fb->fPresentReady, THREAD_UNINT);
 		}
-		IOLockUnlock(fb->fLock);
-
-		/* Wait for any in-flight DSI scanout before latching latest swap & writing 0x98000000 */
-		xzs_fb_wait_idle();
-
-		IOLockLock(fb->fLock);
 		memcpy(rec, fb->fPending, SWEET_FB_SWAP_REC_SIZE);
 		fb->fPresentReady = false;
 		fb->fDirty = false;
@@ -729,6 +727,41 @@ AppleCLCD::present(const uint8_t *rec)
 			int32_t job_sy = full_surface_coords ? 0 : sy;
 			int32_t job_sw = full_surface_coords ? (int32_t)fLogicalW : sw;
 			int32_t job_sh = full_surface_coords ? (int32_t)fLogicalH : sh;
+
+			/*
+			 * Fast content signature over the source surface to skip redundant
+			 * 8.35 MB copies + DSI Command-Mode kicks when backboardd submits
+			 * an unchanged frame.
+			 */
+			uint32_t crc_lo = __builtin_arm_crc32w(0xffffffffu, s->id ^ mask);
+			uint32_t crc_hi = __builtin_arm_crc32w(0xffffffffu,
+			    ((uint32_t)job_sx << 16) ^ (uint32_t)job_sy ^ ((uint32_t)job_sw << 8) ^ (uint32_t)job_sh);
+			uint32_t row_step = (job_sh > 256) ? 4u : 1u;
+			uint32_t row_words = (uint32_t)job_sw / 2u;
+			if (row_words >= 16u) {
+				uint32_t col_stride = row_words / 16u;
+				for (int32_t ry = 0; ry < job_sh; ry += (int32_t)row_step) {
+					const uint64_t *row64 = (const uint64_t *)(src + s->offset +
+					    (uint64_t)(job_sy + ry) * s->bytesPerRow + (uint64_t)job_sx * 4u);
+					uint32_t shift = ((uint32_t)ry * 5u) % (col_stride ? col_stride : 1u);
+					for (uint32_t k = 0; k < 16u; k++) {
+						uint64_t v = row64[k * col_stride + shift];
+						crc_lo = __builtin_arm_crc32d(crc_lo, v);
+						crc_hi = __builtin_arm_crc32d(crc_hi, v ^ 0x9e3779b97f4a7c15ULL);
+					}
+				}
+			}
+			uint64_t frame_crc = ((uint64_t)crc_hi << 32) | crc_lo;
+			if (fConsolePaused && s->id == fLastPresentedID && frame_crc == fLastPresentedCRC) {
+				s->release();
+				continue;
+			}
+			fLastPresentedID = s->id;
+			fLastPresentedCRC = frame_crc;
+
+			/* Wait for any in-flight DSI scanout before writing 0x98000000 */
+			xzs_fb_wait_idle();
+
 			int32_t map_px0 = full_surface_coords ? 0 : px0;
 			int32_t map_pw  = full_surface_coords ? (int32_t)fWidth : pw;
 			int use_bilinear = 0;
@@ -938,6 +971,8 @@ IOMobileFramebufferUserClient::externalMethod(uint32_t selector, IOExternalMetho
 				fFB->fPowerOff = off;
 				fFB->fFadeStep = 0;
 				if (!off) {
+					fFB->fLastPresentedID = 0;
+					fFB->fLastPresentedCRC = 0;
 					fFB->fDirty = true;
 					fFB->fPresentReady = true;
 					IOLockWakeup(fFB->fLock, &fFB->fPresentReady, true);
@@ -948,7 +983,19 @@ IOMobileFramebufferUserClient::externalMethod(uint32_t selector, IOExternalMetho
 			IOLog("SWEET FB: display %s\n", off ? "off" : "on");
 		}
 		break;
-	case kSweetFBSwapWait:
+	case kSweetFBSwapWait: {
+		IOLockLock(fFB->fLock);
+		uint64_t curVsync = fFB->fVsyncCount;
+		if (!fFB->fPowerOff && fFB->fLastWaitVsync == curVsync) {
+			uint64_t deadline = 0;
+			clock_interval_to_deadline(16, kMillisecondScale, &deadline);
+			IOLockSleepDeadline(fFB->fLock, &fFB->fVsyncCount, deadline, THREAD_UNINT);
+			curVsync = fFB->fVsyncCount;
+		}
+		fFB->fLastWaitVsync = curVsync;
+		IOLockUnlock(fFB->fLock);
+		break;
+	}
 	default:
 		break;
 	}

@@ -541,7 +541,7 @@ SweetHIDTouch::touch(int finger, bool down, int x, int y)
 	IOLockUnlock(fLock);
 
 	static uint32_t s_touch_events_logged = 0;
-	if (was != down && s_touch_events_logged < 64) {
+	if (was != down && s_touch_events_logged < 8) {
 		s_touch_events_logged++;
 		IOLog("SWEET HID: touch %d %s at %d,%d\n", finger, down ? "down" : "up", x, y);
 	}
@@ -1045,7 +1045,8 @@ xzs_touch_thread(void *arg __unused, wait_result_t wr __unused)
 	uint32_t active_mask = 0;
 	int last_x[SWEET_TOUCH_FINGERS] = { 0 };
 	int last_y[SWEET_TOUCH_FINGERS] = { 0 };
-	uint8_t lift_streak[SWEET_TOUCH_FINGERS] = { 0 };
+	bool moved_since_down[SWEET_TOUCH_FINGERS] = { false };
+	uint32_t no_irq_ticks = 0;
 	uint32_t poll_tick = 0;
 	uint32_t irq_events_logged = 0;
 	uint32_t fail_streak = 0;
@@ -1053,119 +1054,187 @@ xzs_touch_thread(void *arg __unused, wait_result_t wr __unused)
 	for (;;) {
 		uint32_t irq_pin = xzs_tlmm_rd(XZS_GPIO_IN_OUT(XZS_TOUCH_IRQ_PIN)) & 1u;
 		poll_tick++;
-		uint8_t st[2] = { 0 };
-		if (irq_pin == 0u || (poll_tick & 15u) == 0u) {
-			if (f01_data != 0) {
+		if (irq_pin != 0u) {
+			no_irq_ticks++;
+		} else {
+			no_irq_ticks = 0;
+		}
+
+		/*
+		 * Only access the Synaptics In-Cell I2C bus when GPIO125 (irq_pin == 0)
+		 * asserts attention LOW, or if a finger has been held stationary without
+		 * an IRQ for > 60ms (no_irq_ticks >= 30), or every ~250ms idle watchdog.
+		 * Avoiding unsolicited I2C reads while irq_pin == 1 prevents stalling
+		 * the TD4322 In-Cell touch sensing DSP mid-scan.
+		 */
+		bool should_poll = (irq_pin == 0u) ||
+		    (active_mask != 0u && no_irq_ticks >= 30u) ||
+		    (active_mask == 0u && (poll_tick & 63u) == 0u);
+
+		if (should_poll) {
+			uint8_t st[2] = { 0 };
+			if (irq_pin != 0u && f01_data != 0) {
 				(void)xzs_rmi4_read(slave, f01_data, st, 2);
-				/* If device reset/unconfigured bit 7 set, re-assert F01 Configured */
 				if ((st[0] & 0x80u) != 0u && (st[0] & 0x70u) == 0u && f01_ctrl != 0) {
 					uint8_t ctrl[2] = { 0x80u, 0xffu };
 					(void)xzs_rmi4_write(slave, f01_ctrl, ctrl, 2);
 				}
 			}
-		}
-		if (irq_pin == 0u || st[1] != 0u || active_mask != 0u) {
-			uint32_t next_mask = 0;
-			if (f12_data != 0) {
-				if (f12_page != 0) {
-					(void)xzs_rmi4_write(slave, 0xffu, &f12_page, 1);
-				}
-				uint8_t raw[16] = { 0 }; /* 2 fingers * 8 bytes */
-				bool ok = xzs_rmi4_read(slave, (uint8_t)(f12_data + f12_data1_off), raw, sizeof(raw));
-				/* If finger is active during an IRQ and In-Cell FIFO returned transient 00, retry once after 150us */
-				if (ok && active_mask != 0u && (irq_pin == 0u || st[1] != 0u) &&
-				    raw[0] == 0u && raw[8] == 0u) {
-					IODelay(150);
-					ok = xzs_rmi4_read(slave, (uint8_t)(f12_data + f12_data1_off), raw, sizeof(raw));
-				}
-				if ((irq_pin == 0u || st[1] != 0u) && irq_events_logged < 32) {
-					irq_events_logged++;
-					IOLog("XZS TOUCH IRQ: gpio125=%u st=%02x/%02x reg=0x%02x raw=%02x %02x %02x %02x %02x %02x %02x %02x\n",
-					    irq_pin, st[0], st[1], (uint8_t)(f12_data + f12_data1_off),
-					    raw[0], raw[1], raw[2], raw[3], raw[4], raw[5], raw[6], raw[7]);
-				}
-				if (ok) {
-					fail_streak = 0;
-					for (int i = 0; i < 2; i++) {
-						const uint8_t *fo = &raw[i * 8];
-						uint8_t type = fo[0];
-						bool down = (type == 0x01u || type == 0x03u);
-						int rx = (int)(fo[1] | ((uint16_t)fo[2] << 8));
-						int ry = (int)(fo[3] | ((uint16_t)fo[4] << 8));
-						if (rx < 0 || rx > sensor_max_x || ry < 0 || ry > sensor_max_y) {
-							down = false;
-						}
-						int x = (sensor_max_x > 0 && sensor_max_x != 1079) ?
-						    (rx * 1079) / sensor_max_x : rx;
-						int y = (sensor_max_y > 0 && sensor_max_y != 1919) ?
-						    (ry * 1919) / sensor_max_y : ry;
-						/* Reject 2.5D curved-bezel grip contacts on initial touch-down */
-						if (down && !(active_mask & (1u << i)) && (x < 12 || x > 1067)) {
-							down = false;
-						}
-						if (down && x >= 0 && x <= 1079 && y >= 0 && y <= 1919) {
-							s_real_touch_seen = true;
-							lift_streak[i] = 0;
-							next_mask |= (1u << i);
-							last_x[i] = x;
-							last_y[i] = y;
-							sweet_hid_touch(i, 1, x, y);
-						} else if (active_mask & (1u << i)) {
-							/* Require 3 consecutive lift samples (~12ms) to prevent mid-swipe dropout */
-							if (++lift_streak[i] < 3u) {
-								next_mask |= (1u << i);
-							} else {
-								lift_streak[i] = 0;
-								sweet_hid_touch(i, 0, last_x[i], last_y[i]);
-							}
+
+			if (irq_pin == 0u || st[1] != 0u || (active_mask != 0u && no_irq_ticks >= 30u)) {
+				no_irq_ticks = 0;
+				uint32_t next_mask = 0;
+				if (f12_data != 0) {
+					if (f12_page != 0) {
+						(void)xzs_rmi4_write(slave, 0xffu, &f12_page, 1);
+					}
+					/*
+					 * Read F12 finger data FIRST while GPIO125 is still LOW so the
+					 * TD4322 MCU holds the F12 output latch stable, then read F01
+					 * status (0x06) to clear the attention interrupt.
+					 */
+					uint8_t raw[16] = { 0 };
+					uint32_t read_len = (active_mask & 2u) ? 16u : 8u;
+					bool ok = xzs_rmi4_read(slave, (uint8_t)(f12_data + f12_data1_off), raw, read_len);
+					if (f01_data != 0) {
+						(void)xzs_rmi4_read(slave, f01_data, st, 2);
+						if ((st[0] & 0x80u) != 0u && (st[0] & 0x70u) == 0u && f01_ctrl != 0) {
+							uint8_t ctrl[2] = { 0x80u, 0xffu };
+							(void)xzs_rmi4_write(slave, f01_ctrl, ctrl, 2);
 						}
 					}
-					active_mask = next_mask;
-				} else if (active_mask != 0u) {
-					if (++fail_streak >= 3u) {
-						for (int i = 0; i < 2; i++) {
-							if (active_mask & (1u << i)) {
-								lift_streak[i] = 0;
-								sweet_hid_touch(i, 0, last_x[i], last_y[i]);
-							}
-						}
-						active_mask = 0;
+					if ((irq_pin == 0u || st[1] != 0u) && irq_events_logged < 4) {
+						irq_events_logged++;
+						IOLog("XZS TOUCH IRQ: gpio125=%u st=%02x/%02x reg=0x%02x raw=%02x %02x %02x %02x %02x %02x %02x %02x\n",
+						    irq_pin, st[0], st[1], (uint8_t)(f12_data + f12_data1_off),
+						    raw[0], raw[1], raw[2], raw[3], raw[4], raw[5], raw[6], raw[7]);
+					}
+					if (ok) {
 						fail_streak = 0;
-					}
-				}
-				if (f12_page != 0) {
-					(void)xzs_rmi4_write(slave, 0xffu, &page0, 1);
-				}
-			} else if (f11_data != 0) {
-				if (f11_page != 0) {
-					(void)xzs_rmi4_write(slave, 0xffu, &f11_page, 1);
-				}
-				uint8_t raw[28] = { 0 }; /* 3 state bytes + 5 fingers * 5 bytes */
-				if (xzs_rmi4_read(slave, f11_data, raw, sizeof(raw))) {
-					for (int i = 0; i < 5; i++) {
-						uint8_t fstate = (raw[i / 4] >> ((i % 4) * 2)) & 0x03u;
-						const uint8_t *fd = &raw[3 + i * 5];
-						int x = ((int)fd[0] << 4) | (fd[2] & 0x0fu);
-						int y = ((int)fd[1] << 4) | ((fd[2] >> 4) & 0x0fu);
-						if (fstate != 0u && x <= 1200 && y <= 2000) {
-							next_mask |= (1u << i);
-							last_x[i] = x;
-							last_y[i] = y;
-							sweet_hid_touch(i, 1, x, y);
-						} else if (active_mask & (1u << i)) {
-							sweet_hid_touch(i, 0, last_x[i], last_y[i]);
+						int max_fingers = (read_len == 16u) ? 2 : 1;
+						for (int i = 0; i < max_fingers; i++) {
+							const uint8_t *fo = &raw[i * 8];
+							uint8_t type = fo[0];
+							bool down = (type == 0x01u || type == 0x03u);
+							int rx = (int)(fo[1] | ((uint16_t)fo[2] << 8));
+							int ry = (int)(fo[3] | ((uint16_t)fo[4] << 8));
+							if (rx < 0 || rx > sensor_max_x || ry < 0 || ry > sensor_max_y) {
+								down = false;
+							}
+							int x = (sensor_max_x > 0 && sensor_max_x != 1079) ?
+							    (rx * 1079) / sensor_max_x : rx;
+							int y = (sensor_max_y > 0 && sensor_max_y != 1919) ?
+							    (ry * 1919) / sensor_max_y : ry;
+							/* Reject 2.5D curved-bezel grip contacts on initial touch-down */
+							if (down && !(active_mask & (1u << i)) && (x < 12 || x > 1067)) {
+								down = false;
+							}
+							if (down && x >= 0 && x <= 1079 && y >= 0 && y <= 1919) {
+								s_real_touch_seen = true;
+								next_mask |= (1u << i);
+								if (active_mask & (1u << i)) {
+									int x0 = last_x[i];
+									int y0 = last_y[i];
+									int dx = x - x0;
+									int dy = y - y0;
+									int adx = dx < 0 ? -dx : dx;
+									int ady = dy < 0 ? -dy : dy;
+									int dist = adx > ady ? adx : ady;
+									/*
+									 * Emit an immediate 24px hysteresis-crossing step on the first
+									 * move so UIScrollViewPanGestureRecognizer enters StateBegan
+									 * without swallowing large flick jumps.
+									 */
+									if (!moved_since_down[i] && dist > 24) {
+										int hx = x0 + (dx * 24) / dist;
+										int hy = y0 + (dy * 24) / dist;
+										sweet_hid_touch(i, 1, hx, hy);
+										IODelay(500);
+										x0 = hx;
+										y0 = hy;
+										dx = x - x0;
+										dy = y - y0;
+										adx = dx < 0 ? -dx : dx;
+										ady = dy < 0 ? -dy : dy;
+										dist = adx > ady ? adx : ady;
+										moved_since_down[i] = true;
+									} else if (dist > 4) {
+										moved_since_down[i] = true;
+									}
+									/* Subdivide fast swipe jumps (> 48px) for smooth scroll velocity */
+									if (dist > 48) {
+										int steps = (dist + 47) / 48;
+										if (steps > 6) {
+											steps = 6;
+										}
+										for (int s = 1; s < steps; s++) {
+											int ix = x0 + (dx * s) / steps;
+											int iy = y0 + (dy * s) / steps;
+											sweet_hid_touch(i, 1, ix, iy);
+											IODelay(500);
+										}
+									}
+								} else {
+									moved_since_down[i] = false;
+								}
+								last_x[i] = x;
+								last_y[i] = y;
+								sweet_hid_touch(i, 1, x, y);
+							} else if (active_mask & (1u << i)) {
+								moved_since_down[i] = false;
+								sweet_hid_touch(i, 0, last_x[i], last_y[i]);
+							}
+						}
+						active_mask = next_mask;
+					} else if (active_mask != 0u) {
+						if (++fail_streak >= 3u) {
+							for (int i = 0; i < 2; i++) {
+								if (active_mask & (1u << i)) {
+									moved_since_down[i] = false;
+									sweet_hid_touch(i, 0, last_x[i], last_y[i]);
+								}
+							}
+							active_mask = 0;
+							fail_streak = 0;
 						}
 					}
-					active_mask = next_mask;
-				}
-				if (f11_page != 0) {
-					(void)xzs_rmi4_write(slave, 0xffu, &page0, 1);
+					if (f12_page != 0) {
+						(void)xzs_rmi4_write(slave, 0xffu, &page0, 1);
+					}
+				} else if (f11_data != 0) {
+					if (f11_page != 0) {
+						(void)xzs_rmi4_write(slave, 0xffu, &f11_page, 1);
+					}
+					uint8_t raw[28] = { 0 }; /* 3 state bytes + 5 fingers * 5 bytes */
+					if (xzs_rmi4_read(slave, f11_data, raw, sizeof(raw))) {
+						for (int i = 0; i < 5; i++) {
+							uint8_t fstate = (raw[i / 4] >> ((i % 4) * 2)) & 0x03u;
+							const uint8_t *fd = &raw[3 + i * 5];
+							int x = ((int)fd[0] << 4) | (fd[2] & 0x0fu);
+							int y = ((int)fd[1] << 4) | ((fd[2] >> 4) & 0x0fu);
+							if (fstate != 0u && x <= 1200 && y <= 2000) {
+								next_mask |= (1u << i);
+								last_x[i] = x;
+								last_y[i] = y;
+								sweet_hid_touch(i, 1, x, y);
+							} else if (active_mask & (1u << i)) {
+								sweet_hid_touch(i, 0, last_x[i], last_y[i]);
+							}
+						}
+						active_mask = next_mask;
+					}
+					if (f11_page != 0) {
+						(void)xzs_rmi4_write(slave, 0xffu, &page0, 1);
+					}
 				}
 			}
 		}
-		IOSleep(active_mask != 0u ? 4 : 6);
+		IOSleep(active_mask != 0u ? 2 : 4);
 	}
 }
+
+extern "C" kern_return_t kernel_thread_start_priority(thread_continue_t continuation,
+    void *parameter, integer_t priority, thread_t *new_thread);
 
 static void
 xzs_touch_start(void)
@@ -1181,7 +1250,7 @@ xzs_touch_start(void)
 		return;
 	}
 	thread_t th = THREAD_NULL;
-	if (kernel_thread_start(xzs_touch_thread, NULL, &th) == KERN_SUCCESS) {
+	if (kernel_thread_start_priority(xzs_touch_thread, NULL, 92, &th) == KERN_SUCCESS) {
 		thread_deallocate(th);
 	}
 }

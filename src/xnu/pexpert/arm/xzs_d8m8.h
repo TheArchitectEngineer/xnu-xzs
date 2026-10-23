@@ -3573,7 +3573,7 @@ xzs_d8m8_wait_frame_idle(uint32_t timeout_us)
 			xzs_watchdog_pet();
 		}
 		if (can_sleep) {
-			delay_for_interval(150u, 1000u);
+			delay_for_interval(400u, 1000u);
 		} else {
 			xzs_d8p2_delay_us(50u);
 		}
